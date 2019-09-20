@@ -10,6 +10,45 @@ import argparse
 import cupy
 import numba as nb
 import time
+import math
+import scipy.ndimage as ndimage
+
+
+@nb.vectorize  # pragma: no cover
+def _thresh_to_binary(lamda, input):
+    abs_input = abs(input)
+    if abs_input > lamda:
+        return 1.0
+    else:
+        return 0.0
+
+
+def thresh_to_binary(lamda, input):
+    r"""Thresh to binary
+
+    Args:
+        lamda (float, or array): Threshold parameter.
+        input (array)
+
+    Returns:
+        array: soft-thresholded result.
+
+    """
+    device = sp.backend.get_device(input)
+    xp = device.xp
+
+    lamda = xp.real(lamda)
+    with device:
+        if device == sp.backend.cpu_device:
+            output = _thresh_to_binary(lamda, input)
+        else:  # pragma: no cover
+            output = _thresh_to_binary_cuda(lamda, input)
+
+        if np.issubdtype(input.dtype, np.floating):
+            output = xp.real(output)
+
+    return output
+
 
 class MRI_Raw:
     Num_Encodings = 0
@@ -23,82 +62,27 @@ class MRI_Raw:
     kdata = None
     target_image_size = [256, 256, 64]
 
-@nb.jit(nopython=True)  # pragma: no cover
-def zeroclip(val):
-    if val < 0.0:
-        return 0.0
-    else:
-        return val
-
-@nb.jit(nopython=True)  # pragma: no cover
-def reconstruct_svd(u, s, vh):
-    """ Multiply u,s,v
-    """
-    out = np.empty( (u.shape[0],vh.shape[1]), u.dtype)
-    for i in range(out.shape[0]):
-        for j in range(out.shape[1]):
-            tmp = 0.
-            for k in range(u.shape[1]):
-                tmp += u[i, k] * s[k] * vh[k, j]
-            out[i, j] = tmp
-    return out
-
-#@nb.jit(nopython=True)
-def _svt_thresh( x, nshifts, block_size, block_shape, block_stride, block_shift, lamda):
-
-    for bzS in range(nshifts[0]):
-
-        # print('Bz %d of %d' % (bzS, nshifts[0]))
-        bz = bzS * block_stride[0]
-        kstart = max(bz + block_shift[0], 0)
-        kstop = min(kstart + block_size[0], x.shape[1])
-        klen = kstop - kstart
-
-        for byS in range(nshifts[1]):
-
-            by = byS * block_stride[1]
-            jstart = max(by + block_shift[1], 0)
-            jstop = min(jstart + block_size[1], x.shape[2])
-            jlen = jstop - jstart
-
-            for bxS in range(nshifts[2]):
-                bx = bxS * block_stride[2]
-                istart = max(bx + block_shift[2], 0)
-                istop = min(istart + block_size[2], x.shape[3])
-                ilen = istop - istart
-
-                # Grab a block
-                block_image = np.zeros(block_shape, dtype=np.complex64)
-                block_image[:, :klen, :jlen, :ilen] = x[:, kstart:kstop, jstart:jstop, istart:istop]
-
-                # Put on gpu
-                block_image = np.reshape(block_image, (x.shape[0],-1))
-
-                # SVD
-                u, s, vh = np.linalg.svd(block_image, full_matrices=False)
-                s = sp.soft_thresh(lamda,s)
-
-                # Reassemble
-                block_image = np.matmul(u, s[..., None] * vh)
-                block_image = np.reshape(block_image, block_shape)
-
-                # Put the block back
-                x[:,kstart:kstop, jstart:jstop, istart:istop] = block_image[:, :klen, :jlen, :ilen]
-    return x
-
 class SingularValueThresholding(sp.prox.Prox):
 
-    def __init__(self, ishape, frames, lamda=None, block_size=8, block_stride=8, axis=0):
+    def __init__(self, ishape, frames, num_encodes, lamda=None, block_size=8, block_stride=8, axis=0):
 
         self.frames = frames
+        self.num_encodes = num_encodes
+        self.total_images = frames*num_encodes
         self.axis = axis
         self.old_shape = np.array(ishape)
-        self.new_shape = (frames, int(self.old_shape[0] / frames))  + tuple(self.old_shape[1:])
+        self.new_shape = (self.total_images, int(self.old_shape[0] / self.total_images))  + tuple(self.old_shape[1:])
 
         self.lamda = lamda
         self.block_size = [block_size, block_size, block_size]
         self.block_stride = [block_stride, block_stride, block_stride]
-        self.block_shape = (frames, block_size, block_size, block_size)
+        self.block_shape = (num_encodes, block_size, block_size, block_size)
+
+        print(f'Old shape = {self.old_shape}')
+        print(f'New shape = {self.new_shape}')
+        print(f'Block size = {self.block_size}')
+        print(f'Block stride = {self.block_stride}')
+        print(f'Block shape = {self.block_shape}')
 
         # input is output
         oshape = ishape
@@ -106,6 +90,9 @@ class SingularValueThresholding(sp.prox.Prox):
         super().__init__(oshape, ishape)
 
     def _prox(self, alpha, input):
+
+        if math.isclose( self.lamda, 0.0):
+            return input
 
         # Save input device
         initial_device = sp.get_device(input)
@@ -135,7 +122,7 @@ class SingularValueThresholding(sp.prox.Prox):
         print(f'Nshifts = {nshifts}')
 
         t = time.time()
-        input = _svt_thresh_batched(x=input, nshifts=nshifts,
+        input = self._svt_thresh_batched(x=input,
                             block_size=self.block_size,
                             block_shape=self.block_shape,
                             block_stride=self.block_stride,
@@ -150,7 +137,7 @@ class SingularValueThresholding(sp.prox.Prox):
 
         return(input)
 
-    def _svt_thresh_batched(x, nshifts, block_size, block_shape, block_stride, block_shift, lamda):
+    def _svt_thresh_batched(self, x, block_size, block_shape, block_stride, block_shift, lamda):
         print(f'Block shift = {block_shift}')
         print(f'Stride = {block_stride}')
         print(f'Block size = {block_size}')
@@ -172,7 +159,8 @@ class SingularValueThresholding(sp.prox.Prox):
 
         # reshape to (Nblocks, encode, prod(block_size) )
         old_shape = image.shape
-        new_shape = (-1, block_shape[0], np.prod(block_size))
+        image = np.moveaxis(image,0,-1) # First axis is time
+        new_shape = (-1, np.prod(block_shape),image.shape[-1])
         print(f'Resize from {old_shape} to {new_shape}')
 
         image = np.reshape(image, new_shape)
@@ -197,6 +185,7 @@ class SingularValueThresholding(sp.prox.Prox):
             image[start:stop, :, :] = np.matmul(u * s[..., None, :], vh)
 
         # Back to GPU
+        image = np.moveaxis(image,-1,0)
         image = np.reshape(image, newshape=old_shape)
 
         x = B.H * image
@@ -209,7 +198,8 @@ class DiagOnDevice(sp.linop.Diag):
     """Diagonally stack linear operators.
 
     Create a Linop that splits input, applies linops independently,
-    and concatenates outputs.
+    and concatenates outputs. This is a special case in which the devices to run are specified by the operator
+    rather than the input.
     In matrix form, given matrices {A1, ..., An}, returns diag([A1, ..., An]).
 
     Args:
@@ -217,6 +207,9 @@ class DiagOnDevice(sp.linop.Diag):
             output shape.
         axis (int or None): If None, inputs/outputs are vectorized
             and concatenated.
+        run_device: an sp.Device to run the operation on
+        in_device: an sp.Device specifiying the device location of the input
+        out_device: an sp.Devie specifying the device the output should be stored
 
     """
 
@@ -228,11 +221,6 @@ class DiagOnDevice(sp.linop.Diag):
         super().__init__(linops, axis=axis)
 
     def _apply(self, input):
-
-        #device = sp.backend.get_device(input)
-        #xp = device.xp
-        #print(f'Device input= {device}')
-        #print(f'Target run= {self.device}')
 
         #Allocate space for output
         output = self.out_device.xp.empty(self.oshape, dtype=input.dtype)
@@ -276,12 +264,12 @@ class DiagOnDevice(sp.linop.Diag):
     def _adjoint_linop(self):
         return DiagOnDevice([op.H for op in self.linops], axis=self.axis, run_device=self.run_device, in_device=self.out_device, out_device=self.in_device)
 
-
 class SubtractArray(sp.linop.Linop):
-    """Identity linear operator.
+    """Subtract array operator, subtracts a given array allowing composed operator
 
     Args:
         shape (tuple of ints): Input shape
+        x: array to subtract from the input
 
     """
 
@@ -337,8 +325,9 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
                  comm=None, show_pbar=True, max_power_iter=50, **kwargs):
 
         # Temp
-        self.frames = y.shape[0]
-        self.num_encodes = y.shape[0]
+        self.frames = y.shape[0]//5
+        self.num_encodes = 5
+        self.num_images = self.frames*self.num_encodes
         self.cpu_device = sp.cpu_device
         self.gpu_device= sp.Device(0)
         self.max_power_iter = max_power_iter
@@ -362,7 +351,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
         # Get A operator to return on GPU
         ops_list = [sp.mri.linop.Sense(mps, coord[e, ...], weights[e, ...], ishape=None,
                                              coil_batch_size=coil_batch_size, comm=comm) for e in
-                          range(self.num_encodes)]
+                          range(self.num_images)]
         # Run on GPU
         AHA = DiagOnDevice([ op.H*op for op in ops_list], axis=0, run_device=sp.Device(0), in_device=self.gpu_device,
                          out_device=self.gpu_device)
@@ -376,18 +365,18 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
 
         y = sp.to_device(y, self.gpu_device)
         if weights is not None:
-            for e in range(self.num_encodes):
+            for e in range(self.num_images):
                 y[e,...] *= weights[e,...]**0.5
 
         # Update ops list with weights
         ops_list = [sp.mri.linop.Sense(mps, coord[e, ...], weights[e, ...], ishape=None,
                                              coil_batch_size=coil_batch_size, comm=comm) for e in
-                          range(self.num_encodes)]
+                          range(self.num_images)]
 
         print(y.shape)
         print(ops_list[0].oshape)
 
-        sub_list = [ SubtractArray(y[e,...]) for e in range(self.num_encodes)]
+        sub_list = [ SubtractArray(y[e,...]) for e in range(self.num_images)]
         grad_ops = [ ops_list[e].H * sub_list[e] *ops_list[e] for e in range(len(ops_list))]
         print(grad_ops)
 
@@ -396,8 +385,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
                          out_device=sp.cpu_device)
         print(A)
 
-
-        proxg = SingularValueThresholding(A.ishape, frames=self.frames, lamda=lamda, block_size=16, block_stride=16)
+        proxg = SingularValueThresholding(A.ishape, frames=self.frames, num_encodes=self.num_encodes, lamda=lamda, block_size=16, block_stride=16)
 
         # Put x on CPU
         x = self.cpu_device.xp.zeros(A.ishape, dtype=y.dtype)
@@ -465,255 +453,6 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
         self.x = sp.to_device(self.x, sp.cpu_device)
         self.x = np.reshape(self.x, (self.num_encodes,-1) + self.x.shape[1:] )
         return self.x
-
-class BatchedLowRankRecon(sp.app.App):
-    r"""L1 Wavelet regularized reconstruction.
-
-    Considers the problem
-
-    .. math::
-        \min_x \frac{1}{2} \| P F S x - y \|_2^2 + \lambda \| W x \|_1
-
-    where P is the sampling operator, F is the Fourier transform operator,
-    S is the SENSE operator, W is the wavelet operator,
-    x is the image, and y is the k-space measurements.
-
-    Args:
-        y (array): k-space measurements.
-        mps (array): sensitivity maps.
-        lamda (float): regularization parameter.
-        weights (float or array): weights for data consistency.
-        coord (None or array): coordinates.
-        wave_name (str): wavelet name.
-        device (Device): device to perform reconstruction.
-        coil_batch_size (int): batch size to process coils.
-        Only affects memory usage.
-        comm (Communicator): communicator for distributed computing.
-        **kwargs: Other optional arguments.
-
-    References:
-        Lustig, M., Donoho, D., & Pauly, J. M. (2007).
-        Sparse MRI: The application of compressed sensing for rapid MR imaging.
-        Magnetic Resonance in Medicine, 58(6), 1082-1195.
-
-    """
-
-    def __init__(self, y, mps, lamda=1e-10,
-                 weights=None, coord=None,
-                 wave_name='db4', device=sp.cpu_device,
-                 coil_batch_size=None, accelerate=True,
-                 comm=None, show_pbar=True,
-                 normalize=True, max_iter=20,
-                 max_inner_iter=8,
-                 max_power_iter=50,
-                 save_objective_values=True):
-
-        self.img_shape = mps.shape[1:]
-        self.max_iter = max_iter
-        self.weights = weights
-        self.y = y
-        self.coord = coord
-        self.Num_Encodes = len(y)
-        self.device = device
-        self.show_pbar = show_pbar
-        self.dtype = y.dtype
-        self.normalize = normalize
-        self.coil_batch_size = coil_batch_size
-        self.wave_name = wave_name
-        self.lamda = lamda
-        self.max_power_iter = max_power_iter
-        self.max_inner_iter = max_inner_iter
-        self.mps = mps
-        self.comm = comm
-        self.alpha = 1
-        self.e = 0
-        self.outer_iteration = 0
-        self.lr_batch_size = 512
-        self.nuclear_norm = np.infty
-        self.data_norm = np.infty
-        self.nuclear_norm_log = []
-        self.data_norm_log = []
-        self.e_schedule = np.stack([np.random.permutation(self.Num_Encodes) for i in range(self.max_iter)]).flatten()
-        self.save_objective_values = save_objective_values
-        self.log_images = True
-
-        # Temp
-        self.cpu_device = sp.cpu_device
-        self.gpu_device = sp.Device(0)
-
-        if self.log_images:
-            # Export to file
-            self.log_out_name = 'ReconLog.h5'
-            logger.info('Logging images to ' + self.log_out_name)
-            try:
-                os.remove(self.log_out_name)
-            except OSError:
-                pass
-
-        # Keep Sensitivity maps, coordinates, and k-space on GPU
-        self.mps = sp.to_device(self.mps,self.gpu_device)
-        self.coord = sp.to_device(self.coord, self.gpu_device)
-
-        # Get A operator to return on GPU
-        ops_list = [sp.mri.linop.Sense(mps, coord[e, ...], weights[e, ...], ishape=None,
-                                             coil_batch_size=coil_batch_size, comm=comm) for e in
-                          range(self.num_encodes)]
-
-
-        # Run on GPU
-        AHA = DiagOnDevice([ op.H*op for op in ops_list], axis=0, run_device=sp.Device(0), in_device=self.gpu_device,
-                         out_device=self.gpu_device)
-        max_eig = MaxEig(AHA, dtype=self.x.dtype, device=self.gpu_device,
-                             max_iter=self.max_power_iter,
-                             show_pbar=self.show_pbar).run()
-        print(max_eig)
-
-        # Get AHA opts list
-        A = DiagOnDevice(ops_list, axis=0, run_device=sp.Device(0), in_device=sp.cpu_device,
-                         out_device=gpu_device)
-
-        with self.gpu_device:
-            if self.normalize:
-                self.A_scale = 1 / self._get_max_eig() ** 0.5
-                self.y_scale = 1
-                #self.y_scale = 1 / self._get_img_adj_max()
-            else:
-                self.A_scale = 1
-                self.y_scale = 1
-
-        self.coord_t = None
-        self.weights_t = None
-
-
-        # Put X on CPU due to limits of cupy svd (no batch support)
-        self.x = self.cpu_device.xp.zeros((self.Num_Encodes,) + (self.img_shape), dtype= self.y[0].dtype)
-
-        self.proxg = SingularValueThresholding((self.Num_Encodes,) + (self.img_shape), frames=self.frames, lamda=lamda, block_size=16, block_stride=16)
-
-        self._set_encode()
-        self._get_alg()
-
-        # Multiply y before other work
-        for e in range(self.Num_Encodes):
-            self.y[e] *= self.weights[e] ** 0.5
-
-
-    def _set_encode(self):
-        xp = self.device.xp
-
-        self.coord_t = xp.zeros(self.coord[self.e].shape, self.coord[0].dtype)
-        self.weights_t = xp.zeros(self.weights[self.e].shape, self.weights[0].dtype)
-        self.y_t = xp.zeros(self.y[self.e].shape, self.y[0].dtype)
-        self.x_t = xp.zeros(self.x[...,self.e].shape, self.x[0].dtype)
-
-        sp.copyto(self.coord_t, self.coord[self.e])
-        sp.copyto(self.weights_t, self.weights[self.e])
-        sp.copyto(self.y_t, self.y[self.e])
-        sp.copyto(self.x_t, self.x[...,self.e])
-
-    def _get_max_eig(self):
-
-        max_eig = MaxEig(AHA, dtype=self.x.dtype, device=self.x_device,
-                         max_iter=self.max_power_iter,
-                         show_pbar=self.show_pbar).run()
-        if max_eig == 0:
-            self.alpha = 1
-        else:
-            self.alpha = 1 / max_eig
-
-
-        AHA = A.H * A
-        max_eig = sp.app.MaxEig(AHA,
-                                dtype=self.dtype, device=self.gpu_device,
-                                max_iter=self.max_power_iter,
-                                show_pbar=self.show_pbar).run()
-        return max_eig
-
-    def _write_log(self):
-
-        xp = self.device.xp
-        out_slice = self.x.shape[0] // 2
-        Xiter = xp.copy( self.x[out_slice,...])
-        Xiter = sp.to_device(Xiter, sp.cpu_device)
-        Xiter = np.expand_dims(Xiter, axis=0)
-
-        with h5py.File(self.log_out_name, 'a') as hf:
-
-            # Resize to include additional image
-            if "X" in hf.keys():
-                hf["X"].resize((hf["X"].shape[0] + Xiter.shape[0]), axis=0)
-                hf["X"][-Xiter.shape[0]:]  = np.abs(Xiter)
-            else:
-                maxshape=np.array(Xiter.shape)
-                maxshape[0] *= self.max_iter
-                maxshape = tuple(maxshape)
-                print(maxshape)
-                hf.create_dataset("X", data=np.abs(Xiter), maxshape=maxshape)
-
-
-    def _summarize(self):
-        if self.show_pbar:
-            self.pbar.set_postfix(nuc_norm='{0:.2E}'.format(self.nuclear_norm),
-                                  data_norm='{0:.2E}'.format(self.data_norm))
-
-        if self.save_objective_values:
-            self.nuclear_norm_log.append(self.nuclear_norm)
-            self.data_norm_log.append(self.data_norm)
-            print(self.data_norm_log)
-            print(self.nuclear_norm_log)
-
-        if self.log_images:
-            self._write_log()
-
-    def _min_lr(self):
-
-        self.x = self.proxg(1.0, self.x)
-        self.nuclear_norm = nuclear_norm
-
-
-    def _min_data(self):
-
-        self.e = self.e_schedule[self.outer_iteration]
-        self.data_norm = 0.0
-
-
-
-        for e in range(self.Num_Encodes):
-            self.e = e
-            self._set_encode()
-
-            # Get the sense operator
-            sense_t = sp.mri.linop.Sense(self.mps, coord=self.coord_t, weights=self.weights_t,
-                                coil_batch_size=self.coil_batch_size, comm=self.comm)
-
-            A = self.A_scale*sense_t
-
-            # Run sense
-            data_min_app = sp.app.LinearLeastSquares(A, self.y_t, x=self.x_t,
-                                      lamda=1e-9,
-                                      max_iter=self.max_inner_iter,
-                                      show_pbar=False)
-
-            data_min_app.run()
-
-            sp.copyto(self.x[...,self.e], self.x_t)
-            self.outer_iteration += 1
-
-            self.data_norm += data_min_app.alg.resid
-
-        return()
-
-
-    def _get_alg(self):
-        alg = sp.alg.AltMin(self._min_data, self._min_lr, max_iter=self.max_iter)
-        super().__init__(alg, show_pbar=self.show_pbar)
-
-    def _output(self):
-
-        self.x = sp.to_device(self.x, sp.cpu_device)
-        #return np.stack(self.x, axis=0)
-        return self.x
-
 
 def pca_coil_compression(kdata=None, axis=0, target_channels=None):
 
@@ -783,7 +522,6 @@ def pca_coil_compression(kdata=None, axis=0, target_channels=None):
 
     return kdata
 
-
 def get_smaps(mri_rawdata=None, args=None, smap_type='jsense'):
     logger = logging.getLogger('Get sensitivity maps')
 
@@ -833,6 +571,68 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense'):
                                        max_iter=args.max_iter,
                                        max_inner_iter=args.max_inner_iter).run()
 
+            # Get a composite image
+            img_shape = sp.estimate_shape(coord)
+            image = 0
+            for e in range(mri_rawdata.Num_Encodings):
+                kr = sp.get_device(mri_rawdata.coords[e]).xp.sum(mri_rawdata.coords[e] ** 2, axis=-1)
+                kr = sp.to_device(kr, device)
+                lpf = xp.exp( -kr / (2*(16.**2)))
+
+                for c in range(mri_rawdata.Num_Coils):
+                    logger.info(f'Reconstructing encode, coil {e} , {c} ')
+                    ksp = sp.to_device(mri_rawdata.kdata[e][c, ...], device)
+                    ksp *= sp.to_device(mri_rawdata.dcf[e], device)
+                    ksp *= lpf
+                    coords_temp = sp.to_device(mri_rawdata.coords[e], device)
+                    image += xp.abs(sp.nufft_adjoint(ksp, coords_temp, img_shape)) ** 2
+
+            image = xp.sqrt(image)
+            image = sp.to_device(image, sp.get_device(smaps))
+
+            xp = sp.get_device(smaps).xp
+
+            print(sp.get_device(smaps))
+            print(sp.get_device(image))
+
+            # Threshold
+            image = xp.abs(image)
+            image /= xp.max(image)
+            thresh = 0.015
+            print(thresh)
+            mask = image > thresh
+
+            mask = sp.to_device(mask, sp.cpu_device)
+            zz, xx, yy = np.meshgrid( np.linspace(-1,1,11), np.linspace(-1,1,11), np.linspace(-1,1,11))
+            rad = zz**2 + xx**2 + yy**2
+            smap_mask = rad < 1.0
+            print(smap_mask)
+            mask = ndimage.morphology.binary_dilation(mask, smap_mask)
+            mask = np.array( mask, dtype=np.float32)
+            mask = sp.to_device(mask, sp.get_device(smaps))
+
+            print(image)
+            print(image.shape)
+            print(smaps.shape)
+            smaps = mask * smaps
+
+
+    smaps_cpu= sp.to_device(smaps, sp.cpu_device)
+    image_cpu = sp.to_device(image, sp.cpu_device)
+    mask_cpu = sp.to_device(mask, sp.cpu_device)
+
+    # Export to file
+    out_name = 'SenseMaps.h5'
+    logger.info('Saving images to ' + out_name)
+    try:
+        os.remove(out_name)
+    except OSError:
+        pass
+    with h5py.File(out_name, 'w') as hf:
+        hf.create_dataset("IMAGE", data=np.abs(image_cpu))
+        hf.create_dataset("SMAPS", data=np.abs(smaps_cpu))
+        hf.create_dataset("MASK", data=np.abs(mask_cpu))
+
     return smaps
 
 
@@ -881,7 +681,7 @@ def pils_recon(mri_rawdata=None, smaps=None):
     return (img)
 
 
-def simple_recon(mri_rawdata=None, smaps=None):
+def llr_recon(mri_rawdata=None, smaps=None):
 
     logger = logging.getLogger('Recon images')
     mempool = cupy.get_default_memory_pool()
@@ -895,29 +695,13 @@ def simple_recon(mri_rawdata=None, smaps=None):
     coord = mri_rawdata.coords
     dcf = mri_rawdata.dcf
     kdata = mri_rawdata.kdata
+    lam = 0.0001
+    #lam = 0.01
+    #sense = BatchedSenseRecon(kdata, mps=smaps, weights=dcf, coord=coord, device=device, lamda=lam, coil_batch_size=None, max_iter=20)
+    sense = BatchedSenseRecon(kdata, mps=smaps, weights=dcf, coord=coord, device=device, lamda=lam,
+                              coil_batch_size=1, max_iter=30)
 
-    with device:
-        recon_type = 'l1wavelet'
-        recon_type = 'sense'
-        # recon_type = 'tv'
-        logger.info('Recon type = ' + recon_type)
-
-        if recon_type == 'sense':
-            sense = BatchedSenseRecon(kdata, mps=smaps, weights=dcf, coord=coord, device=device, lamda=0.0001, coil_batch_size=1, max_iter=20)
-
-        elif recon_type == 'l1wavelet':
-            # print('Sense')
-            lam = 1.0
-            sense = L1WaveletTemporalRecon(kdata, mps=smaps, lamda=lam, weights=dcf, coord=coord,
-                                              device=device, accelerate=True, coil_batch_size=1, max_iter=100)
-        elif recon_type == 'tv':
-            lam = 10.0
-            logger.info(f'Lambda = {lam}')
-            sense = sp.mri.app.TotalVariationRecon(kdata, mps=smaps, lamda=lam, weights=dcf, coord=coord, device=device,
-                                                   accelerate=True, coil_batch_size=1, max_iter=100)
-
-        img = sense.run()
-
+    img = sense.run()
     img = sp.to_device(img, sp.cpu_device)
 
     return (img)
@@ -988,10 +772,9 @@ def gate_kspace(mri_rawdata=None, num_frames=10):
 
     # Get the number of points per bin
     points_per_bin = []
-    for e in range(mri_raw.Num_Encodings):
+    for t in range(num_frames):
+        for e in range(mri_raw.Num_Encodings):
 
-        num_pts = np.prod(mri_raw.time[0].shape)
-        for t in range(num_frames):
             t_start = t_min + delta_time*t
             t_stop = t_start + delta_time
 
@@ -1006,8 +789,6 @@ def gate_kspace(mri_rawdata=None, num_frames=10):
     max_points_per_bin = np.max(np.array(points_per_bin))
     logger.info(f'Max points = {max_points_per_bin}')
     logger.info(f'Points per bin = {points_per_bin}')
-
-
 
     total_encodes = mri_raw.Num_Encodings*num_frames
     core_shape = (total_encodes,1,max_points_per_bin)
@@ -1024,10 +805,9 @@ def gate_kspace(mri_rawdata=None, num_frames=10):
     logger.info(f'New time shape {mri_rawG.time.shape}')
 
     count = 0
-    for e in range(mri_raw.Num_Encodings):
+    for t in range(num_frames):
+        for e in range(mri_raw.Num_Encodings):
 
-        num_pts = np.prod(mri_raw.time[0].shape)
-        for t in range(num_frames):
             t_start = t_min + delta_time*t
             t_stop = t_start + delta_time
 
@@ -1069,7 +849,7 @@ def load_MRI_raw(h5_filename=None):
             logging.info('Missing header data')
             pass
 
-        Num_Coils = 2
+        #Num_Coils = 2
 
         # Get the MRI Raw structure setup
         mri_raw = MRI_Raw()
@@ -1273,7 +1053,7 @@ if __name__ == "__main__":
 
     # Reconstruct the image
     logger.info(f'Reconstruct Images ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
-    pils = simple_recon(mri_raw, smaps=smaps)
+    pils = llr_recon(mri_raw, smaps=smaps)
 
     # Copy back to make easy
     smaps = sp.to_device(smaps, sp.cpu_device)
