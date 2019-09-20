@@ -167,7 +167,7 @@ class SingularValueThresholding(sp.prox.Prox):
 
         nuclear_norm = 0.0
 
-        lr_batch_size = 64
+        lr_batch_size = 32
         lr_batchs = (image.shape[0] + lr_batch_size - 1) // lr_batch_size
         for batch in range(lr_batchs):
             start = batch * lr_batch_size
@@ -451,7 +451,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
 
     def _output(self):
         self.x = sp.to_device(self.x, sp.cpu_device)
-        self.x = np.reshape(self.x, (self.num_encodes,-1) + self.x.shape[1:] )
+        self.x = np.reshape(self.x, (self.frames, self.num_encodes,-1) + self.x.shape[1:] )
         return self.x
 
 def pca_coil_compression(kdata=None, axis=0, target_channels=None):
@@ -695,11 +695,11 @@ def llr_recon(mri_rawdata=None, smaps=None):
     coord = mri_rawdata.coords
     dcf = mri_rawdata.dcf
     kdata = mri_rawdata.kdata
-    lam = 0.0001
+    lam = 0.0005
     #lam = 0.01
     #sense = BatchedSenseRecon(kdata, mps=smaps, weights=dcf, coord=coord, device=device, lamda=lam, coil_batch_size=None, max_iter=20)
     sense = BatchedSenseRecon(kdata, mps=smaps, weights=dcf, coord=coord, device=device, lamda=lam,
-                              coil_batch_size=1, max_iter=30)
+                              coil_batch_size=1, max_iter=200)
 
     img = sense.run()
     img = sp.to_device(img, sp.cpu_device)
