@@ -208,20 +208,15 @@ class MRI_4DFlow:
 
 if __name__ == "__main__":
 
-    mri_flow = MRI_4DFlow(encode_type='5pt',venc=80.0)
+    mri_flow = MRI_4DFlow(encode_type='5pt',venc=100.0)
 
     with h5py.File('FullRecon.h5', 'r') as hf:
         temp = hf['IMAGE']
-        print(temp.shape)
         #temp = temp['real'] + 1j*temp['imag']
         #temp = np.moveaxis(temp, -1, 0)
-        #frames = int(temp.shape[0]/5)
-        frames = int(temp.shape[0])
-        print(frames)
-        #temp = np.reshape(temp,newshape=(5, frames,temp.shape[1],temp.shape[2],temp.shape[3]))
-        #temp = np.reshape(temp,newshape=(temp.shape[1], frames,temp.shape[2],temp.shape[3],temp.shape[4]))
-
-        temp = np.moveaxis(temp,1,-1)
+        frames = int(temp.shape[0]/5)
+        temp = np.reshape(temp,newshape=(5, frames,temp.shape[1],temp.shape[2],temp.shape[3]))
+        temp = np.moveaxis(temp,0,-1)
         print(temp.shape)
 
     # Solve for Velocity
