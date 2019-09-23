@@ -723,10 +723,12 @@ def crop_kspace(mri_rawdata=None, crop_factor=2):
     for e in range(len(mri_rawdata.coords)):
 
         # Find values where kspace is within bounds (square crop)
+
         idx = np.argwhere( np.logical_and.reduce([
-            np.abs(mri_rawdata.coords[e][...,0]) < img_shape_new[0]/2,
-            np.abs(mri_rawdata.coords[e][...,1]) < img_shape_new[1]/2,
-            np.abs(mri_rawdata.coords[e][...,2]) < img_shape_new[2]/2]))
+            (np.array(mri_rawdata.coords[e][..., 0]))**2 + (np.array(mri_rawdata.coords[e][..., 1]))**2 +(np.array(mri_rawdata.coords[e][..., 2]))**2 < (img_shape_new[0]/2)**2]))
+            #np.abs(mri_rawdata.coords[e][...,0]) < img_shape_new[0]/2,
+            #np.abs(mri_rawdata.coords[e][...,1]) < img_shape_new[1]/2,
+            #np.abs(mri_rawdata.coords[e][...,2]) < img_shape_new[2]/2]))
 
         # Now crop
         mri_rawdata.coords[e] = mri_rawdata.coords[e][idx[:,0], :]
@@ -817,6 +819,7 @@ def gate_kspace(mri_rawdata=None, num_frames=10):
                 np.abs(mri_rawdata.time[e]) < t_stop]))
             current_points = len(idx)
 
+            logger.info(f'Frame {t} | {e}, Points = {current_points}')
             mri_rawG.coords[count,0,:current_points,:] = mri_raw.coords[e][idx[:,0],:]
             mri_rawG.dcf[count,0,:current_points] = mri_raw.dcf[e][idx[:,0]]
             mri_rawG.kdata[count,:,:,:current_points] = mri_raw.kdata[e][:,np.newaxis,idx[:,0]]
@@ -849,7 +852,7 @@ def load_MRI_raw(h5_filename=None):
             logging.info('Missing header data')
             pass
 
-        #Num_Coils = 2
+        Num_Coils = 2
 
         # Get the MRI Raw structure setup
         mri_raw = MRI_Raw()
@@ -1021,7 +1024,7 @@ if __name__ == "__main__":
     parser.add_argument('--thresh', type=float, default=0.1)
     parser.add_argument('--scale', type=float, default=1.1)
     parser.add_argument('--filename', type=str, help='filename for data (e.g. MRI_Raw.h5)',
-                        default='D:/TR_FLOW_RECON/MRI_Raw.h5')
+                        default='D:\\realtime_IPAD\\adrc00767_v2\\MRI_Raw.h5')
 
     parser.add_argument('--mps_ker_width', type=int, default=16)
     parser.add_argument('--ksp_calib_width', type=int, default=32)
@@ -1049,7 +1052,7 @@ if __name__ == "__main__":
     smaps = get_smaps(mri_rawdata=mri_raw, args=args)
 
     # Gate k-space
-    mri_raw = gate_kspace(mri_rawdata=mri_raw, num_frames=50)
+    mri_raw = gate_kspace(mri_rawdata=mri_raw, num_frames=50) # control num of time frames
 
     # Reconstruct the image
     logger.info(f'Reconstruct Images ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
