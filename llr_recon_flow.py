@@ -871,7 +871,7 @@ def load_MRI_raw(h5_filename=None):
             logging.info('Missing header data')
             pass
 
-        Num_Coils = 2
+        #Num_Coils = 2
 
         # Get the MRI Raw structure setup
         mri_raw = MRI_Raw()
