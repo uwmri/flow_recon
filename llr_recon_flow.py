@@ -98,7 +98,7 @@ class SingularValueThresholding(sp.prox.Prox):
         initial_device = sp.get_device(input)
 
         # Input is 3D (Nt*Nz x Ny x Nx)
-        print(input.shape)
+        #print(input.shape)
         input = initial_device.xp.reshape(input, self.new_shape)
 
         # Block shifts are always negative
@@ -110,16 +110,16 @@ class SingularValueThresholding(sp.prox.Prox):
         input = sp.to_device(input, sp.cpu_device)
 
         # Shifts including hanging blocks
-        print(input.shape)
-        print(f'Block shift = {block_shift}')
-        print(f'Stride = {self.block_stride}')
-        print(f'Block size = {self.block_size}')
-        print(f'Block shape = {self.block_shape}')
+        #print(input.shape)
+        #print(f'Block shift = {block_shift}')
+        #print(f'Stride = {self.block_stride}')
+        #print(f'Block size = {self.block_size}')
+        #print(f'Block shape = {self.block_shape}')
 
         nshifts = np.ceil((np.asarray(input.shape[1:]) - np.array(block_shift)) / self.block_stride).astype(np.int)
 
-        print(input.shape)
-        print(f'Nshifts = {nshifts}')
+        #print(input.shape)
+        #print(f'Nshifts = {nshifts}')
 
         t = time.time()
         input = self._svt_thresh_batched(x=input,
@@ -138,33 +138,35 @@ class SingularValueThresholding(sp.prox.Prox):
         return(input)
 
     def _svt_thresh_batched(self, x, block_size, block_shape, block_stride, block_shift, lamda):
-        print(f'Block shift = {block_shift}')
-        print(f'Stride = {block_stride}')
-        print(f'Block size = {block_size}')
-        print(f'Block shape = {block_shape}')
+        #print(f'Block shift = {block_shift}')
+        #print(f'Stride = {block_stride}')
+        #print(f'Block size = {block_size}')
+        #print(f'Block shape = {block_shape}')
 
         full_block_shift = list([0]) + block_shift
         full_block_stride = list([block_shape[0]] + block_stride)
-        print(f'Full stride = {full_block_stride}')
+        #print(f'Full stride = {full_block_stride}')
 
         # 4D Blocking
         B = sp.linop.ArrayToBlocks(list(x.shape), list(block_shape), list(full_block_stride))
-        print(B)
+        #print(B)
 
         # x = np.roll( x, shift=self.blk_shift, axis=(0,1,2))
 
         # Parse into blocks
         image = B * x
-        print(image.shape)
+        #print(image.shape)
 
         # reshape to (Nblocks, encode, prod(block_size) )
         old_shape = image.shape
         image = np.moveaxis(image,0,-1) # First axis is time
         new_shape = (-1, np.prod(block_shape),image.shape[-1])
-        print(f'Resize from {old_shape} to {new_shape}')
+        #print(f'Resize from {old_shape} to {new_shape}')
 
         image = np.reshape(image, new_shape)
 
+        # Scale lamda by block elements
+        lamda *= np.sqrt(np.prod( block_shape))
         nuclear_norm = 0.0
 
         lr_batch_size = 32
@@ -177,7 +179,7 @@ class SingularValueThresholding(sp.prox.Prox):
 
             u, s, vh = np.linalg.svd(image_t, full_matrices=False)
 
-            nuclear_norm += np.sum(np.abs(s))
+            nuclear_norm += np.mean(np.abs(s))
 
             # Threshold
             s = sp.soft_thresh(lamda, s)
@@ -187,6 +189,8 @@ class SingularValueThresholding(sp.prox.Prox):
         # Back to GPU
         image = np.moveaxis(image,-1,0)
         image = np.reshape(image, newshape=old_shape)
+
+        nuclear_norm /= np.sqrt(np.prod( block_shape)) * float(lr_batchs)
 
         x = B.H * image
 
@@ -322,7 +326,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
 
     def __init__(self, y, mps, lamda=0, weights=None,
                  coord=None, device=sp.cpu_device, coil_batch_size=None,
-                 comm=None, show_pbar=True, max_power_iter=50, **kwargs):
+                 comm=None, show_pbar=True, max_power_iter=100, fast_maxeig=True, scale_image=True, **kwargs):
 
         # Temp
         self.frames = y.shape[0]//5
@@ -358,44 +362,45 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
                              max_iter=self.max_power_iter,
                              show_pbar=self.show_pbar).run()
 
-            # Scale the weights, for the max eigen value is one
-            with sp.get_device(weights):
-                weights[e, ...] *= 1.0/max_eig
-
-            A = sp.mri.linop.Sense(mps, coord[e, ...], weights[e, ...], ishape=None,
-                                             coil_batch_size=coil_batch_size, comm=comm)
-
-            AHA = A.H * A
-
-            # Verify
-            post_max_eig = sp.app.MaxEig(AHA, dtype=y.dtype, device=self.gpu_device,
-                             max_iter=self.max_power_iter,
-                             show_pbar=self.show_pbar).run()
-
-            print(f'Initial {max_eig} , Post = {post_max_eig}')
+            if fast_maxeig:
+                with sp.get_device(weights):
+                    weights *= 1.0 / max_eig
+                break
+            else:
+                # Scale the weights, for the max eigen value is one
+                with sp.get_device(weights):
+                    weights[e, ...] *= 1.0/max_eig
 
         # Put on GPU
         y = sp.to_device(y, self.gpu_device)
+
+        # Scale y such that x max of x is close to 1
+        A = sp.mri.linop.Sense(mps, coord[e, ...], weights[e, ...], ishape=None,
+                               coil_batch_size=coil_batch_size, comm=comm)
+        im_test = A.H * y[e,...]
+        y_scale = 1./ (sp.get_device(im_test).xp.abs(im_test).max())
+        logger.info(f'Scale iy by {y_scale} to bound image close to one')
+
         if weights is not None:
             for e in range(self.num_images):
-                y[e,...] *= weights[e,...]**0.5
+                y[e,...] *= weights[e,...]**0.5 * y_scale
 
         # Update ops list with weights
         ops_list = [sp.mri.linop.Sense(mps, coord[e, ...], weights[e, ...], ishape=None,
                                              coil_batch_size=coil_batch_size, comm=comm) for e in
                           range(self.num_images)]
 
-        print(y.shape)
-        print(ops_list[0].oshape)
+        #print(y.shape)
+        #print(ops_list[0].oshape)
 
         sub_list = [ SubtractArray(y[e,...]) for e in range(self.num_images)]
         grad_ops = [ ops_list[e].H * sub_list[e] *ops_list[e] for e in range(len(ops_list))]
-        print(grad_ops)
+        #print(grad_ops)
 
         # Get AHA opts list
         A = DiagOnDevice(grad_ops, axis=0, run_device=sp.Device(0), in_device=sp.cpu_device,
                          out_device=sp.cpu_device)
-        print(A)
+        #print(A)
 
         proxg = SingularValueThresholding(A.ishape, frames=self.frames, num_encodes=self.num_encodes, lamda=lamda, block_size=16, block_stride=16)
 
@@ -407,10 +412,10 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
         #new_shape = (y.shape[0]*y.shape[1],1) + y.shape[2:]
         #y = sp.get_device(y).xp.reshape(y,new_shape)
 
-        print(y.shape)
-        print(A)
-        print(A.H)
-        print(x.shape)
+        #print(y.shape)
+        #print(A)
+        #print(A.H)
+        #print(x.shape)
 
         if comm is not None:
             show_pbar = show_pbar and comm.rank == 0
@@ -427,7 +432,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
 
     def _write_log(self):
 
-        print(f'Logging to file {self.x.shape}')
+        logger.info(f'Logging to file {self.log_out_name}')
         xp = sp.get_device(self.x).xp
         out_slice = (self.x.shape[0] / self.frames ) // 2
         out_slice = int(40)
@@ -604,28 +609,28 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense'):
 
             xp = sp.get_device(smaps).xp
 
-            print(sp.get_device(smaps))
-            print(sp.get_device(image))
+            #print(sp.get_device(smaps))
+            #print(sp.get_device(image))
 
             # Threshold
             image = xp.abs(image)
             image /= xp.max(image)
             thresh = 0.015
-            print(thresh)
+            #print(thresh)
             mask = image > thresh
 
             mask = sp.to_device(mask, sp.cpu_device)
             zz, xx, yy = np.meshgrid( np.linspace(-1,1,11), np.linspace(-1,1,11), np.linspace(-1,1,11))
             rad = zz**2 + xx**2 + yy**2
             smap_mask = rad < 1.0
-            print(smap_mask)
+            #print(smap_mask)
             mask = ndimage.morphology.binary_dilation(mask, smap_mask)
             mask = np.array( mask, dtype=np.float32)
             mask = sp.to_device(mask, sp.get_device(smaps))
 
-            print(image)
-            print(image.shape)
-            print(smaps.shape)
+            #print(image)
+            #print(image.shape)
+            #print(smaps.shape)
             smaps = mask * smaps
 
 
@@ -803,6 +808,8 @@ def gate_kspace(mri_rawdata=None, num_frames=10):
     max_points_per_bin = np.max(np.array(points_per_bin))
     logger.info(f'Max points = {max_points_per_bin}')
     logger.info(f'Points per bin = {points_per_bin}')
+    logger.info(f'Average points per bin = {np.mean(points_per_bin)} [ {np.min(points_per_bin)}  {np.max(points_per_bin)} ]')
+    logger.info(f'Standard deviation = {np.std(points_per_bin)}')
 
     total_encodes = mri_raw.Num_Encodings*num_frames
     core_shape = (total_encodes,1,max_points_per_bin)
@@ -1035,8 +1042,9 @@ if __name__ == "__main__":
     parser.add_argument('--device', type=int, default=0)
     parser.add_argument('--thresh', type=float, default=0.1)
     parser.add_argument('--scale', type=float, default=1.1)
+    parser.add_argument('--frames',type=int, default=50, help='Number of time frames')
     parser.add_argument('--filename', type=str, help='filename for data (e.g. MRI_Raw.h5)',
-                        default='D:/TR_FLOW_RECON/MRI_Raw.h5')
+                        default='MRI_Raw.h5')
 
     parser.add_argument('--mps_ker_width', type=int, default=16)
     parser.add_argument('--ksp_calib_width', type=int, default=32)
@@ -1064,7 +1072,7 @@ if __name__ == "__main__":
     smaps = get_smaps(mri_rawdata=mri_raw, args=args)
 
     # Gate k-space
-    mri_raw = gate_kspace(mri_rawdata=mri_raw, num_frames=50) # control num of time frames
+    mri_raw = gate_kspace(mri_rawdata=mri_raw, num_frames=args.frames) # control num of time frames
 
     # Reconstruct the image
     logger.info(f'Reconstruct Images ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
