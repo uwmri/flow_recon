@@ -326,7 +326,8 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
 
     def __init__(self, y, mps, lamda=0, weights=None,
                  coord=None, device=sp.cpu_device, coil_batch_size=None,
-                 comm=None, show_pbar=True, max_power_iter=100, fast_maxeig=True, scale_image=True, **kwargs):
+                 comm=None, show_pbar=True, max_power_iter=100, fast_maxeig=True,
+                 composite_init=True, scale_image=True, **kwargs):
 
         # Temp
         self.frames = y.shape[0]//5
@@ -374,53 +375,85 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
         # Put on GPU
         y = sp.to_device(y, self.gpu_device)
 
-        # Scale y such that x max of x is close to 1
-        A = sp.mri.linop.Sense(mps, coord[e, ...], weights[e, ...], ishape=None,
-                               coil_batch_size=coil_batch_size, comm=comm)
-        im_test = A.H * y[e,...]
-        y_scale = 1./ (sp.get_device(im_test).xp.abs(im_test).max())
-        logger.info(f'Scale iy by {y_scale} to bound image close to one')
+        # Initialize with an average reconstruction
+        if composite_init:
 
-        if weights is not None:
+            xp = sp.get_device(y).xp
+
+            # Create a composite image
             for e in range(self.num_images):
-                y[e,...] *= weights[e,...]**0.5 * y_scale
+
+                # Sense operator
+                A = sp.mri.linop.Sense(mps, coord[e, ...], weights[e, ...], ishape=None,
+                                       coil_batch_size=coil_batch_size, comm=comm)
+                data = xp.copy(y[e, ...])
+                data *= weights[e, ...] ** 0.5
+
+                if e == 0:
+                    composite = A.H * data
+                else:
+                    composite = composite + A.H * data
+
+            composite /= self.num_images
+
+            # Scale composite to be max to 1
+            composite /= np.max(np.abs(composite))
+            print(f'Init with {composite.shape}, Mean = {np.max(np.abs(composite))}')
+
+             # Multiply by sqrt(weights)
+            if weights is not None:
+                for e in range(self.num_images):
+                    y[e, ...] *= weights[e, ...] ** 0.5
+
+            # Now scale the images
+            sum_yAx = 0.0
+            sum_yy = xp.sum( xp.square( xp.abs(y)))
+
+            for e in range(self.num_images):
+                A = sp.mri.linop.Sense(mps, coord[e, ...], weights[e, ...], ishape=None,
+                                       coil_batch_size=coil_batch_size, comm=comm)
+                data = A * composite
+                sum_yAx += xp.sum( data * xp.conj(y[e,...]))
+
+            y_scale = xp.abs( sum_yAx / sum_yy )
+            print(f'Sum yAx = {sum_yAx}')
+            print(f'Sum yy = {sum_yy}')
+
+            y *= y_scale
+
+            composite = sp.to_device(composite, sp.cpu_device)
+            x = np.vstack([composite for i in range(self.num_images)])
+
+        else:
+            x = self.cpu_device.xp.zeros(A.ishape, dtype=y.dtype)
 
         # Update ops list with weights
         ops_list = [sp.mri.linop.Sense(mps, coord[e, ...], weights[e, ...], ishape=None,
                                              coil_batch_size=coil_batch_size, comm=comm) for e in
                           range(self.num_images)]
 
-        #print(y.shape)
-        #print(ops_list[0].oshape)
-
         sub_list = [ SubtractArray(y[e,...]) for e in range(self.num_images)]
         grad_ops = [ ops_list[e].H * sub_list[e] *ops_list[e] for e in range(len(ops_list))]
-        #print(grad_ops)
 
         # Get AHA opts list
         A = DiagOnDevice(grad_ops, axis=0, run_device=sp.Device(0), in_device=sp.cpu_device,
                          out_device=sp.cpu_device)
-        #print(A)
 
         proxg = SingularValueThresholding(A.ishape, frames=self.frames, num_encodes=self.num_encodes, lamda=lamda, block_size=16, block_stride=16)
-
-        # Put x on CPU
-        x = self.cpu_device.xp.zeros(A.ishape, dtype=y.dtype)
-        self.x = x
-
-        # Reshape Y to flatten axis 1
-        #new_shape = (y.shape[0]*y.shape[1],1) + y.shape[2:]
-        #y = sp.get_device(y).xp.reshape(y,new_shape)
-
-        #print(y.shape)
-        #print(A)
-        #print(A.H)
-        #print(x.shape)
 
         if comm is not None:
             show_pbar = show_pbar and comm.rank == 0
 
         super().__init__(A, y, x=x, proxg=proxg, show_pbar=show_pbar, alpha=1.0, accelerate=True, **kwargs)
+
+        # log the initial guess
+        if self.log_images:
+            self._write_log()
+            # self._write_x()
+
+    def _write_x(self):
+        with h5py.File('X.h5', 'w') as hf:
+            hf.create_dataset("X", data=np.abs(self.x))
 
     def _summarize(self):
 
@@ -723,7 +756,7 @@ def llr_recon(mri_rawdata=None, smaps=None):
 
     return (img)
 
-def crop_kspace(mri_rawdata=None, crop_factor=2):
+def crop_kspace(mri_rawdata=None, crop_factor=2, crop_type='sphere'):
 
     logger = logging.getLogger('Recon images')
 
@@ -740,12 +773,14 @@ def crop_kspace(mri_rawdata=None, crop_factor=2):
     for e in range(len(mri_rawdata.coords)):
 
         # Find values where kspace is within bounds (square crop)
-
-        idx = np.argwhere( np.logical_and.reduce([
-            (np.array(mri_rawdata.coords[e][..., 0]))**2 + (np.array(mri_rawdata.coords[e][..., 1]))**2 +(np.array(mri_rawdata.coords[e][..., 2]))**2 < (img_shape_new[0]/2)**2]))
-            #np.abs(mri_rawdata.coords[e][...,0]) < img_shape_new[0]/2,
-            #np.abs(mri_rawdata.coords[e][...,1]) < img_shape_new[1]/2,
-            #np.abs(mri_rawdata.coords[e][...,2]) < img_shape_new[2]/2]))
+        if crop_type == 'sphere':
+            idx = np.argwhere(np.logical_and.reduce([
+                (np.array(mri_rawdata.coords[e][..., 0])) ** 2 + (np.array(mri_rawdata.coords[e][..., 1])) ** 2 + (
+                    np.array(mri_rawdata.coords[e][..., 2])) ** 2 < (img_shape_new[0] / 2) ** 2]))
+        else:
+            idx = np.argwhere( np.logical_and.reduce([ np.abs(mri_rawdata.coords[e][...,0]) < img_shape_new[0]/2,
+                np.abs(mri_rawdata.coords[e][...,1]) < img_shape_new[1]/2,
+                np.abs(mri_rawdata.coords[e][...,2]) < img_shape_new[2]/2]))
 
         # Now crop
         mri_rawdata.coords[e] = mri_rawdata.coords[e][idx[:,0], :]
@@ -753,11 +788,7 @@ def crop_kspace(mri_rawdata=None, crop_factor=2):
         mri_rawdata.kdata[e] = mri_rawdata.kdata[e][:,idx[:, 0]]
         mri_rawdata.time[e] = mri_rawdata.time[e][idx[:,0]]
 
-        print(mri_rawdata.coords[e].shape)
-        print(mri_rawdata.dcf[e].shape)
-        print(mri_rawdata.kdata[e].shape)
-        print(f'New shape = {sp.estimate_shape(mri_rawdata.coords[e])}')
-
+        logger.info(f'New shape = {sp.estimate_shape(mri_rawdata.coords[e])}')
 
 def gate_kspace(mri_rawdata=None, num_frames=10):
 
@@ -1043,22 +1074,28 @@ if __name__ == "__main__":
     parser.add_argument('--thresh', type=float, default=0.1)
     parser.add_argument('--scale', type=float, default=1.1)
     parser.add_argument('--frames',type=int, default=50, help='Number of time frames')
-    parser.add_argument('--filename', type=str, help='filename for data (e.g. MRI_Raw.h5)',
-                        default='MRI_Raw.h5')
-
     parser.add_argument('--mps_ker_width', type=int, default=16)
     parser.add_argument('--ksp_calib_width', type=int, default=32)
     parser.add_argument('--lamda', type=float, default=0)
     parser.add_argument('--max_iter', type=int, default=10)
     parser.add_argument('--max_inner_iter', type=int, default=4)
 
+    parser.add_argument('--filename', type=str, help='filename for data (e.g. MRI_Raw.h5)')
+    parser.add_argument('--logdir', type=str, help='folder to log files to, default is current directory')
     args = parser.parse_args()
 
     # For tracking memory
     mempool = cupy.get_default_memory_pool()
 
+    # Put up a file selector if the file is not specified
+    if args.filename is None:
+        from tkinter import Tk
+        from tkinter.filedialog import askopenfilename
+        Tk().withdraw()
+        args.filename = askopenfilename()
+
     # Load Data
-    logger.info(f'Load MRI ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
+    logger.info(f'Load MRI from {args.filename}')
     mri_raw = load_MRI_raw(h5_filename=args.filename)
 
     crop_kspace(mri_rawdata=mri_raw, crop_factor=2)
