@@ -169,7 +169,7 @@ class SingularValueThresholding(sp.prox.Prox):
         lamda *= np.sqrt(np.prod( block_shape))
         nuclear_norm = 0.0
 
-        lr_batch_size = 32
+        lr_batch_size = 128
         lr_batchs = (image.shape[0] + lr_batch_size - 1) // lr_batch_size
         for batch in range(lr_batchs):
             start = batch * lr_batch_size
@@ -482,7 +482,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
                 hf["X"][-Xiter.shape[0]:]  = np.abs(Xiter)
             else:
                 maxshape=np.array(Xiter.shape)
-                maxshape[0] *= self.max_iter
+                maxshape[0] *= (self.max_iter  + 1)
                 maxshape = tuple(maxshape)
                 print(maxshape)
                 hf.create_dataset("X", data=np.abs(Xiter), maxshape=maxshape)
@@ -731,7 +731,7 @@ def pils_recon(mri_rawdata=None, smaps=None):
     return (img)
 
 
-def llr_recon(mri_rawdata=None, smaps=None):
+def llr_recon(mri_rawdata=None, smaps=None, lamda=0.0005):
 
     logger = logging.getLogger('Recon images')
     mempool = cupy.get_default_memory_pool()
@@ -745,10 +745,7 @@ def llr_recon(mri_rawdata=None, smaps=None):
     coord = mri_rawdata.coords
     dcf = mri_rawdata.dcf
     kdata = mri_rawdata.kdata
-    lam = 0.0005
-    #lam = 0.01
-    #sense = BatchedSenseRecon(kdata, mps=smaps, weights=dcf, coord=coord, device=device, lamda=lam, coil_batch_size=None, max_iter=20)
-    sense = BatchedSenseRecon(kdata, mps=smaps, weights=dcf, coord=coord, device=device, lamda=lam,
+    sense = BatchedSenseRecon(kdata, mps=smaps, weights=dcf, coord=coord, device=device, lamda=lamda,
                               coil_batch_size=1, max_iter=200)
 
     img = sense.run()
@@ -1076,7 +1073,7 @@ if __name__ == "__main__":
     parser.add_argument('--frames',type=int, default=50, help='Number of time frames')
     parser.add_argument('--mps_ker_width', type=int, default=16)
     parser.add_argument('--ksp_calib_width', type=int, default=32)
-    parser.add_argument('--lamda', type=float, default=0)
+    parser.add_argument('--lamda', type=float, default=0.0005)
     parser.add_argument('--max_iter', type=int, default=10)
     parser.add_argument('--max_inner_iter', type=int, default=4)
 
@@ -1113,7 +1110,7 @@ if __name__ == "__main__":
 
     # Reconstruct the image
     logger.info(f'Reconstruct Images ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
-    pils = llr_recon(mri_raw, smaps=smaps)
+    pils = llr_recon(mri_raw, smaps=smaps, lamda=args.lamda)
 
     # Copy back to make easy
     smaps = sp.to_device(smaps, sp.cpu_device)
