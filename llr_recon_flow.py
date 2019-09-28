@@ -1,66 +1,50 @@
 #! /usr/bin/env python
+
+import os
+import ctypes
+
+def set_mkl_threads():
+    os.environ["MKL_DYNAMIC"] = "FALSE"
+    os.environ["OMP_NUM_THREADS"] = "16"  # export OMP_NUM_THREADS=4
+    os.environ["OPENBLAS_NUM_THREADS"] = "16"  # export OPENBLAS_NUM_THREADS=4
+    os.environ["MKL_NUM_THREADS"] = "16"  # export MKL_NUM_THREADS=6
+    os.environ["VECLIB_MAXIMUM_THREADS"] = "16"  # export VECLIB_MAXIMUM_THREADS=4
+    os.environ["NUMEXPR_NUM_THREADS"] = "16"  # export NUMEXPR_NUM_THREADS=6
+
+    try:
+        import mkl
+        mkl.set_num_threads(16)
+        return 0
+    except:
+        pass
+
+    for name in ["libmkl_rt.so", "libmkl_rt.dylib", "mkl_Rt.dll"]:
+        try:
+            mkl_rt = ctypes.CDLL(name)
+            mkl_rt.mkl_set_num_threads(ctypes.byref(ctypes.c_int(1)))
+            return 0
+        except:
+            pass
+
+
+set_mkl_threads()
+
+import mkl
+print(f'MKL Threads = {mkl.get_max_threads()}')
+
+
 import numpy as np
 import h5py
 import sigpy.mri as mr
 import logging
 import sigpy as sp
-import os
 import argparse
 #import matplotlib.pyplot as plt
 import cupy
-import numba as nb
 import time
 import math
 import scipy.ndimage as ndimage
-
-
-@nb.vectorize  # pragma: no cover
-def _thresh_to_binary(lamda, input):
-    abs_input = abs(input)
-    if abs_input > lamda:
-        return 1.0
-    else:
-        return 0.0
-
-
-def thresh_to_binary(lamda, input):
-    r"""Thresh to binary
-
-    Args:
-        lamda (float, or array): Threshold parameter.
-        input (array)
-
-    Returns:
-        array: soft-thresholded result.
-
-    """
-    device = sp.backend.get_device(input)
-    xp = device.xp
-
-    lamda = xp.real(lamda)
-    with device:
-        if device == sp.backend.cpu_device:
-            output = _thresh_to_binary(lamda, input)
-        else:  # pragma: no cover
-            output = _thresh_to_binary_cuda(lamda, input)
-
-        if np.issubdtype(input.dtype, np.floating):
-            output = xp.real(output)
-
-    return output
-
-
-class MRI_Raw:
-    Num_Encodings = 0
-    Num_Coils = 0
-    trajectory_type = None
-    dft_needed = None
-    Num_Frames = None
-    coords = None
-    time = None
-    dcf = None
-    kdata = None
-    target_image_size = [256, 256, 64]
+from mri_raw import *
 
 class SingularValueThresholding(sp.prox.Prox):
 
@@ -169,7 +153,7 @@ class SingularValueThresholding(sp.prox.Prox):
         lamda *= np.sqrt(np.prod( block_shape))
         nuclear_norm = 0.0
 
-        lr_batch_size = 128
+        lr_batch_size = 256
         lr_batchs = (image.shape[0] + lr_batch_size - 1) // lr_batch_size
         for batch in range(lr_batchs):
             start = batch * lr_batch_size
@@ -326,15 +310,15 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
 
     def __init__(self, y, mps, lamda=0, weights=None,
                  coord=None, device=sp.cpu_device, coil_batch_size=None,
-                 comm=None, show_pbar=True, max_power_iter=100, fast_maxeig=True,
-                 composite_init=True, scale_image=True, **kwargs):
+                 comm=None, show_pbar=True, max_power_iter=40, fast_maxeig=False,
+                 composite_init=True, **kwargs):
 
         # Temp
         self.frames = y.shape[0]//5
         self.num_encodes = 5
         self.num_images = self.frames*self.num_encodes
         self.cpu_device = sp.cpu_device
-        self.gpu_device= sp.Device(0)
+        self.gpu_device = sp.Device(0)
         self.max_power_iter = max_power_iter
         self.show_pbar = True
         self.log_images = True
@@ -423,9 +407,11 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
 
             composite = sp.to_device(composite, sp.cpu_device)
             x = np.vstack([composite for i in range(self.num_images)])
-
         else:
-            x = self.cpu_device.xp.zeros(A.ishape, dtype=y.dtype)
+             # Multiply by sqrt(weights)
+            if weights is not None:
+                for e in range(self.num_images):
+                    y[e, ...] *= weights[e, ...] ** 0.5
 
         # Update ops list with weights
         ops_list = [sp.mri.linop.Sense(mps, coord[e, ...], weights[e, ...], ishape=None,
@@ -438,6 +424,9 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
         # Get AHA opts list
         A = DiagOnDevice(grad_ops, axis=0, run_device=sp.Device(0), in_device=sp.cpu_device,
                          out_device=sp.cpu_device)
+
+        if composite_init == False:
+            x = self.cpu_device.xp.zeros(A.ishape, dtype=y.dtype)
 
         proxg = SingularValueThresholding(A.ishape, frames=self.frames, num_encodes=self.num_encodes, lamda=lamda, block_size=16, block_stride=16)
 
@@ -618,8 +607,8 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense'):
                                        ksp_calib_width=args.ksp_calib_width,
                                        lamda=args.lamda,
                                        device=device,
-                                       max_iter=args.max_iter,
-                                       max_inner_iter=args.max_inner_iter).run()
+                                       max_iter=args.jsense_max_iter,
+                                       max_inner_iter=args.jsense_max_inner_iter).run()
 
             # Get a composite image
             img_shape = sp.estimate_shape(coord)
@@ -741,15 +730,7 @@ def llr_recon(mri_rawdata=None, smaps=None, lamda=0.0005):
 
     logger.info(f'Memory used = {mempool.used_bytes()} of {mempool.total_bytes()}')
 
-    # Reference for shortcut
-    coord = mri_rawdata.coords
-    dcf = mri_rawdata.dcf
-    kdata = mri_rawdata.kdata
-    sense = BatchedSenseRecon(kdata, mps=smaps, weights=dcf, coord=coord, device=device, lamda=lamda,
-                              coil_batch_size=1, max_iter=200)
 
-    img = sense.run()
-    img = sp.to_device(img, sp.cpu_device)
 
     return (img)
 
@@ -784,10 +765,13 @@ def crop_kspace(mri_rawdata=None, crop_factor=2, crop_type='sphere'):
         mri_rawdata.dcf[e] = mri_rawdata.dcf[e][idx[:,0]]
         mri_rawdata.kdata[e] = mri_rawdata.kdata[e][:,idx[:, 0]]
         mri_rawdata.time[e] = mri_rawdata.time[e][idx[:,0]]
+        mri_rawdata.ecg[e] = mri_rawdata.ecg[e][idx[:, 0]]
+        mri_rawdata.prep[e] = mri_rawdata.prep[e][idx[:, 0]]
+        mri_rawdata.resp[e] = mri_rawdata.resp[e][idx[:, 0]]
 
         logger.info(f'New shape = {sp.estimate_shape(mri_rawdata.coords[e])}')
 
-def gate_kspace(mri_rawdata=None, num_frames=10):
+def gate_kspace(mri_raw=None, num_frames=10, gate_type='time'):
 
     logger = logging.getLogger('Gate k-space')
 
@@ -805,17 +789,42 @@ def gate_kspace(mri_rawdata=None, num_frames=10):
     mri_rawG.dcf = []
     mri_rawG.kdata = []
     mri_rawG.time = []
+    mri_rawG.ecg = []
+    mri_rawG.prep = []
+    mri_rawG.resp = []
+
+    gate_signals = {
+        'ecg': mri_raw.ecg,
+        'time': mri_raw.time,
+        'prep': mri_raw.prep,
+        'resp': mri_raw.resp
+    }
+    gate_signal = gate_signals.get(gate_type, f'Cannot interpret gate signal {gate_type}')
+
+    print(f'Gating off of {gate_type}')
 
     # Loop over all encodes
-    t_min = np.min([np.min(mri_raw.time[e]) for e in range(mri_raw.Num_Encodings)])
-    t_max = np.max([np.max(mri_raw.time[e]) for e in range(mri_raw.Num_Encodings)])
+    t_min = np.min([np.min(gate_signal[e]) for e in range(mri_raw.Num_Encodings)])
+    t_max = np.max([np.max(gate_signal[e]) for e in range(mri_raw.Num_Encodings)])
+    if gate_type == 'ecg':
+        logger.info('Using median ECG value for tmax')
+        median_rr =  np.mean([np.median(gate_signal[e]) for e in range(mri_raw.Num_Encodings)])
+        median_rr = 2.0*( median_rr - t_min ) + t_min
+        t_max = median_rr
+        logger.info(f'Median RR = {median_rr}')
+
+        # Check the range
+        sum_within = np.sum([np.sum(gate_signal[e]<t_max) for e in range(mri_raw.Num_Encodings)])
+        sum_total = np.sum([gate_signal[e].size for e in range(mri_raw.Num_Encodings)])
+        within_rr = 100.0* sum_within / sum_total
+        logger.info(f'ECG, {within_rr} percent within RR')
+
 
     logger.info(f'Max time = {t_max}')
     logger.info(f'Min time = {t_min}')
 
     delta_time = (t_max -t_min)/num_frames
     logger.info(f'Delta = {delta_time}')
-
 
     # Get the number of points per bin
     points_per_bin = []
@@ -827,8 +836,8 @@ def gate_kspace(mri_rawdata=None, num_frames=10):
 
             # Find index where value is held
             idx = np.argwhere(np.logical_and.reduce([
-                np.abs(mri_rawdata.time[e]) >= t_start,
-                np.abs(mri_rawdata.time[e]) < t_stop]))
+                np.abs(gate_signal[e]) >= t_start,
+                np.abs(gate_signal[e]) < t_stop]))
 
             # Gate the data
             points_per_bin.append(len(idx))
@@ -843,10 +852,13 @@ def gate_kspace(mri_rawdata=None, num_frames=10):
     core_shape = (total_encodes,1,max_points_per_bin)
 
     # Append to list
-    mri_rawG.coords = np.zeros( core_shape + (3,), dtype=np.float32)
-    mri_rawG.dcf = np.zeros( core_shape, dtype=np.float32)
-    mri_rawG.kdata = np.zeros( (total_encodes,mri_raw.Num_Coils,1,max_points_per_bin), dtype=np.complex64)
-    mri_rawG.time = np.zeros( core_shape, dtype=np.float32)
+    mri_rawG.coords = np.zeros(core_shape + (3,), dtype=np.float32)
+    mri_rawG.dcf = np.zeros(core_shape, dtype=np.float32)
+    mri_rawG.kdata = np.zeros((total_encodes,mri_raw.Num_Coils,1,max_points_per_bin), dtype=np.complex64)
+    mri_rawG.time = np.zeros(core_shape, dtype=np.float32)
+    mri_rawG.ecg = np.zeros(core_shape, dtype=np.float32)
+    mri_rawG.prep = np.zeros(core_shape, dtype=np.float32)
+    mri_rawG.resp = np.zeros(core_shape, dtype=np.float32)
 
     logger.info(f'New coords shape {mri_rawG.coords.shape}')
     logger.info(f'New dcf shape {mri_rawG.dcf.shape}')
@@ -862,15 +874,22 @@ def gate_kspace(mri_rawdata=None, num_frames=10):
 
             # Find index where value is held
             idx = np.argwhere(np.logical_and.reduce([
-                np.abs(mri_rawdata.time[e]) >= t_start,
-                np.abs(mri_rawdata.time[e]) < t_stop]))
+                np.abs(gate_signal[e]) >= t_start,
+                np.abs(gate_signal[e]) < t_stop]))
             current_points = len(idx)
 
-            logger.info(f'Frame {t} | {e}, Points = {current_points}')
+            #print(f'Gate signal size = {gate_signal[e].shape}')
+            #print(f'MRI coords size = {mri_raw.coords[e].shape}')
+
+            logger.info(f'Frame {t} [{t_start} to {t_stop} ] | {e}, Points = {current_points}')
             mri_rawG.coords[count,0,:current_points,:] = mri_raw.coords[e][idx[:,0],:]
             mri_rawG.dcf[count,0,:current_points] = mri_raw.dcf[e][idx[:,0]]
             mri_rawG.kdata[count,:,:,:current_points] = mri_raw.kdata[e][:,np.newaxis,idx[:,0]]
             mri_rawG.time[count,0,:current_points] = mri_raw.time[e][idx[:,0]]
+            mri_rawG.resp[count, 0, :current_points] = mri_raw.resp[e][idx[:, 0]]
+            mri_rawG.prep[count, 0, :current_points] = mri_raw.prep[e][idx[:, 0]]
+            mri_rawG.ecg[count, 0, :current_points] = mri_raw.ecg[e][idx[:, 0]]
+
             count += 1
     return(mri_rawG)
 
@@ -913,6 +932,9 @@ def load_MRI_raw(h5_filename=None):
         mri_raw.dcf = []
         mri_raw.kdata = []
         mri_raw.time = []
+        mri_raw.prep = []
+        mri_raw.ecg = []
+        mri_raw.resp = []
 
         for encode in range(Num_Encodings):
 
@@ -926,13 +948,50 @@ def load_MRI_raw(h5_filename=None):
             coord = np.stack(coord, axis=-1)
 
             dcf = np.array(hf['Kdata'][f'KW_E{encode}'])
+
+            # Load time data
             try:
                 time_readout = np.array(hf['Gating']['time'])
             except Exception:
                 time_readout = np.array(hf['Gating'][f'TIME_E{encode}'])
-            time_readout = np.expand_dims(time_readout,-1)
-            time = np.tile(time_readout,(1,1,dcf.shape[2]))
 
+            try:
+                ecg_readout = np.array(hf['Gating']['ecg'])
+            except Exception:
+                ecg_readout = np.array(hf['Gating'][f'ECG_E{encode}'])
+
+            '''
+            import matplotlib.pyplot as plt
+            plt.figure()
+            plt.hist( ecg_readout.flatten(), bins=100)
+            plt.show()
+            '''
+
+            try:
+                prep_readout = np.array(hf['Gating']['prep'])
+            except Exception:
+                prep_readout = np.array(hf['Gating'][f'PREP_E{encode}'])
+
+            try:
+                resp_readout = np.array(hf['Gating']['resp'])
+            except Exception:
+                resp_readout = np.array(hf['Gating'][f'RESP_E{encode}'])
+
+
+            # This assigns the same time to each point in the readout
+            time_readout = np.expand_dims(time_readout, -1)
+            ecg_readout = np.expand_dims(ecg_readout, -1)
+            resp_readout = np.expand_dims(resp_readout, -1)
+            prep_readout = np.expand_dims(prep_readout, -1)
+
+            time = np.tile(time_readout,(1, 1, dcf.shape[2]))
+            resp = np.tile(resp_readout,(1, 1, dcf.shape[2]))
+            ecg = np.tile(ecg_readout, (1, 1, dcf.shape[2]))
+            prep = np.tile(prep_readout, (1, 1, dcf.shape[2]))
+
+            prep = prep.flatten()
+            resp = resp.flatten()
+            ecg = ecg.flatten()
             dcf = dcf.flatten()
             time = time.flatten()
 
@@ -950,12 +1009,19 @@ def load_MRI_raw(h5_filename=None):
             mri_raw.dcf.append(dcf)
             mri_raw.kdata.append(ksp)
             mri_raw.time.append(time)
+            mri_raw.prep.append(prep)
+            mri_raw.ecg.append(ecg)
+            mri_raw.resp.append(resp)
 
             # Log the data
             logging.info(f'MRI coords {mri_raw.coords[encode].shape}')
             logging.info(f'MRI dcf {mri_raw.dcf[encode].shape}')
             logging.info(f'MRI kdata {mri_raw.kdata[encode].shape}')
             logging.info(f'MRI time {mri_raw.time[encode].shape}')
+            logging.info(f'MRI ecg {mri_raw.ecg[encode].shape}')
+            logging.info(f'MRI resp {mri_raw.resp[encode].shape}')
+            logging.info(f'MRI prep {mri_raw.prep[encode].shape}')
+
         '''
         try:
             noise = hf['Kdata']['Noise']['real'] + 1j * hf['Kdata']['Noise']['imag']
@@ -1073,12 +1139,15 @@ if __name__ == "__main__":
     parser.add_argument('--frames',type=int, default=50, help='Number of time frames')
     parser.add_argument('--mps_ker_width', type=int, default=16)
     parser.add_argument('--ksp_calib_width', type=int, default=32)
-    parser.add_argument('--lamda', type=float, default=0.0005)
-    parser.add_argument('--max_iter', type=int, default=10)
-    parser.add_argument('--max_inner_iter', type=int, default=4)
+    parser.add_argument('--lamda', type=float, default=0.00005)
+    parser.add_argument('--max_iter', type=int, default=200)
+    parser.add_argument('--jsense_max_iter', type=int, default=10)
+    parser.add_argument('--jsense_max_inner_iter', type=int, default=10)
 
+    # Input Output
     parser.add_argument('--filename', type=str, help='filename for data (e.g. MRI_Raw.h5)')
     parser.add_argument('--logdir', type=str, help='folder to log files to, default is current directory')
+
     args = parser.parse_args()
 
     # For tracking memory
@@ -1106,19 +1175,22 @@ if __name__ == "__main__":
     smaps = get_smaps(mri_rawdata=mri_raw, args=args)
 
     # Gate k-space
-    mri_raw = gate_kspace(mri_rawdata=mri_raw, num_frames=args.frames) # control num of time frames
+    mri_raw = gate_kspace(mri_raw=mri_raw, num_frames=args.frames, gate_type='time') # control num of time frames
 
     # Reconstruct the image
     logger.info(f'Reconstruct Images ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
-    pils = llr_recon(mri_raw, smaps=smaps, lamda=args.lamda)
+    img = BatchedSenseRecon(mri_raw.kdata, mps=smaps, weights=mri_raw.dcf, coord=mri_raw.coords,
+                            device=sp.Device(args.device), lamda=args.lamda,
+                            coil_batch_size=1, max_iter=args.max_iter).run()
+    img = sp.to_device(img, sp.cpu_device)
 
     # Copy back to make easy
     smaps = sp.to_device(smaps, sp.cpu_device)
     smaps_mag = np.abs(smaps)
 
-    pils = sp.to_device(pils)
-    pils_mag = np.abs(pils)
-    pils_phase = np.angle(pils)
+    img = sp.to_device(img, sp.cpu_device)
+    img_mag = np.abs(img)
+    img_phase = np.angle(img)
 
     # Export to file
     out_name = 'FullRecon.h5'
@@ -1128,7 +1200,7 @@ if __name__ == "__main__":
     except OSError:
         pass
     with h5py.File(out_name, 'w') as hf:
-        hf.create_dataset("IMAGE", data=pils)
-        hf.create_dataset("IMAGE_MAG", data=pils_mag)
-        hf.create_dataset("IMAGE_PHASE", data=pils_phase)
+        hf.create_dataset("IMAGE", data=img)
+        hf.create_dataset("IMAGE_MAG", data=img_mag)
+        hf.create_dataset("IMAGE_PHASE", data=img_phase)
         hf.create_dataset("SMAPS", data=smaps_mag)
