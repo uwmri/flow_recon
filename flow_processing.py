@@ -12,7 +12,7 @@ import math
 
 class MRI_4DFlow:
 
-    def __init__(self, encode_type='4pt-referenced',venc=100):
+    def __init__(self, encode_type,venc):
 
         'Initialization'
         self.set_encoding_matrix(encode_type)
@@ -208,7 +208,23 @@ class MRI_4DFlow:
 
 if __name__ == "__main__":
 
-    mri_flow = MRI_4DFlow(encode_type='5pt',venc=80.0)
+
+    # Parse Command Line
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--venc', type=float, default=80.0)
+    # Input Output
+    parser.add_argument('--filename', type=str, help='filename for data (e.g. MRI_Raw.h5)')
+    parser.add_argument('--logdir', type=str, help='folder to log files to, default is current directory')
+
+    args = parser.parse_args()
+
+    # Put up a file selector if the file is not specified
+    if args.filename is None:
+        from tkinter import Tk
+        from tkinter.filedialog import askopenfilename
+
+        Tk().withdraw()
+        args.filename = askopenfilename()
 
     with h5py.File('FullRecon.h5', 'r') as hf:
         temp = hf['IMAGE']
@@ -217,14 +233,26 @@ if __name__ == "__main__":
         #temp = np.moveaxis(temp, -1, 0)
         #frames = int(temp.shape[0]/5)
         frames = int(temp.shape[0])
-        print(frames)
+        num_encodes = int(temp.shape[1])
+        print(f' num of frames =  {frames}')
+        print(f' num of encodes = {num_encodes}')
         #temp = np.reshape(temp,newshape=(5, frames,temp.shape[1],temp.shape[2],temp.shape[3]))
         #temp = np.reshape(temp,newshape=(temp.shape[1], frames,temp.shape[2],temp.shape[3],temp.shape[4]))
 
         temp = np.moveaxis(temp,1,-1)
         print(temp.shape)
 
+    if num_encodes == 5:
+        encoding = "5pt"
+    elif num_encodes == 4:
+        encoding = "4pt-referenced"
+    elif num_encodes == 3:
+        encoding = "3pt"
+
+    print(f' encoding type is {encoding}')
+
     # Solve for Velocity
+    mri_flow = MRI_4DFlow(encode_type= encoding, venc=args.venc)
     mri_flow.signal = temp
     mri_flow.solve_for_velocity()
     #mri_flow.update_angiogram()
