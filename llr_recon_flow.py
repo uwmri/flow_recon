@@ -1097,6 +1097,25 @@ def autofov(mri_raw=None, device=None,
 
     sos = sp.to_device(sos)
 
+
+    # Spherical mask
+    zz, xx, yy = np.meshgrid(np.linspace(-1, 1, sos.shape[0]),
+                             np.linspace(-1, 1, sos.shape[1]),
+                             np.linspace(-1, 1, sos.shape[2]),indexing='ij')
+    rad = zz ** 2 + xx ** 2 + yy ** 2
+    idx = ( rad >= 1.0)
+    sos[idx] = 0.0
+
+    # Export to file
+    out_name = 'AutoFOV.h5'
+    logger.info('Saving autofov to ' + out_name)
+    try:
+        os.remove(out_name)
+    except OSError:
+        pass
+    with h5py.File(out_name, 'w') as hf:
+        hf.create_dataset("IMAGE", data=np.abs(sos))
+
     boxc = sos > thresh * sos.max()
     boxc_idx = np.nonzero(boxc)
     boxc_center = np.array(img_shape) // 2
