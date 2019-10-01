@@ -314,8 +314,8 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
                  composite_init=True, **kwargs):
 
         # Temp
-        self.frames = y.shape[0]//5
-        self.num_encodes = 5
+        self.num_encodes = mri_raw.Num_Encodings//100
+        self.frames = y.shape[0]//self.num_encodes
         self.num_images = self.frames*self.num_encodes
         self.cpu_device = sp.cpu_device
         self.gpu_device = sp.Device(0)
@@ -323,6 +323,10 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
         self.show_pbar = True
         self.log_images = True
         self.log_out_name = 'ReconLog.h5'
+
+        print(f'Whats the num of frames?  = {self.frames}')
+        print(f'Whats the num of encodes?  = {self.num_encodes}')
+        print(f'Whats the num of images?  = {self.num_images}')
 
         if self.log_images:
             # Export to file
