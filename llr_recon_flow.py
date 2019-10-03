@@ -308,13 +308,13 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
 
     """
 
-    def __init__(self, y, mps, lamda=0, weights=None,
+    def __init__(self, y, mps, lamda=0, weights=None, num_enc=0,
                  coord=None, device=sp.cpu_device, coil_batch_size=None,
                  comm=None, show_pbar=True, max_power_iter=40, fast_maxeig=False,
                  composite_init=True, **kwargs):
 
         # Temp
-        self.num_encodes = mri_raw.Num_Encodings//100
+        self.num_encodes = num_enc
         self.frames = y.shape[0]//self.num_encodes
         self.num_images = self.frames*self.num_encodes
         self.cpu_device = sp.cpu_device
@@ -324,13 +324,16 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
         self.log_images = True
         self.log_out_name = 'ReconLog.h5'
 
+        logging.basicConfig(level=logging.INFO)
+        self.logger = logging.getLogger('BatchedSenseRecon')
+
         print(f'Whats the num of frames?  = {self.frames}')
         print(f'Whats the num of encodes?  = {self.num_encodes}')
         print(f'Whats the num of images?  = {self.num_images}')
 
         if self.log_images:
             # Export to file
-            logger.info('Logging images to ' + self.log_out_name)
+            self.logger.info('Logging images to ' + self.log_out_name)
             try:
                 os.remove(self.log_out_name)
             except OSError:
@@ -458,7 +461,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
 
     def _write_log(self):
 
-        logger.info(f'Logging to file {self.log_out_name}')
+        self.logger.info(f'Logging to file {self.log_out_name}')
         xp = sp.get_device(self.x).xp
         out_slice = (self.x.shape[0] / self.frames ) // 2
         out_slice = int(40)
@@ -1162,7 +1165,7 @@ if __name__ == "__main__":
     parser.add_argument('--frames',type=int, default=50, help='Number of time frames')
     parser.add_argument('--mps_ker_width', type=int, default=16)
     parser.add_argument('--ksp_calib_width', type=int, default=32)
-    parser.add_argument('--lamda', type=float, default=0.00005)
+    parser.add_argument('--lamda', type=float, default=0.0001)
     parser.add_argument('--max_iter', type=int, default=200)
     parser.add_argument('--jsense_max_iter', type=int, default=10)
     parser.add_argument('--jsense_max_inner_iter', type=int, default=10)
@@ -1186,7 +1189,7 @@ if __name__ == "__main__":
     # Load Data
     logger.info(f'Load MRI from {args.filename}')
     mri_raw = load_MRI_raw(h5_filename=args.filename)
-
+    num_enc = mri_raw.Num_Encodings
     crop_kspace(mri_rawdata=mri_raw, crop_factor=2)
 
     # Reconstruct an low res image and get the field of view
@@ -1203,7 +1206,7 @@ if __name__ == "__main__":
     # Reconstruct the image
     logger.info(f'Reconstruct Images ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
     img = BatchedSenseRecon(mri_raw.kdata, mps=smaps, weights=mri_raw.dcf, coord=mri_raw.coords,
-                            device=sp.Device(args.device), lamda=args.lamda,
+                            device=sp.Device(args.device), lamda=args.lamda, num_enc=num_enc,
                             coil_batch_size=1, max_iter=args.max_iter).run()
     img = sp.to_device(img, sp.cpu_device)
 

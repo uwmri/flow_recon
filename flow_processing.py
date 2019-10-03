@@ -213,7 +213,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--venc', type=float, default=80.0)
     # Input Output
-    parser.add_argument('--filename', type=str, help='filename for data (e.g. MRI_Raw.h5)')
+    parser.add_argument('--filename', type=str, help='filename for data (e.g. FullRecon.h5)')
     parser.add_argument('--logdir', type=str, help='folder to log files to, default is current directory')
 
     args = parser.parse_args()
