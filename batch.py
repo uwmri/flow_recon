@@ -12,18 +12,52 @@ import shutil
 
 if __name__ == '__main__':
 
-    data_source = ['Z:\\99_LARR\\ADRC_PCVIPR\\raw_data\\adrc00270_v3\\MRI_Raw.h5',
-                   'Z:\\99_LARR\\ADRC_PCVIPR\\raw_data\\adrc00353_v2\\MRI_Raw.h5',
-                   'Z:\\99_LARR\\ADRC_PCVIPR\\raw_data\\adrc00405_v2\\MRI_Raw.h5',
-                   'Z:\\99_LARR\\ADRC_PCVIPR\\raw_data\\adrc00589_v2\\MRI_Raw.h5',
-                   'Z:\\99_LARR\\ADRC_PCVIPR\\raw_data\\adrc00689_v2\\MRI_Raw.h5',
-                   'Z:\\99_LARR\\ADRC_PCVIPR\\raw_data\\adrc00694_v3\\MRI_Raw.h5',
-                   'Z:\\99_LARR\\ADRC_PCVIPR\\raw_data\\adrc00719\\MRI_Raw.h5',
-                   'Z:\\99_LARR\\ADRC_PCVIPR\\raw_data\\adrc00721_v2\\MRI_Raw.h5',
-                   'Z:\\99_LARR\\ADRC_PCVIPR\\raw_data\\adrc00754_v2\\MRI_Raw.h5',
-                   'Z:\\99_LARR\\ADRC_PCVIPR\\raw_data\\adrc00767_v2\\MRI_Raw.h5']
+    # Folder to export data
+    working_folder='D:\\TR_FLOW_RECON\\'
+
+    data_source = ['\\\\MPUFS7\data_mrcv\\99_LARR\\ADRC_PCVIPR\\raw_data\\adrc00270_v3\\MRI_Raw.h5',
+                   '\\\\MPUFS7\data_mrcv\\99_LARR\\ADRC_PCVIPR\\raw_data\\adrc00353_v2\\MRI_Raw.h5',
+                   '\\\\MPUFS7\data_mrcv\\99_LARR\\ADRC_PCVIPR\\raw_data\\adrc00405_v2\\MRI_Raw.h5',
+                   '\\\\MPUFS7\data_mrcv\\99_LARR\\ADRC_PCVIPR\\raw_data\\adrc00589_v2\\MRI_Raw.h5',
+                   '\\\\MPUFS7\data_mrcv\\99_LARR\\ADRC_PCVIPR\\raw_data\\adrc00689_v2\\MRI_Raw.h5',
+                   '\\\\MPUFS7\data_mrcv\\99_LARR\\ADRC_PCVIPR\\raw_data\\adrc00694_v3\\MRI_Raw.h5',
+                   '\\\\MPUFS7\data_mrcv\\99_LARR\\ADRC_PCVIPR\\raw_data\\adrc00719\\MRI_Raw.h5',
+                   '\\\\MPUFS7\data_mrcv\\99_LARR\\ADRC_PCVIPR\\raw_data\\adrc00721_v2\\MRI_Raw.h5',
+                   '\\\\MPUFS7\data_mrcv\\99_LARR\\ADRC_PCVIPR\\raw_data\\adrc00754_v2\\MRI_Raw.h5',
+                   '\\\\MPUFS7\data_mrcv\\99_LARR\\ADRC_PCVIPR\\raw_data\\adrc00767_v2\\MRI_Raw.h5']
+
+    # Grab from the network
+    data_source_new = []
+    for current_file in data_source:
+        if os.path.isfile(current_file):
+            original_file=os.path.basename(current_file)
+            original_folder=os.path.basename(os.path.dirname(current_file))
+
+            destination = os.path.join(working_folder,original_folder)
+            destination_file = os.path.join( destination, original_file)
+            print(f'Found file {current_file}, Folder {original_folder}, File {original_file}')
+
+            if os.path.isfile(destination_file):
+                print(f'File exists, not copying')
+            else:
+                print(f'  Going to copy to {destination}')
+                os.makedirs(destination, exist_ok=True)
+                shutil.copy(current_file, destination)
+
+            data_source_new.append(destination_file)
+        else:
+            print('File Does not exist')
+
+    data_source = data_source_new
+
+    # Truncate list (ran two already)
+    data_source = data_source[2:]
+
+    print(data_source)
 
     for i in data_source:
+        outdir = os.path.dirname(i)
+        print(f'Will save to {outdir}')
 
         logging.basicConfig(level=logging.INFO)
         logger = logging.getLogger('main')
@@ -94,7 +128,7 @@ if __name__ == '__main__':
         img_phase = np.angle(img)
 
         # Export to file
-        out_name = 'FullRecon.h5'
+        out_name = os.path.join(working_folder,'FullRecon.h5')
         logger.info('Saving images to ' + out_name)
         try:
             os.remove(out_name)
@@ -106,19 +140,13 @@ if __name__ == '__main__':
             hf.create_dataset("IMAGE_PHASE", data=img_phase)
             hf.create_dataset("SMAPS", data=smaps_mag)
 
-        with h5py.File('FullRecon.h5', 'r') as hf:
+        with h5py.File(out_name, 'r') as hf:
             temp = hf['IMAGE']
             print(temp.shape)
-            # temp = temp['real'] + 1j*temp['imag']
-            # temp = np.moveaxis(temp, -1, 0)
-            # frames = int(temp.shape[0]/5)
             frames = int(temp.shape[0])
             num_encodes = int(temp.shape[1])
             print(f' num of frames =  {frames}')
             print(f' num of encodes = {num_encodes}')
-            # temp = np.reshape(temp,newshape=(5, frames,temp.shape[1],temp.shape[2],temp.shape[3]))
-            # temp = np.reshape(temp,newshape=(temp.shape[1], frames,temp.shape[2],temp.shape[3],temp.shape[4]))
-
             temp = np.moveaxis(temp, 1, -1)
             print(temp.shape)
 
@@ -140,7 +168,7 @@ if __name__ == '__main__':
         mri_flow.update_angiogram()
 
         # Export to file
-        out_name = 'Flow.h5'
+        out_name = os.path.join(working_folder,'Flow.h5')
         try:
             os.remove(out_name)
         except OSError:
@@ -153,11 +181,9 @@ if __name__ == '__main__':
             hf.create_dataset("ANGIO", data=mri_flow.angiogram)
             hf.create_dataset("MAG", data=mri_flow.magnitude)
 
-        outdir = i[32:]
-        outdir = outdir[:-11]
-        os.mkdir(outdir)
+        outdir=os.path.dirname(i)
         shutil.move('AutoFOV.h5', outdir)
-        shutil.move('Flow.h5', outdir)
-        shutil.move('FullRecon.h5', outdir)
+        shutil.move(os.path.join(working_folder,'Flow.h5'), outdir)
+        shutil.move(os.path.join(working_folder,'FullRecon.h5'), outdir)
         shutil.move('ReconLog.h5', outdir)
         shutil.move('SenseMaps.h5', outdir)

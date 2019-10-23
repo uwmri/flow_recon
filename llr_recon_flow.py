@@ -13,7 +13,7 @@ def set_mkl_threads():
 
     try:
         import mkl
-        mkl.set_num_threads(16)
+        mkl.set_num_threads(8)
         return 0
     except:
         pass
@@ -26,12 +26,9 @@ def set_mkl_threads():
         except:
             pass
 
-
 set_mkl_threads()
-
 import mkl
 print(f'MKL Threads = {mkl.get_max_threads()}')
-
 
 import numpy as np
 import h5py
@@ -44,6 +41,8 @@ import cupy
 import time
 import math
 import scipy.ndimage as ndimage
+
+from low_rank_recon import *
 from mri_raw import *
 
 class SingularValueThresholding(sp.prox.Prox):
@@ -480,7 +479,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
                 maxshape=np.array(Xiter.shape)
                 maxshape[0] *= (self.max_iter  + 1)
                 maxshape = tuple(maxshape)
-                print(maxshape)
+                print(f'Init {self.log_out_name} with maxshape = {maxshape}')
                 hf.create_dataset("X", data=np.abs(Xiter), maxshape=maxshape)
 
 
@@ -1044,18 +1043,18 @@ def load_MRI_raw(h5_filename=None):
 
         # Scale k-space to max 1
         kdata_max = [ np.abs(ksp).max() for ksp in mri_raw.kdata]
-        print(kdata_max)
+        print(f'Max kdata {kdata_max}')
         kdata_max = np.max(np.array(kdata_max))
         for ksp in mri_raw.kdata:
             ksp /= kdata_max
 
         kdata_max = [np.abs(ksp).max() for ksp in mri_raw.kdata]
-        print(kdata_max)
+        print(f'Max kdata {kdata_max}')
 
         # Compress Coils
-        if Num_Coils > 14:
-            mri_raw.kdata = pca_coil_compression(kdata=mri_raw.kdata, axis=0, target_channels=14)
-            mri_raw.Num_Coils = 14
+        if Num_Coils > 18:
+            mri_raw.kdata = pca_coil_compression(kdata=mri_raw.kdata, axis=0, target_channels=18)
+            mri_raw.Num_Coils = 18
 
         return mri_raw
 
@@ -1066,7 +1065,7 @@ def autofov(mri_raw=None, device=None,
     # Set to GPU
     if device is None:
         device = sp.Device(0)
-    print(device)
+    logger.info(f'Device = {device}')
     xp = device.xp
 
     with device:
@@ -1087,8 +1086,8 @@ def autofov(mri_raw=None, device=None,
 
         sos = xp.zeros(img_shape, dtype=xp.float32)
 
-        print(kdata[0].shape)
-        print(images.shape)
+        logger.info(f'Kdata shape = {kdata[0].shape}')
+        logger.info(f'Images shape = {images.shape}')
 
         for c in range(mri_raw.Num_Coils):
             logger.info(f'Reconstructing  coil {c}')
@@ -1167,8 +1166,9 @@ if __name__ == "__main__":
     parser.add_argument('--ksp_calib_width', type=int, default=32)
     parser.add_argument('--lamda', type=float, default=0.0001)
     parser.add_argument('--max_iter', type=int, default=200)
-    parser.add_argument('--jsense_max_iter', type=int, default=10)
+    parser.add_argument('--jsense_max_iter', type=int, default=30)
     parser.add_argument('--jsense_max_inner_iter', type=int, default=10)
+    parser.add_argument('--epochs', type=int, default=20)
 
     # Input Output
     parser.add_argument('--filename', type=str, help='filename for data (e.g. MRI_Raw.h5)')
@@ -1185,6 +1185,10 @@ if __name__ == "__main__":
         from tkinter.filedialog import askopenfilename
         Tk().withdraw()
         args.filename = askopenfilename()
+        out_folder = os.path.dirname(args.filename)
+
+    # Save to Folder
+    logger.info(f'Saving to {out_folder}')
 
     # Load Data
     logger.info(f'Load MRI from {args.filename}')
@@ -1204,11 +1208,38 @@ if __name__ == "__main__":
     mri_raw = gate_kspace(mri_raw=mri_raw, num_frames=args.frames, gate_type='time') # control num of time frames
 
     # Reconstruct the image
-    logger.info(f'Reconstruct Images ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
-    img = BatchedSenseRecon(mri_raw.kdata, mps=smaps, weights=mri_raw.dcf, coord=mri_raw.coords,
-                            device=sp.Device(args.device), lamda=args.lamda, num_enc=num_enc,
-                            coil_batch_size=1, max_iter=args.max_iter).run()
-    img = sp.to_device(img, sp.cpu_device)
+    recon_type = 'llr'
+
+    if recon_type == 'multiscale':
+        print(f'mri_raw.kdata.shape = {mri_raw.kdata.shape}')
+        print(f'mri_raw.dcf.shape = {mri_raw.dcf.shape}')
+        print(f'mri_raw.coords.shape = {mri_raw.coords.shape}')
+        comm = sp.Communicator()
+
+        lrimg = LowRankRecon(mri_raw.kdata, coord=mri_raw.coords, weights=mri_raw.dcf, mps=smaps,
+                           num_levels=3, scale_ratio=2,
+                           normalize=True, coil_batch_size=1,
+                           alpha=0.1, lamda=1e-10, init_scale=1e-5,
+                           device=sp.Device(args.device), comm=comm, seed=0,
+                           max_inner_iter=10, max_power_iter=30, max_iter=mri_raw.Num_Encodings*args.epochs,
+                           show_pbar=True).run()
+
+        img = np.zeros(lrimg.shape, dtype=mri_raw.kdata.dtype)
+        for f in range(lrimg.num_frames):
+            print(f'LR expand {f} of {lrimg.num_frames}')
+            img_t = lrimg[f]
+
+            img_t = sp.to_device(img_t, sp.cpu_device)
+            img[f, ...] = img_t
+
+        img = np.reshape(img, (args.frames, -1) + img.shape[1:] )
+    else:
+        logger.info(f'Reconstruct Images ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
+        img = BatchedSenseRecon(mri_raw.kdata, mps=smaps, weights=mri_raw.dcf, coord=mri_raw.coords,
+                                device=sp.Device(args.device), lamda=args.lamda, num_enc=num_enc,
+                                coil_batch_size=1, max_iter=args.max_iter).run()
+
+        img = sp.to_device(img, sp.cpu_device)
 
     # Copy back to make easy
     smaps = sp.to_device(smaps, sp.cpu_device)

@@ -231,7 +231,9 @@ if __name__ == "__main__":
         print(temp.shape)
         #temp = temp['real'] + 1j*temp['imag']
         #temp = np.moveaxis(temp, -1, 0)
-        #frames = int(temp.shape[0]/5)
+        #  frames = int(temp.shape[0]/5)
+        # temp = np.reshape(temp, newshape=(frames,5, temp.shape[1], temp.shape[2], temp.shape[3]))
+
         frames = int(temp.shape[0])
         num_encodes = int(temp.shape[1])
         print(f' num of frames =  {frames}')
