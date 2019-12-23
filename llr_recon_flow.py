@@ -112,15 +112,8 @@ class SingularValueThresholding(sp.prox.Prox):
         #print(f'Nshifts = {nshifts}')
 
         t = time.time()
-        #input = self._svt_thresh_batched(x=input,
-        #                    block_size=self.block_size,
-        #                    block_shape=self.block_shape,
-        #                    block_stride=self.block_stride,
-        #                    block_shift=block_shift,
-        #                    lamda=float(alpha*self.lamda))
-        #print(f'SVT took {time.time() - t}')
 
-        input = self._svt_thresh_batched_with_matrix_manipulation(x=input,
+        input = self._svt_thresh_batched(x=input,
                             block_size=self.block_size,
                             block_shape=self.block_shape,
                             block_stride=self.block_stride,
@@ -197,12 +190,11 @@ class SingularValueThresholding(sp.prox.Prox):
 
         nuclear_norm /= np.sqrt(np.prod( block_shape)) * float(lr_batchs)
 
-        #x = B.H * image
-
-        th_x = B.H * image
-        mask = (th_x == 0)
-        th_x[mask] = x[mask]
-        x = th_x
+        x = B.H * image
+        #th_x = B.H * image
+        #mask = (th_x == 0)
+        #th_x[mask] = x[mask]
+        #x = th_x
 
         return x
 
@@ -256,6 +248,64 @@ class SingularValueThresholding(sp.prox.Prox):
                         # print(image_block.shape)
                         # print('Block %d %d %s' % (bz, by, bx))
                         x[:, :, 0, kstart:kstop, jstart:jstop, istart:istop] = image_block # [tf, #encodes, 1, z, x, y]
+
+        x = np.reshape(x, old_shape) # [tf*#encodes, z, x, y]
+
+        return x
+
+    def _svt_thresh_batched_with_matrix_manipulation_2SVT(self, x, block_size, block_shape, block_stride, block_shift, lamda):
+
+        blocks = [x.shape[-3] // block_size[-3], x.shape[-2] // block_size[-2], x.shape[-1] // block_size[-1]]
+        #print(blocks)
+        num_shifts = 2
+        old_shape = x.shape # [tf*#encodes, z, y, x]
+        x = np.reshape(x, (self.frames, self.num_encodes, -1) + x.shape[1:]) # [tf, #encodes, 1, z, y, x]
+
+        # Scale lamda by block elements and num shifts
+        lamda *= np.sqrt(np.prod(block_shape))
+        lamda *= 1/num_shifts
+
+        for nt in range(num_shifts):
+            nuclear_norm = 0.0
+            for bz in range(blocks[0]):
+                for by in range(blocks[1]):
+                    for bx in range(blocks[2]):
+                        #print('Block %d %d %s' % (bz, by, bx))
+
+                        bx_shift = bx * block_size[2]
+                        by_shift = by * block_size[1]
+                        bz_shift = bz * block_size[0]
+
+                        # Get start stop
+                        istart = bx_shift
+                        jstart = by_shift
+                        kstart = bz_shift
+
+                        istop = istart + block_size[2]
+                        jstop = jstart + block_size[1]
+                        kstop = kstart + block_size[0]
+
+                        # Grab the block
+                        if istop < x.shape[-1] and jstop < x.shape[-2] and kstop < x.shape[-3]: #from new shape
+                            # Grab the block
+                            image_block = x[:, :, 0, kstart:kstop, jstart:jstop, istart:istop]
+                            old_shape_block = image_block.shape     # [tf, #encodes, 1, 16, 16, 16]
+
+                            new_shape_block = ( -1, np.prod(block_shape)) # [tf, #encodes*16*16*16]
+                            image_block = np.reshape(image_block, new_shape_block)
+
+                            # print(image_block.shape)
+                            u, s, vh = np.linalg.svd(image_block, full_matrices=False)
+                            nuclear_norm += np.mean(np.abs(s))
+                            # Threshold
+                            s = sp.soft_thresh(lamda, s)
+
+                            image_block[:, :] = np.matmul(u * s[..., None, :], vh)
+                            image_block = np.reshape(image_block, old_shape_block) # [tf, #encodes, 1, 16, 16, 16]
+                            # print(image_block.shape)
+                            # print('Block %d %d %s' % (bz, by, bx))
+                            x[:, :, 0, kstart:kstop, jstart:jstop, istart:istop] = image_block # [tf, #encodes, 1, z, x, y]
+
 
         x = np.reshape(x, old_shape) # [tf*#encodes, z, x, y]
 
@@ -1244,20 +1294,35 @@ def autofov(mri_raw=None, device=None,
     # Scale to new FOV
     target_recon_size = sp.estimate_shape(coord) * target_recon_scale
 
-    # Round to 8 for blocks and FFT
+    # Round to 16 for blocks and FFT
     target_recon_size = 16*np.ceil( target_recon_size / 16 )
 
     # Get the actual scale without rounding
     ndim = coord.shape[-1]
+
     with sp.get_device(coord):
         img_scale = [(2.0*target_recon_size[i]/(coord[..., i].max() - coord[..., i].min())) for i in range(ndim)]
 
+    # fix precision errors in x dir
+    for i in range(ndim):
+        round_img_scale = round(img_scale[i], 6)
+        if round_img_scale - img_scale[i] < 0:
+            round_img_scale += 0.000001
+        img_scale[i] = round_img_scale
+
     logger.info(f'Target recon size: {target_recon_size}')
     logger.info(f'Kspace Scale: {img_scale}')
+
     for e in range(len(mri_raw.coords)):
         mri_raw.coords[e] *= img_scale
 
     new_img_shape = sp.estimate_shape(mri_raw.coords[0])
+    print(sp.estimate_shape(mri_raw.coords[0]))
+    #print(sp.estimate_shape(mri_raw.coords[1]))
+    #print(sp.estimate_shape(mri_raw.coords[2]))
+    #print(sp.estimate_shape(mri_raw.coords[3]))
+    #print(sp.estimate_shape(mri_raw.coords[4]))
+
     logger.info('Image shape: {}'.format(new_img_shape))
 
 
@@ -1334,7 +1399,7 @@ if __name__ == "__main__":
     except OSError:
         pass
     with h5py.File(out_name, 'w') as hf:
-        hf.create_dataset("IMAGE", data=img)
-        hf.create_dataset("IMAGE_MAG", data=img_mag)
-        hf.create_dataset("IMAGE_PHASE", data=img_phase)
-        hf.create_dataset("SMAPS", data=smaps_mag)
+        hf.create_dataset("IMAGE", data=img, compression="lzf")
+        hf.create_dataset("IMAGE_MAG", data=img_mag, compression="lzf")
+        hf.create_dataset("IMAGE_PHASE", data=img_phase, compression="lzf")
+        hf.create_dataset("SMAPS", data=smaps_mag, compression="lzf")
