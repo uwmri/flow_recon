@@ -146,12 +146,12 @@ class SingularValueThresholding(sp.prox.Prox):
 
         # 4D Blocking
         B = sp.linop.ArrayToBlocks(list(x.shape), list(block_shape), list(full_block_stride))
-        #print(B)
 
         # x = np.roll( x, shift=self.blk_shift, axis=(0,1,2))
 
         # Parse into blocks
         image = B * x
+        #print('image shape B*x')
         #print(image.shape)
 
         # reshape to (Nblocks, encode, prod(block_size) )
@@ -161,6 +161,8 @@ class SingularValueThresholding(sp.prox.Prox):
         #print(f'Resize from {old_shape} to {new_shape}')
 
         image = np.reshape(image, new_shape)
+        #print('image reshape')
+        #print(image.shape)
 
         # Scale lamda by block elements
         lamda *= np.sqrt(np.prod( block_shape))
@@ -204,8 +206,6 @@ class SingularValueThresholding(sp.prox.Prox):
         #print(blocks)
 
         old_shape = x.shape # [tf*#encodes, z, y, x]
-        x = np.reshape(x, (self.frames, self.num_encodes, -1) + x.shape[1:]) # [tf, #encodes, 1, z, y, x]
-
         # Scale lamda by block elements
         lamda *= np.sqrt(np.prod(block_shape))
         nuclear_norm = 0.0
@@ -229,27 +229,26 @@ class SingularValueThresholding(sp.prox.Prox):
                     kstop = kstart + block_size[0]
 
                     # Grab the block
-                    if istop < x.shape[-1] and jstop < x.shape[-2] and kstop < x.shape[-3]: #from new shape
-                        # Grab the block
-                        image_block = x[:, :, 0, kstart:kstop, jstart:jstop, istart:istop]
-                        old_shape_block = image_block.shape     # [tf, #encodes, 1, 16, 16, 16]
+                    # Grab the block
+                    image_block = x[:, kstart:kstop, jstart:jstop, istart:istop]
+                    old_shape_block = image_block.shape     # [tf*#encodes, 16, 16, 16]
 
-                        new_shape_block = ( -1, np.prod(block_shape)) # [tf, #encodes*16*16*16]
-                        image_block = np.reshape(image_block, new_shape_block)
+                    new_shape_block = ( -1, np.prod(block_shape)) # [tf, #encodes*16*16*16]
+                    image_block = np.reshape(image_block, new_shape_block)
+                    image_block = np.moveaxis(image_block, 0, -1)  # [#encodes*16*16*16, tf]
 
-                        # print(image_block.shape)
-                        u, s, vh = np.linalg.svd(image_block, full_matrices=False)
-                        nuclear_norm += np.mean(np.abs(s))
-                        # Threshold
-                        s = sp.soft_thresh(lamda, s)
+                    # print(image_block.shape)
+                    u, s, vh = np.linalg.svd(image_block, full_matrices=False)
+                    nuclear_norm += np.mean(np.abs(s))
+                    # Threshold
+                    s = sp.soft_thresh(lamda, s)
 
-                        image_block[:, :] = np.matmul(u * s[..., None, :], vh)
-                        image_block = np.reshape(image_block, old_shape_block) # [tf, #encodes, 1, 16, 16, 16]
-                        # print(image_block.shape)
-                        # print('Block %d %d %s' % (bz, by, bx))
-                        x[:, :, 0, kstart:kstop, jstart:jstop, istart:istop] = image_block # [tf, #encodes, 1, z, x, y]
-
-        x = np.reshape(x, old_shape) # [tf*#encodes, z, x, y]
+                    image_block[:, :] = np.matmul(u * s[..., None, :], vh)
+                    image_block = np.moveaxis(image_block, -1, 0) #[tf, encodes*16*16*16]
+                    image_block = np.reshape(image_block, old_shape_block) # [tf*#encodes, 16, 16, 16]
+                    # print(image_block.shape)
+                    # print('Block %d %d %s' % (bz, by, bx))
+                    x[:, kstart:kstop, jstart:jstop, istart:istop] = image_block # [tf*#encodes, z, x, y]
 
         return x
 
