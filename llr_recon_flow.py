@@ -1216,7 +1216,7 @@ def load_MRI_raw(h5_filename=None):
         return mri_raw
 
 def autofov(mri_raw=None, device=None,
-            thresh=0.05, scale=1):
+            thresh=0.05, scale=1, oversample=2.0):
     logger = logging.getLogger('autofov')
 
     # Set to GPU
@@ -1232,7 +1232,7 @@ def autofov(mri_raw=None, device=None,
 
         # Low resolution filter
         res = 64
-        lpf = np.sum(coord ** 2, axis=-1)
+        lpf = np.sum(coord ** oversample, axis=-1)
         lpf = np.exp(-lpf / (2.0 * res * res))
 
         # Get reconstructed size
@@ -1332,7 +1332,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--device', type=int, default=0)
     parser.add_argument('--thresh', type=float, default=0.1)
-    parser.add_argument('--scale', type=float, default=1.1)
+    parser.add_argument('--scale', type=float, default=1.0)
     parser.add_argument('--frames',type=int, default=50, help='Number of time frames')
     parser.add_argument('--mps_ker_width', type=int, default=16)
     parser.add_argument('--ksp_calib_width', type=int, default=32)

@@ -8,11 +8,13 @@ from tqdm import tqdm
 import os
 import h5py
 
+'''
 try:
     import mkl
     mkl.set_num_threads(1)
 except:
     pass
+'''
 
 class ShuffledNumbers(object):
     """Produces shuffled numbers between given range.
