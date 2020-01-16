@@ -328,12 +328,12 @@ class DiagOnDevice(sp.linop.Diag):
 
     """
 
-    def __init__(self, linops, axis=None, run_device=sp.cpu_device,in_device=sp.cpu_device,out_device=sp.cpu_device):
+    def __init__(self, linops, iaxis=None, oaxis=None, run_device=sp.cpu_device,in_device=sp.cpu_device,out_device=sp.cpu_device):
         self.run_device = run_device
         self.in_device = in_device
         self.out_device = out_device
 
-        super().__init__(linops, axis=axis)
+        super().__init__(linops, iaxis=iaxis, oaxis=oaxis)
 
     def _apply(self, input):
 
@@ -356,15 +356,10 @@ class DiagOnDevice(sp.linop.Diag):
                 oend = self.oindices[n]
 
             if self.axis is None:
-                op_input =input[istart:iend].reshape(linop.ishape)
+                op_input = input[istart:iend].reshape(linop.ishape)
                 op_input = sp.to_device(op_input, self.run_device)
-                output[ostart:oend] = sp.to_device(linop(op_input).ravel(), self.out_device)
+                output_n = sp.to_device(linop(op_input).ravel(), self.out_device)
             else:
-                ndim = len(linop.oshape)
-                axis = self.axis % ndim
-                oslc = tuple([slice(None)] * axis + [slice(ostart, oend)] +
-                             [slice(None)] * (ndim - axis - 1))
-
                 ndim = len(linop.ishape)
                 axis = self.axis % ndim
                 islc = tuple([slice(None)] * axis + [slice(istart, iend)] +
@@ -372,12 +367,23 @@ class DiagOnDevice(sp.linop.Diag):
 
                 op_input = input[islc]
                 op_input = sp.to_device(op_input, self.run_device)
-                output[oslc] = sp.to_device(linop(op_input), self.out_device)
+                output_n  = sp.to_device(linop(op_input), self.out_device)
+
+            if self.oaxis is None:
+                output[ostart:oend] = output_n
+            else:
+                ndim = len(linop.oshape)
+                axis = self.oaxis % ndim
+                oslc = tuple([slice(None)] * axis + [slice(ostart, oend)] +
+                             [slice(None)] * (ndim - axis - 1))
+
+                output[oslc] = output_n
 
         return output
 
     def _adjoint_linop(self):
-        return DiagOnDevice([op.H for op in self.linops], axis=self.axis, run_device=self.run_device, in_device=self.out_device, out_device=self.in_device)
+        return DiagOnDevice([op.H for op in self.linops], oaxis=self.iaxis, iaxis=self.oaxis,
+                            run_device=self.run_device, in_device=self.out_device, out_device=self.in_device)
 
 class SubtractArray(sp.linop.Linop):
     """Subtract array operator, subtracts a given array allowing composed operator
@@ -445,7 +451,11 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
         self.frames = y.shape[0]//self.num_encodes
         self.num_images = self.frames*self.num_encodes
         self.cpu_device = sp.cpu_device
-        self.gpu_device = sp.Device(0)
+        if device is None:
+            self.gpu_device = sp.Device(0)
+        else:
+            self.gpu_device = device
+
         self.max_power_iter = max_power_iter
         self.show_pbar = True
         self.log_images = True
@@ -467,9 +477,9 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
                 pass
 
         # put coord and mps to gpu
-        mps = sp.to_device(mps, sp.Device(0))
-        coord = sp.to_device(coord, sp.Device(0))
-        weights = sp.to_device(weights,sp.Device(0))
+        mps = sp.to_device(mps, self.gpu_device)
+        coord = sp.to_device(coord, self.gpu_device)
+        weights = sp.to_device(weights, self.gpu_device)
 
         # Get max eigen value for each encode
         for e in range(self.num_images):
@@ -556,13 +566,15 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
         grad_ops = [ ops_list[e].H * sub_list[e] *ops_list[e] for e in range(len(ops_list))]
 
         # Get AHA opts list
-        A = DiagOnDevice(grad_ops, axis=0, run_device=sp.Device(0), in_device=sp.cpu_device,
+        A = DiagOnDevice(grad_ops, oaxis=0, iaxis=0, run_device=self.gpu_device, in_device=sp.cpu_device,
                          out_device=sp.cpu_device)
 
         if composite_init == False:
             x = self.cpu_device.xp.zeros(A.ishape, dtype=y.dtype)
 
-        proxg = SingularValueThresholding(A.ishape, frames=self.frames, num_encodes=self.num_encodes, lamda=lamda, block_size=16, block_stride=16) # block size and stride should be equal, now testing different stride for block shifting problem
+        # block size and stride should be equal, now testing different stride for block shifting problem
+        proxg = SingularValueThresholding(A.ishape, frames=self.frames, num_encodes=self.num_encodes,
+                                          lamda=lamda, block_size=16, block_stride=16)
 
         if comm is not None:
             show_pbar = show_pbar and comm.rank == 0
@@ -695,11 +707,13 @@ def pca_coil_compression(kdata=None, axis=0, target_channels=None):
 
     return kdata
 
-def get_smaps(mri_rawdata=None, args=None, smap_type='jsense'):
+def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None):
     logger = logging.getLogger('Get sensitivity maps')
 
     # Set to GPU
-    device = sp.Device(0)
+    if device is None:
+        device = sp.Device(0)
+
     xp = device.xp
 
     with device:
@@ -863,10 +877,11 @@ def sos_recon(mri_rawdata=None, device=None):
     return img
 
 
-def pils_recon(mri_rawdata=None, smaps=None):
+def pils_recon(mri_rawdata=None, smaps=None, device=None):
 
     # Set to GPU
-    device = sp.Device(0)
+    if device is None:
+        device = sp.Device(0)
 
     # Reference for shortcut
     coord = mri_rawdata.coords
@@ -879,21 +894,6 @@ def pils_recon(mri_rawdata=None, smaps=None):
         img = pils.run()
 
     img = sp.to_device(img, sp.cpu_device)
-
-    return (img)
-
-
-def llr_recon(mri_rawdata=None, smaps=None, lamda=0.0005):
-
-    logger = logging.getLogger('Recon images')
-    mempool = cupy.get_default_memory_pool()
-
-    # Set to GPU
-    device = sp.Device(0)
-
-    logger.info(f'Memory used = {mempool.used_bytes()} of {mempool.total_bytes()}')
-
-
 
     return (img)
 

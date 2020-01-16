@@ -103,11 +103,11 @@ if __name__ == '__main__':
 
         # Reconstruct an low res image and get the field of view
         logger.info(f'Estimating FOV MRI ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
-        llr_recon_flow.autofov(mri_raw=mri_raw, thresh=args.thresh, scale=args.scale)
+        llr_recon_flow.autofov(mri_raw=mri_raw, thresh=args.thresh, scale=args.scale, device=sp.Device(args.device))
 
         # Get sensitivity maps
         logger.info(f'Reconstruct sensitivity maps ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
-        smaps = llr_recon_flow.get_smaps(mri_rawdata=mri_raw, args=args)
+        smaps = llr_recon_flow.get_smaps(mri_rawdata=mri_raw, args=args, device=sp.Device(args.device))
 
         # Gate k-space
         mri_raw = llr_recon_flow.gate_kspace(mri_raw=mri_raw, num_frames=args.frames, gate_type='time') # control num of time frames
