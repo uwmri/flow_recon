@@ -355,13 +355,13 @@ class DiagOnDevice(sp.linop.Diag):
                 iend = self.iindices[n]
                 oend = self.oindices[n]
 
-            if self.axis is None:
+            if self.iaxis is None:
                 op_input = input[istart:iend].reshape(linop.ishape)
                 op_input = sp.to_device(op_input, self.run_device)
                 output_n = sp.to_device(linop(op_input).ravel(), self.out_device)
             else:
                 ndim = len(linop.ishape)
-                axis = self.axis % ndim
+                axis = self.iaxis % ndim
                 islc = tuple([slice(None)] * axis + [slice(istart, iend)] +
                              [slice(None)] * (ndim - axis - 1))
 
