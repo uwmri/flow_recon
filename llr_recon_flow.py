@@ -309,82 +309,6 @@ class SingularValueThresholding(sp.prox.Prox):
 
         return x
 
-class DiagOnDevice(sp.linop.Diag):
-    """Diagonally stack linear operators.
-
-    Create a Linop that splits input, applies linops independently,
-    and concatenates outputs. This is a special case in which the devices to run are specified by the operator
-    rather than the input.
-    In matrix form, given matrices {A1, ..., An}, returns diag([A1, ..., An]).
-
-    Args:
-        linops (list of Linops): list of linops with the same input and
-            output shape.
-        axis (int or None): If None, inputs/outputs are vectorized
-            and concatenated.
-        run_device: an sp.Device to run the operation on
-        in_device: an sp.Device specifiying the device location of the input
-        out_device: an sp.Devie specifying the device the output should be stored
-
-    """
-
-    def __init__(self, linops, iaxis=None, oaxis=None, run_device=sp.cpu_device,in_device=sp.cpu_device,out_device=sp.cpu_device):
-        self.run_device = run_device
-        self.in_device = in_device
-        self.out_device = out_device
-
-        super().__init__(linops, iaxis=iaxis, oaxis=oaxis)
-
-    def _apply(self, input):
-
-        #Allocate space for output
-        output = self.out_device.xp.empty(self.oshape, dtype=input.dtype)
-
-        for n, linop in enumerate(self.linops):
-            if n == 0:
-                istart = 0
-                ostart = 0
-            else:
-                istart = self.iindices[n - 1]
-                ostart = self.oindices[n - 1]
-
-            if n == self.nops - 1:
-                iend = None
-                oend = None
-            else:
-                iend = self.iindices[n]
-                oend = self.oindices[n]
-
-            if self.iaxis is None:
-                op_input = input[istart:iend].reshape(linop.ishape)
-                op_input = sp.to_device(op_input, self.run_device)
-                output_n = sp.to_device(linop(op_input).ravel(), self.out_device)
-            else:
-                ndim = len(linop.ishape)
-                axis = self.iaxis % ndim
-                islc = tuple([slice(None)] * axis + [slice(istart, iend)] +
-                             [slice(None)] * (ndim - axis - 1))
-
-                op_input = input[islc]
-                op_input = sp.to_device(op_input, self.run_device)
-                output_n  = sp.to_device(linop(op_input), self.out_device)
-
-            if self.oaxis is None:
-                output[ostart:oend] = output_n
-            else:
-                ndim = len(linop.oshape)
-                axis = self.oaxis % ndim
-                oslc = tuple([slice(None)] * axis + [slice(ostart, oend)] +
-                             [slice(None)] * (ndim - axis - 1))
-
-                output[oslc] = output_n
-
-        return output
-
-    def _adjoint_linop(self):
-        return DiagOnDevice([op.H for op in self.linops], oaxis=self.iaxis, iaxis=self.oaxis,
-                            run_device=self.run_device, in_device=self.out_device, out_device=self.in_device)
-
 class SubtractArray(sp.linop.Linop):
     """Subtract array operator, subtracts a given array allowing composed operator
 
@@ -443,7 +367,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
 
     def __init__(self, y, mps, lamda=0, weights=None, num_enc=0,
                  coord=None, device=sp.cpu_device, coil_batch_size=None,
-                 comm=None, show_pbar=True, max_power_iter=40, fast_maxeig=False,
+                 comm=None, show_pbar=True, max_power_iter=40, fast_maxeig=True,
                  composite_init=True, **kwargs):
 
         # Temp
@@ -563,11 +487,14 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
                           range(self.num_images)]
 
         sub_list = [ SubtractArray(y[e,...]) for e in range(self.num_images)]
-        grad_ops = [ ops_list[e].H * sub_list[e] *ops_list[e] for e in range(len(ops_list))]
+        #grad_ops_nodev = [ ops_list[e].H * sub_list[e] *ops_list[e] for e in range(len(ops_list))]
+        grad_ops_nodev = [ ops_list[e].H * sub_list[e] *ops_list[e] for e in range(len(ops_list))]
+
+        # wrap to run GPU
+        grad_ops = [sp.linop.ToDevice(op.oshape, self.cpu_device, self.gpu_device)*op*sp.linop.ToDevice(op.ishape,self.gpu_device,self.cpu_device) for op in grad_ops_nodev]
 
         # Get AHA opts list
-        A = DiagOnDevice(grad_ops, oaxis=0, iaxis=0, run_device=self.gpu_device, in_device=sp.cpu_device,
-                         out_device=sp.cpu_device)
+        A = sp.linop.Diag(grad_ops, oaxis=0, iaxis=0)
 
         if composite_init == False:
             x = self.cpu_device.xp.zeros(A.ishape, dtype=y.dtype)
