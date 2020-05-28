@@ -112,13 +112,24 @@ class SingularValueThresholding(sp.prox.Prox):
 
         t = time.time()
 
-        input = self._svt_thresh_batched(x=input,
+        input = self._svt_thresh_batched_stack_3D_linops(x=input,
                             block_size=self.block_size,
                             block_shape=self.block_shape,
                             block_stride=self.block_stride,
                             block_shift=block_shift,
-                            lamda=float(alpha*self.lamda))
+                            lamda=float(alpha*self.lamda),
+                            frames=self.frames,
+                            num_encodes=self.num_encodes)
         print(f'SVT took {time.time() - t}')
+
+
+        #input = self._svt_thresh_batched(x=input,
+        #                    block_size=self.block_size,
+        #                    block_shape=self.block_shape,
+        #                    block_stride=self.block_stride,
+        #                    block_shift=block_shift,
+        #                    lamda=float(alpha*self.lamda))
+        #print(f'SVT took {time.time() - t}')
 
 
         # Return on same device
@@ -134,14 +145,13 @@ class SingularValueThresholding(sp.prox.Prox):
         #print(f'Stride = {block_stride}')
         #print(f'Block size = {block_size}')
         #print(f'Block shape = {block_shape}')
-
         full_block_shift = list([0]) + block_shift
-        #print(full_block_shift)
+        #print('full block shift', full_block_shift)
         full_block_stride = list([block_shape[0]] + block_stride)
-        #print(full_block_stride)
-        #print(block_shape)
-        #print(x.shape)
-        #print(f'Full stride = {full_block_stride}')
+        #print('full block stride', full_block_stride)
+        #print('block shape', block_shape)
+        #print('x' , x.shape)
+        print(f'Full stride = {full_block_stride}')
 
         # 4D Blocking
         B = sp.linop.ArrayToBlocks(list(x.shape), list(block_shape), list(full_block_stride))
@@ -150,6 +160,7 @@ class SingularValueThresholding(sp.prox.Prox):
 
         # Parse into blocks
         image = B * x
+        
         #print('image shape B*x')
         #print(image.shape)
 
@@ -192,6 +203,77 @@ class SingularValueThresholding(sp.prox.Prox):
         nuclear_norm /= np.sqrt(np.prod( block_shape)) * float(lr_batchs)
 
         x = B.H * image
+        #th_x = B.H * image
+        #mask = (th_x == 0)
+        #th_x[mask] = x[mask]
+        #x = th_x
+
+        return x
+
+    def _svt_thresh_batched_stack_3D_linops(self, x, block_size, block_shape, block_stride, block_shift, lamda, frames, num_encodes):
+
+        #print('num of frames and encodes', frames, num_encodes)
+        #print('shape x',x.shape)
+
+        Block_op = sp.linop.ArrayToBlocks(list(x.shape[-3:]), list(block_size), list(block_stride))  # z,y,x
+        #print(Block_op)
+        Block_reshape = sp.linop.Reshape(oshape=Block_op.oshape + [1], ishape=Block_op.oshape)
+        #print(Block_reshape)
+        x_reshape = sp.linop.Reshape(x.shape[-3:], (1,) + x.shape[-3:])
+        #print(x_reshape)
+        BB = sp.linop.Diag([Block_reshape * Block_op * x_reshape for i in range(x.shape[0])], oaxis=6, iaxis=0)
+        #print(BB)
+        image = BB * x
+        #print('old image shape', image.shape)
+        image_old_block_shape = image.shape
+
+        image_new_block_shape = tuple([frames]) + tuple(image.shape[:3]) + tuple([num_encodes]) + tuple(image.shape[3:6])
+
+        image = np.reshape(image, image_new_block_shape)
+        #print('new image shape', image.shape)
+
+        # reshape to (Nblocks, encode, prod(block_size) )
+        old_shape = image.shape
+        image = np.moveaxis(image,0,-1) # First axis is time
+        new_shape = (-1, np.prod(block_shape),image.shape[-1])
+        #print(f'Resize from {old_shape} to {new_shape}')
+
+        image = np.reshape(image, new_shape)
+        #print('image reshape')
+        #print(image.shape)
+
+        # Scale lamda by block elements
+        lamda *= np.sqrt(np.prod( block_shape))
+        nuclear_norm = 0.0
+        #print(image.shape)
+        lr_batch_size = 256
+        lr_batchs = (image.shape[0] + lr_batch_size - 1) // lr_batch_size
+        for batch in range(lr_batchs):
+            start = batch * lr_batch_size
+            stop = min((batch + 1) * lr_batch_size, image.shape[0])
+
+            image_t = image[start:stop, :, :]
+            #print(image_t.shape)
+
+            u, s, vh = np.linalg.svd(image_t, full_matrices=False)
+
+            nuclear_norm += np.mean(np.abs(s))
+
+            # Threshold
+            s = sp.soft_thresh(lamda, s)
+
+            image[start:stop, :, :] = np.matmul(u * s[..., None, :], vh)
+
+        # Back to GPU
+        image = np.moveaxis(image,-1,0)
+        image = np.reshape(image, newshape=old_shape)
+
+        nuclear_norm /= np.sqrt(np.prod( block_shape)) * float(lr_batchs)
+
+        image = np.reshape(image, image_old_block_shape)
+
+        x = BB.H * image
+        #print('x shape',x.shape)
         #th_x = B.H * image
         #mask = (th_x == 0)
         #th_x[mask] = x[mask]
@@ -1173,6 +1255,8 @@ def autofov(mri_raw=None, device=None,
         logger.info(f'Kdata shape = {kdata[0].shape}')
         logger.info(f'Images shape = {images.shape}')
 
+        coord_gpu = sp.to_device(coord, device=device) # coord needs to be push to device in new sigpy version
+
         for c in range(mri_raw.Num_Coils):
             logger.info(f'Reconstructing  coil {c}')
             ksp_t = np.copy(kdata[0][c, ...])
@@ -1180,7 +1264,7 @@ def autofov(mri_raw=None, device=None,
             ksp_t *= np.squeeze(lpf)
             ksp_t = sp.to_device(ksp_t, device=device)
 
-            sos += xp.square(xp.abs(sp.nufft_adjoint(ksp_t, coord, img_shape)))
+            sos += xp.square(xp.abs(sp.nufft_adjoint(ksp_t, coord_gpu, img_shape)))
 
         # Multiply by SOS of low resolution maps
         sos = xp.sqrt(sos)
