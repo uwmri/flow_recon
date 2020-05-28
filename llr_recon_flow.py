@@ -449,7 +449,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
 
     def __init__(self, y, mps, lamda=0, weights=None, num_enc=0,
                  coord=None, device=sp.cpu_device, coil_batch_size=None,
-                 comm=None, show_pbar=True, max_power_iter=40, fast_maxeig=True,
+                 comm=None, show_pbar=True, max_power_iter=40, fast_maxeig=False,
                  composite_init=True, **kwargs):
 
         # Temp
