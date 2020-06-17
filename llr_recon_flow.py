@@ -13,7 +13,7 @@ def set_mkl_threads():
 
     try:
         import mkl
-        mkl.set_num_threads(8)
+        mkl.set_num_threads(16)
         return 0
     except:
         pass
@@ -84,14 +84,15 @@ class SingularValueThresholding(sp.prox.Prox):
         # Input is 3D (Nt*Nz x Ny x Nx)
         #print(input.shape)
         input = initial_device.xp.reshape(input, self.new_shape)
-        #print(input.shape)
+        #print('input shape', input.shape)  # frames*encodes, z, y, x
 
 
         # Block shifts are always negative
         block_shift = [-np.random.randint(0, self.block_stride[e]) for e in range(3)]
+        #print(block_shift)
 
         block_ishift = [ -x for x in block_shift]
-        #print(block_shift)
+        #print(block_ishift)
         input = initial_device.xp.roll(input,block_shift,axis=(-3,-2,-1))
 
         # Put on CPU
@@ -131,6 +132,14 @@ class SingularValueThresholding(sp.prox.Prox):
         #                    lamda=float(alpha*self.lamda))
         #print(f'SVT took {time.time() - t}')
 
+
+        #input = self._svt_thresh_batched_with_matrix_manipulation(x=input,
+        #                    block_size=self.block_size,
+        #                    block_shape=self.block_shape,
+        #                    block_stride=self.block_stride,
+        #                    block_shift=block_shift,
+        #                   lamda=float(alpha*self.lamda))
+        #print(f'SVT took {time.time() - t}')
 
         # Return on same device
         input = sp.to_device(input, initial_device)
@@ -225,11 +234,18 @@ class SingularValueThresholding(sp.prox.Prox):
         #print(BB)
         image = BB * x
         #print('old image shape', image.shape)
+
+        image = np.transpose(np.expand_dims(image, axis=7), (6, 7, 0, 1, 2, 3, 4, 5))
+        #print('image shape after transpose', image.shape)
         image_old_block_shape = image.shape
 
-        image_new_block_shape = tuple([frames]) + tuple(image.shape[:3]) + tuple([num_encodes]) + tuple(image.shape[3:6])
-
+        image_new_block_shape = tuple([frames]) + tuple([num_encodes]) + tuple(image.shape[2:])
         image = np.reshape(image, image_new_block_shape)
+        #print('image shape after new reshape', image.shape)
+
+        image = np.transpose(image, (0, 2, 3, 4, 1, 5, 6, 7))
+        #print('image shape after transpose', image.shape)
+
         #print('new image shape', image.shape)
 
         # reshape to (Nblocks, encode, prod(block_size) )
@@ -267,21 +283,29 @@ class SingularValueThresholding(sp.prox.Prox):
         # Back to GPU
         image = np.moveaxis(image,-1,0)
         image = np.reshape(image, newshape=old_shape)
+        #print('image shape after svt', image.shape)
 
         nuclear_norm /= np.sqrt(np.prod( block_shape)) * float(lr_batchs)
 
+        image = np.transpose(image, (0, 4, 1, 2, 3, 5, 6, 7))
+        #print('image shape after transpose', image.shape)
+
         image = np.reshape(image, image_old_block_shape)
+        #print('image shape after reshape', image.shape)
+        image = np.transpose(image, (1, 2, 3, 4, 5, 6, 7, 0))
+        #print('image shape after transpose', image.shape)
+
+        image = np.squeeze(image, axis=0)
+        #print('image shape after squeeze', image.shape)
 
         x = BB.H * image
-        #print('x shape',x.shape)
-        #th_x = B.H * image
-        #mask = (th_x == 0)
-        #th_x[mask] = x[mask]
-        #x = th_x
 
         return x
 
     def _svt_thresh_batched_with_matrix_manipulation(self, x, block_size, block_shape, block_stride, block_shift, lamda):
+
+        # print('num of frames and encodes', frames, num_encodes)
+        print('shape x', x.shape)
 
         blocks = [x.shape[-3] // block_size[-3], x.shape[-2] // block_size[-2], x.shape[-1] // block_size[-1]]
         #print(blocks)
@@ -447,7 +471,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
 
     """
 
-    def __init__(self, y, mps, lamda=0, weights=None, num_enc=0,
+    def __init__(self, y, mps, lamda=0, weights=None, num_enc=0, gate_type='time',
                  coord=None, device=sp.cpu_device, coil_batch_size=None,
                  comm=None, show_pbar=True, max_power_iter=40, fast_maxeig=False,
                  composite_init=True, **kwargs):
@@ -582,7 +606,12 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
             x = self.cpu_device.xp.zeros(A.ishape, dtype=y.dtype)
 
         # block size and stride should be equal, now testing different stride for block shifting problem
-        proxg = SingularValueThresholding(A.ishape, frames=self.frames, num_encodes=self.num_encodes,
+        # cardiac recon expected to be lower rank than temporal recon, thus smaller block size (as in cpp wrapper)
+        if gate_type == 'ecg':
+            proxg = SingularValueThresholding(A.ishape, frames=self.frames, num_encodes=self.num_encodes,
+                                              lamda=lamda, block_size=4, block_stride=4)
+        else:
+            proxg = SingularValueThresholding(A.ishape, frames=self.frames, num_encodes=self.num_encodes,
                                           lamda=lamda, block_size=16, block_stride=16)
 
         if comm is not None:
@@ -1218,9 +1247,14 @@ def load_MRI_raw(h5_filename=None):
         print(f'Max kdata {kdata_max}')
 
         # Compress Coils
-        if Num_Coils > 18:
-            mri_raw.kdata = pca_coil_compression(kdata=mri_raw.kdata, axis=0, target_channels=18)
-            mri_raw.Num_Coils = 18
+
+        if 18 < Num_Coils <= 32:
+            mri_raw.kdata = pca_coil_compression(kdata=mri_raw.kdata, axis=0, target_channels=20)
+            mri_raw.Num_Coils = 20
+
+        if Num_Coils > 32:
+            mri_raw.kdata = pca_coil_compression(kdata=mri_raw.kdata, axis=0, target_channels=28)
+            mri_raw.Num_Coils = 28
 
         return mri_raw
 
@@ -1352,6 +1386,7 @@ if __name__ == "__main__":
     parser.add_argument('--jsense_max_iter', type=int, default=30)
     parser.add_argument('--jsense_max_inner_iter', type=int, default=10)
     parser.add_argument('--epochs', type=int, default=20)
+    parser.add_argument('--gate_type', type=str, default='time')  # recon type
 
     # Input Output
     parser.add_argument('--filename', type=str, help='filename for data (e.g. MRI_Raw.h5)')
@@ -1388,7 +1423,7 @@ if __name__ == "__main__":
     smaps = get_smaps(mri_rawdata=mri_raw, args=args)
 
     # Gate k-space
-    mri_raw = gate_kspace(mri_raw=mri_raw, num_frames=args.frames, gate_type='time') # control num of time frames
+    mri_raw = gate_kspace(mri_raw=mri_raw, num_frames=args.frames, gate_type=args.gate_type) # control num of time frames
 
     # Reconstruct the image
     recon_type = 'llr'
@@ -1420,7 +1455,7 @@ if __name__ == "__main__":
         logger.info(f'Reconstruct Images ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
         img = BatchedSenseRecon(mri_raw.kdata, mps=smaps, weights=mri_raw.dcf, coord=mri_raw.coords,
                                 device=sp.Device(args.device), lamda=args.lamda, num_enc=num_enc,
-                                coil_batch_size=1, max_iter=args.max_iter).run()
+                                coil_batch_size=1, max_iter=args.max_iter, gate_type=args.gate_type).run()
 
         img = sp.to_device(img, sp.cpu_device)
 
