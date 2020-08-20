@@ -11,6 +11,7 @@ class MRI_Raw:
     resp = None
     dcf = None
     kdata = None
+    frame = None
     target_image_size = [256, 256, 64]
 
 
