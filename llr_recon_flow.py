@@ -7,13 +7,13 @@ def set_mkl_threads():
     os.environ["MKL_DYNAMIC"] = "FALSE"
     os.environ["OMP_NUM_THREADS"] = "16"  # export OMP_NUM_THREADS=4
     os.environ["OPENBLAS_NUM_THREADS"] = "16"  # export OPENBLAS_NUM_THREADS=4
-    os.environ["MKL_NUM_THREADS"] = "16"  # export MKL_NUM_THREADS=6
+    os.environ["MKL_NUM_THREADS"] = "1"  # export MKL_NUM_THREADS=6
     os.environ["VECLIB_MAXIMUM_THREADS"] = "16"  # export VECLIB_MAXIMUM_THREADS=4
     os.environ["NUMEXPR_NUM_THREADS"] = "16"  # export NUMEXPR_NUM_THREADS=6
 
     try:
         import mkl
-        mkl.set_num_threads(8)
+        mkl.set_num_threads(1)
         return 0
     except:
         pass
@@ -26,7 +26,7 @@ def set_mkl_threads():
         except:
             pass
 
-set_mkl_threads()
+#set_mkl_threads()
 import mkl
 print(f'MKL Threads = {mkl.get_max_threads()}')
 
@@ -42,615 +42,13 @@ import time
 import math
 import scipy.ndimage as ndimage
 
-from low_rank_recon import *
+from multi_scale_low_rank_recon import *
 from mri_raw import *
+from svt import *
 import numba as nb
 import torch as torch
 
 iter_counter = 0
-
-@nb.jit(nopython=True, cache=True, parallel=True)  # pragma: no cover
-def svt_inplace(input, lamba, blk_size, blk_strides, blk_shifts):
-
-    ndim = 3
-    bz = input.shape[1] // blk_strides[0]
-    by = input.shape[2] // blk_strides[1]
-    bx = input.shape[3] // blk_strides[2]
-
-    Sz = input.shape[1]
-    Sy = input.shape[2]
-    Sx = input.shape[3]
-
-    bmat_shape = (input.shape[0], blk_size[0] * blk_size[1] * blk_size[2] )
-    for nz in nb.prange(bz):
-        sz = nz * blk_strides[0] + blk_shifts[0]
-        ez = sz + blk_size[0]
-
-        for ny in range(by):
-            sy = ny * blk_strides[1] + blk_shifts[1]
-            ey = sy + blk_size[1]
-
-            for nx in range(bx):
-
-                sx = nx*blk_strides[2] + blk_shifts[2]
-                ex = sx + blk_size[2]
-
-                block = np.zeros( bmat_shape, input.dtype)
-
-                # Grab a block
-                for t in range(input.shape[0]):
-                    count = 0
-                    for k in range(sz,ez):
-                        for j in range(sy, ey):
-                            for i in range(sx, ex):
-                                block[t,count] = input[t, k%Sz, j%Sy, i%Sx]
-                                count += 1
-
-                #block = input[:, sz:ez, sy:ey, sx:ex].copy()
-                #old_shape = block.shape
-                #block = np.reshape(block, (block.shape[0], block.shape[1]*block.shape[2]*block.shape[3]) )
-
-                # Svd
-                u,s,vh = np.linalg.svd(block, full_matrices=False)
-
-                for k in range(u.shape[1]):
-                    s[k] = max( s[k] - lamba, 0)
-                    for i in range(u.shape[0]):
-                        u[i,k] *= s[k]
-
-                block = np.dot(u, vh)
-
-                # Put back
-                for t in range(input.shape[0]):
-                    count = 0
-                    for k in range(sz,ez):
-                        for j in range(sy, ey):
-                            for i in range(sx, ex):
-                                input[t, k%Sz, j%Sy, i%Sx] = block[t,count]
-                                count += 1
-
-                #input[:, sz:ez, sy:ey, sx:ex] = np.reshape(block, old_shape)
-
-    return input
-
-def svt_torch_batch(x, lamda, blk_size, blk_stride, num_enc, num_frames, blk_shape):
-
-    # 4D Blocking
-    B = sp.linop.ArrayToBlocks(list(x.shape), list(blk_size), list(blk_stride))
-
-    # Parse into blocks
-    image = B * x
-
-    #print('image shape B*x to get the number of blocks')
-    #print(image.shape)
-
-    #if blk_size[0] >= 2:
-    #this probably brakes the image, but lets try to only use 1 reshape
-    # reshape to (Nblocks, encode*blocks_size, frames)
-
-    #image = np.moveaxis(image, 0, -1)
-    #print(image.shape)
-
-    #old_shape = image.shape
-
-    #new_shape = (-1,  np.prod(blk_size), image.shape[-1])
-    #new_shape = (-1,  np.prod(blk_shape), image.shape[-1]//num_enc)
-
-    #image = torch.reshape(torch.from_numpy(image), new_shape)
-    #print('image reshape', image.shape)
-    #image = image.numpy()
-
-    image = np.moveaxis(image, 0, 3)
-    #print(image.shape)
-
-    old_shape = image.shape
-
-    new_shape = (-1, image.shape[3]//num_enc, num_enc*np.prod(blk_size))
-    image = torch.reshape(torch.from_numpy(image), new_shape)
-    #print('image reshape', image.shape)
-    image = image.numpy()
-
-    image = np.moveaxis(image, 1, -1)
-    #print(image.shape)
-
-    #else:
-    # reshape to (Nblocks, encode*frames, prod(block_size))
-    #image = np.moveaxis(image, 0, -4)
-    #print(image.shape)
-
-    #old_shape = image.shape
-
-    #new_shape = (-1, image.shape[-4], np.prod(blk_size))
-    #image = torch.reshape(torch.from_numpy(image), new_shape)
-    #print('image reshape', image.shape)
-    #image = image.numpy()
-
-    # Scale lamda by block elements
-    lamda *= np.sqrt(np.prod(blk_shape)) # is this dependent on the array shape of the svd?
-    nuclear_norm = 0.0
-    # do the batched SVD, want shape of (batch, much larger ,much smaller) typically is fastest
-    lr_batch_size = 64
-    lr_batchs = (image.shape[0] + lr_batch_size - 1) // lr_batch_size
-    for batch in range(lr_batchs):
-        start = batch * lr_batch_size
-        stop = min((batch + 1) * lr_batch_size, image.shape[0])
-
-        image_t = image[start:stop, :, :]
-
-        u, s, v = torch.svd(torch.from_numpy(image_t))
-
-        # pytorch does not support complex tensor multiplication
-
-        u = u.numpy()
-        s = s.numpy()
-        v = v.transpose(-2, -1)
-        v = v.numpy()
-
-        s = sp.soft_thresh(lamda, s)
-
-        image[start:stop, :, :] = np.matmul(u * s[..., None, :], v)
-
-    #if blk_size[0] >= 2:
-
-    #image = torch.reshape(torch.from_numpy(image), old_shape)
-    #image = image.numpy()
-    #print(image.shape)
-
-    #image = np.moveaxis(image, -1, 0)
-    #print(image.shape)
-
-    image = np.moveaxis(image, -1, 1)
-    #print(image.shape)
-
-    image = torch.reshape(torch.from_numpy(image), old_shape)
-    image = image.numpy()
-    #print(image.shape)
-
-
-    image = np.moveaxis(image, 3, 0)
-    #print(image.shape)
-
-    #else:
-    #image = torch.reshape(torch.from_numpy(image), old_shape)
-    #image = image.numpy()
-    #print('image shape after svt', image.shape)
-
-    #image = np.moveaxis(image, -4, 0)
-
-    nuclear_norm /= np.sqrt(np.prod(blk_shape)) * float(lr_batchs)
-    x = B.H * image
-
-    return x
-
-class SingularValueThresholding(sp.prox.Prox):
-
-    def __init__(self, ishape, frames, num_encodes, lamda=None,
-                 block_size=8, block_stride=8, axis=0, block_iter=4, batched_iter=50):
-
-        self.batched_iter = batched_iter
-        self.frames = frames
-        self.num_encodes = num_encodes
-        self.total_images = frames*num_encodes
-        self.axis = axis
-        self.block_iter = block_iter
-        self.old_shape = np.array(ishape)
-        self.new_shape = (self.total_images, int(self.old_shape[0] / self.total_images))  + tuple(self.old_shape[1:])
-
-        self.lamda = lamda
-        self.block_size = [block_size, block_size, block_size]
-        self.block_stride = [block_stride, block_stride, block_stride]
-
-        self.block_shape = (num_encodes, block_size, block_size, block_size)
-
-        print(f'Old shape = {self.old_shape}')
-        print(f'New shape = {self.new_shape}')
-        print(f'Block size = {self.block_size}')
-        print(f'Block stride = {self.block_stride}')
-        print(f'Block shape = {self.block_shape}')
-        print(f'Block iter = {self.block_iter}')
-
-
-        # input is output
-        oshape = ishape
-
-        super().__init__(oshape, ishape)
-
-    def _prox(self, alpha, input):
-
-
-        # Input is 3D (Nt*Nz x Ny x Nx)
-        ########################New code###################################################
-        if math.isclose( self.lamda, 0.0):
-            return input
-
-        # Save input device
-        #initial_device = sp.get_device(input)
-        #input = initial_device.xp.reshape(input, self.new_shape)
-        #print('SVT input shape', input.shape)  # frames*encodes, z, y, x
-
-        # test svt insite cycle spinning
-        #
-        #
-
-        #t = time.time()
-        # Put on CPU
-        #input = sp.to_device(input, sp.cpu_device)
-
-        # SVT thresholding
-        #input_avg = np.zeros(input.shape,dtype=np.complex64)
-        #bthresh = float(alpha * self.lamda)
-        #for biter in range(self.block_iter):
-        #    block_shift = [-np.random.randint(0, self.block_stride[e]) for e in range(3)]
-            #bthresh = float(alpha*self.lamda/float(self.block_iter))
-            #print('Shift {block_shift} with {bthresh}')
-        #    input = svt_inplace(input, bthresh, tuple(self.block_size), tuple(self.block_stride), tuple(block_shift))
-        #    input_avg += input
-
-        #Return on same device
-        #input = input_avg.copy()/self.block_iter
-        #input = sp.to_device(input, initial_device)
-        #input = initial_device.xp.reshape(input, self.old_shape)
-
-        #print(f'SVT insite with cycle spinning took {time.time() - t}')
-
-        # test svt pytorch with cycle spinning
-        #
-        #
-
-        input = torch.reshape(torch.from_numpy(input), self.new_shape)
-        bthresh = float(alpha * self.lamda)
-        t = time.time()
-
-        if iter_counter <= self.batched_iter // 2:
-            # SVT biter (cycle spinning) = 1
-            # Block shifts are always negative
-            block_shift = [-np.random.randint(0, self.block_stride[e]) for e in range(3)]
-            block_ishift = [-x for x in block_shift]
-
-            input = torch.roll(input, block_shift, dims=(-3, -2, -1))
-            input = input.numpy()
-
-            # input = initial_device.xp.roll(input, block_shift, axis=(-3, -2, -1))
-            # Put on CPU
-            # input = sp.to_device(input, sp.cpu_device)
-            input = svt_torch_batch(input, bthresh, tuple(self.block_size), tuple(self.block_stride),
-                                         self.num_encodes, self.frames, tuple(self.block_shape))
-            # Return on same device
-            # input = sp.to_device(input, initial_device)
-            # input = initial_device.xp.roll(input, block_ishift, axis=(-3, -2, -1))
-
-            input = torch.roll(torch.from_numpy(input), block_ishift, dims=(-3, -2, -1))
-
-        else:
-            input_avg = torch.zeros_like(input)
-            #input_avg = initial_device.xp.zeros(input.shape,dtype=np.complex64)
-            # SVT biter
-            for biter in range(self.block_iter):
-                print('iter: ', biter)
-
-                # copy input
-                input_copy = input.detach().clone()
-
-                # Block shifts are always negative
-                block_shift = [-np.random.randint(0, self.block_stride[e]) for e in range(3)]
-                # print(block_shift)
-
-                block_ishift = [-x for x in block_shift]
-                # print(block_ishift)
-                ### input copy of input avg????
-
-                input_copy = torch.roll(input_copy, block_shift, dims=(-3, -2, -1))
-                input_copy = input_copy.numpy()
-
-                #input = torch.roll(input, block_shift, dims=(-3, -2, -1))
-                #input = input.numpy()
-
-                #input = initial_device.xp.roll(input, block_shift, axis=(-3, -2, -1))
-                # Put on CPU
-                #input = sp.to_device(input, sp.cpu_device)
-
-                #input = svt_torch_batch_test(x=input, lamda=bthresh, blk_size=self.block_size,
-                #                             blk_stride=tuple(self.block_stride),
-                #                             num_enc=self.num_encodes, num_frames=self.frames,
-                #                             blk_shape=tuple(self.block_shape))
-
-                input_copy = svt_torch_batch(x=input_copy, lamda=bthresh, blk_size=self.block_size,
-                                             blk_stride=tuple(self.block_stride),
-                                             num_enc=self.num_encodes, num_frames=self.frames,
-                                             blk_shape=tuple(self.block_shape))
-
-                #Return on same device
-                #input = sp.to_device(input, initial_device)
-                #input = initial_device.xp.roll(input, block_ishift, axis=(-3, -2, -1))
-                #input = torch.roll(torch.from_numpy(input), block_ishift, dims=(-3, -2, -1))
-
-                input_copy = torch.roll(torch.from_numpy(input_copy), block_ishift, dims=(-3, -2, -1))
-
-                input_avg += input_copy
-
-            input_avg /= self.block_iter
-            input = input_avg.detach().clone()
-
-        input = torch.reshape(input, tuple(self.old_shape))
-        input = input.numpy()
-
-        #input = initial_device.xp.copy(input_avg)/self.block_iter
-        #input = initial_device.xp.reshape(input, self.old_shape)
-        print(f'SVT torch took {time.time() - t}')
-
-        return(input)
-
-    def _svt_thresh_batched(self, x, block_size, block_shape, block_stride, block_shift, lamda):
-        #print(f'Block shift = {block_shift}')
-        #print(f'Stride = {block_stride}')
-        #print(f'Block size = {block_size}')
-        #print(f'Block shape = {block_shape}')
-        full_block_shift = list([0]) + block_shift
-        #print('full block shift', full_block_shift)
-        full_block_stride = list([block_shape[0]] + block_stride)
-        #print('full block stride', full_block_stride)
-        #print('block shape', block_shape)
-        #print('x' , x.shape)
-        print(f'Full stride = {full_block_stride}')
-
-        # 4D Blocking
-        B = sp.linop.ArrayToBlocks(list(x.shape), list(block_shape), list(full_block_stride))
-
-        # x = np.roll( x, shift=self.blk_shift, axis=(0,1,2))
-
-        # Parse into blocks
-        image = B * x
-        
-        #print('image shape B*x')
-        #print(image.shape)
-
-        # reshape to (Nblocks, encode, prod(block_size) )
-        old_shape = image.shape
-        image = np.moveaxis(image,0,-1) # First axis is time
-        new_shape = (-1, np.prod(block_shape),image.shape[-1])
-        #print(f'Resize from {old_shape} to {new_shape}')
-
-        image = np.reshape(image, new_shape)
-        #print('image reshape')
-        #print(image.shape)
-
-        # Scale lamda by block elements
-        lamda *= np.sqrt(np.prod( block_shape))
-        nuclear_norm = 0.0
-        #print(image.shape)
-        lr_batch_size = 256
-        lr_batchs = (image.shape[0] + lr_batch_size - 1) // lr_batch_size
-        for batch in range(lr_batchs):
-            start = batch * lr_batch_size
-            stop = min((batch + 1) * lr_batch_size, image.shape[0])
-
-            image_t = image[start:stop, :, :]
-            #print(image_t.shape)
-
-            u, s, vh = np.linalg.svd(image_t, full_matrices=False)
-
-            nuclear_norm += np.mean(np.abs(s))
-
-            # Threshold
-            s = sp.soft_thresh(lamda, s)
-
-            image[start:stop, :, :] = np.matmul(u * s[..., None, :], vh)
-
-        # Back to GPU
-        image = np.moveaxis(image,-1,0)
-        image = np.reshape(image, newshape=old_shape)
-
-        nuclear_norm /= np.sqrt(np.prod( block_shape)) * float(lr_batchs)
-
-        x = B.H * image
-        #th_x = B.H * image
-        #mask = (th_x == 0)
-        #th_x[mask] = x[mask]
-        #x = th_x
-
-        return x
-
-    def _svt_thresh_batched_stack_3D_linops(self, x, block_size, block_shape, block_stride, block_shift, lamda, frames, num_encodes):
-
-        #print('num of frames and encodes', frames, num_encodes)
-        #print('shape x',x.shape)
-
-        Block_op = sp.linop.ArrayToBlocks(list(x.shape[-3:]), list(block_size), list(block_stride))  # z,y,x
-        #print(Block_op)
-        Block_reshape = sp.linop.Reshape(oshape=Block_op.oshape + [1], ishape=Block_op.oshape)
-        #print(Block_reshape)
-        x_reshape = sp.linop.Reshape(x.shape[-3:], (1,) + x.shape[-3:])
-        #print(x_reshape)
-        BB = sp.linop.Diag([Block_reshape * Block_op * x_reshape for i in range(x.shape[0])], oaxis=6, iaxis=0)
-        #print(BB)
-        image = BB * x
-        #print('old image shape', image.shape)
-
-        image = np.transpose(np.expand_dims(image, axis=7), (6, 7, 0, 1, 2, 3, 4, 5))
-        #print('image shape after transpose', image.shape)
-        image_old_block_shape = image.shape
-
-        image_new_block_shape = tuple([frames]) + tuple([num_encodes]) + tuple(image.shape[2:])
-        image = np.reshape(image, image_new_block_shape)
-        #print('image shape after new reshape', image.shape)
-
-        image = np.transpose(image, (0, 2, 3, 4, 1, 5, 6, 7))
-        #print('image shape after transpose', image.shape)
-
-        #print('new image shape', image.shape)
-
-        # reshape to (Nblocks, encode, prod(block_size) )
-        old_shape = image.shape
-        image = np.moveaxis(image,0,-1) # First axis is time
-        new_shape = (-1, np.prod(block_shape),image.shape[-1])
-        #print(f'Resize from {old_shape} to {new_shape}')
-
-        image = np.reshape(image, new_shape)
-        #print('image reshape')
-        #print(image.shape)
-
-        #print('ARRAY type ', image.dtype)
-        #print('ARRAY size ', image.shape)
-        #print('ARRAY max ', np.amax(image))
-        #print('ARRAY min ', np.amin(image))
-        #print('ARRAY median ', np.median(image))
-
-        # Scale lamda by block elements
-        lamda *= np.sqrt(np.prod( block_shape))
-        nuclear_norm = 0.0
-        #print(image.shape)
-        lr_batch_size = 128
-        lr_batchs = (image.shape[0] + lr_batch_size - 1) // lr_batch_size
-        for batch in range(lr_batchs):
-            start = batch * lr_batch_size
-            stop = min((batch + 1) * lr_batch_size, image.shape[0])
-
-            image_t = image[start:stop, :, :]
-            #print(image_t.shape)
-
-            u, s, vh = np.linalg.svd(image_t, full_matrices=False)
-
-            nuclear_norm += np.mean(np.abs(s))
-
-            # Threshold
-            s = sp.soft_thresh(lamda, s)
-
-            image[start:stop, :, :] = np.matmul(u * s[..., None, :], vh)
-
-        # Back to GPU
-        image = np.moveaxis(image,-1,0)
-        image = np.reshape(image, newshape=old_shape)
-        #print('image shape after svt', image.shape)
-
-        nuclear_norm /= np.sqrt(np.prod( block_shape)) * float(lr_batchs)
-
-        image = np.transpose(image, (0, 4, 1, 2, 3, 5, 6, 7))
-        #print('image shape after transpose', image.shape)
-
-        image = np.reshape(image, image_old_block_shape)
-        #print('image shape after reshape', image.shape)
-        image = np.transpose(image, (1, 2, 3, 4, 5, 6, 7, 0))
-        #print('image shape after transpose', image.shape)
-
-        image = np.squeeze(image, axis=0)
-        #print('image shape after squeeze', image.shape)
-
-        x = BB.H * image
-
-        return x
-
-    def _svt_thresh_batched_with_matrix_manipulation(self, x, block_size, block_shape, block_stride, block_shift, lamda):
-
-        # print('num of frames and encodes', frames, num_encodes)
-        print('shape x', x.shape)
-
-        blocks = [x.shape[-3] // block_size[-3], x.shape[-2] // block_size[-2], x.shape[-1] // block_size[-1]]
-        #print(blocks)
-
-        old_shape = x.shape # [tf*#encodes, z, y, x]
-        # Scale lamda by block elements
-        lamda *= np.sqrt(np.prod(block_shape))
-        nuclear_norm = 0.0
-
-        for bz in range(blocks[0]):
-            for by in range(blocks[1]):
-                for bx in range(blocks[2]):
-                    #print('Block %d %d %s' % (bz, by, bx))
-
-                    bx_shift = bx * block_size[2]
-                    by_shift = by * block_size[1]
-                    bz_shift = bz * block_size[0]
-
-                    # Get start stop
-                    istart = bx_shift
-                    jstart = by_shift
-                    kstart = bz_shift
-
-                    istop = istart + block_size[2]
-                    jstop = jstart + block_size[1]
-                    kstop = kstart + block_size[0]
-
-                    # Grab the block
-                    # Grab the block
-                    image_block = x[:, kstart:kstop, jstart:jstop, istart:istop]
-                    old_shape_block = image_block.shape     # [tf*#encodes, 16, 16, 16]
-
-                    new_shape_block = ( -1, np.prod(block_shape)) # [tf, #encodes*16*16*16]
-                    image_block = np.reshape(image_block, new_shape_block)
-                    image_block = np.moveaxis(image_block, 0, -1)  # [#encodes*16*16*16, tf]
-
-                    # print(image_block.shape)
-                    u, s, vh = np.linalg.svd(image_block, full_matrices=False)
-                    nuclear_norm += np.mean(np.abs(s))
-                    # Threshold
-                    s = sp.soft_thresh(lamda, s)
-
-                    image_block[:, :] = np.matmul(u * s[..., None, :], vh)
-                    image_block = np.moveaxis(image_block, -1, 0) #[tf, encodes*16*16*16]
-                    image_block = np.reshape(image_block, old_shape_block) # [tf*#encodes, 16, 16, 16]
-                    # print(image_block.shape)
-                    # print('Block %d %d %s' % (bz, by, bx))
-                    x[:, kstart:kstop, jstart:jstop, istart:istop] = image_block # [tf*#encodes, z, x, y]
-
-        return x
-
-    def _svt_thresh_batched_with_matrix_manipulation_2SVT(self, x, block_size, block_shape, block_stride, block_shift, lamda):
-
-        blocks = [x.shape[-3] // block_size[-3], x.shape[-2] // block_size[-2], x.shape[-1] // block_size[-1]]
-        #print(blocks)
-        num_shifts = 2
-        old_shape = x.shape # [tf*#encodes, z, y, x]
-        x = np.reshape(x, (self.frames, self.num_encodes, -1) + x.shape[1:]) # [tf, #encodes, 1, z, y, x]
-
-        # Scale lamda by block elements and num shifts
-        lamda *= np.sqrt(np.prod(block_shape))
-        lamda *= 1/num_shifts
-
-        for nt in range(num_shifts):
-            nuclear_norm = 0.0
-            for bz in range(blocks[0]):
-                for by in range(blocks[1]):
-                    for bx in range(blocks[2]):
-                        #print('Block %d %d %s' % (bz, by, bx))
-
-                        bx_shift = bx * block_size[2]
-                        by_shift = by * block_size[1]
-                        bz_shift = bz * block_size[0]
-
-                        # Get start stop
-                        istart = bx_shift
-                        jstart = by_shift
-                        kstart = bz_shift
-
-                        istop = istart + block_size[2]
-                        jstop = jstart + block_size[1]
-                        kstop = kstart + block_size[0]
-
-                        # Grab the block
-                        if istop < x.shape[-1] and jstop < x.shape[-2] and kstop < x.shape[-3]: #from new shape
-                            # Grab the block
-                            image_block = x[:, :, 0, kstart:kstop, jstart:jstop, istart:istop]
-                            old_shape_block = image_block.shape     # [tf, #encodes, 1, 16, 16, 16]
-
-                            new_shape_block = ( -1, np.prod(block_shape)) # [tf, #encodes*16*16*16]
-                            image_block = np.reshape(image_block, new_shape_block)
-
-                            # print(image_block.shape)
-                            u, s, vh = np.linalg.svd(image_block, full_matrices=False)
-                            nuclear_norm += np.mean(np.abs(s))
-                            # Threshold
-                            s = sp.soft_thresh(lamda, s)
-
-                            image_block[:, :] = np.matmul(u * s[..., None, :], vh)
-                            image_block = np.reshape(image_block, old_shape_block) # [tf, #encodes, 1, 16, 16, 16]
-                            # print(image_block.shape)
-                            # print('Block %d %d %s' % (bz, by, bx))
-                            x[:, :, 0, kstart:kstop, jstart:jstop, istart:istop] = image_block # [tf, #encodes, 1, z, x, y]
-
-
-        x = np.reshape(x, old_shape) # [tf*#encodes, z, x, y]
-
-        return x
 
 class SubtractArray(sp.linop.Linop):
     """Subtract array operator, subtracts a given array allowing composed operator
@@ -749,7 +147,6 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
         weights = sp.to_device(weights, self.gpu_device)
 
         # Get max eigen value for each encode
-        #max_eig_list = []
         for e in range(self.num_images):
             A = sp.mri.linop.Sense(mps, coord[e, ...], weights[e, ...], ishape=None,
                                              coil_batch_size=coil_batch_size, comm=comm)
@@ -758,7 +155,6 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
             max_eig = sp.app.MaxEig(AHA, dtype=y.dtype, device=self.gpu_device,
                              max_iter=self.max_power_iter,
                              show_pbar=self.show_pbar).run()
-            #max_eig_list.append(max_eig)
 
             if fast_maxeig:
                 with sp.get_device(weights):
@@ -767,13 +163,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
             else:
                 # Scale the weights, for the max eigen value is one
                 with sp.get_device(weights):
-                     weights[e, ...] *= 1.0/max_eig
-
-        #max_max_eig = np.max(np.array(max_eig_list))
-        #print('max eigen value is ',max_max_eig)
-        #for e in range(self.num_images):
-        #    with sp.get_device(weights):
-        #        weights[e, ...] *= 1.0/max_max_eig
+                     weights[e, ...] *= 1.0/(max_eig)
 
         # Put on GPU
         y = sp.to_device(y, self.gpu_device)
@@ -854,10 +244,10 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
         # cardiac recon expected to be lower rank than temporal recon, thus smaller block size (as in cpp wrapper)
         print('batched iter = ', batched_iter)
         if gate_type == 'ecg':
-            proxg = SingularValueThresholding(A.ishape, frames=self.frames, num_encodes=self.num_encodes,
+            proxg = SingularValueThresholdingNumba(A.ishape, frames=self.frames, num_encodes=self.num_encodes,
                                               lamda=lamda, block_size=4, block_stride=4, batched_iter=batched_iter)
         else:
-            proxg = SingularValueThresholding(A.ishape, frames=self.frames, num_encodes=self.num_encodes,
+            proxg = SingularValueThresholdingNumba(A.ishape, frames=self.frames, num_encodes=self.num_encodes,
                                               lamda=lamda, block_size=16, block_stride=16, batched_iter=batched_iter)
 
         if comm is not None:
@@ -1342,7 +732,7 @@ def gate_kspace(mri_raw=None, num_frames=10, gate_type='time'):
             count += 1
     return(mri_rawG)
 
-def load_MRI_raw(h5_filename=None):
+def load_MRI_raw(h5_filename=None, max_coils=None):
     with h5py.File(h5_filename, 'r') as hf:
 
         try:
@@ -1367,7 +757,8 @@ def load_MRI_raw(h5_filename=None):
             logging.info('Missing header data')
             pass
 
-        #Num_Coils = 2
+        if max_coils is not None:
+            Num_Coils = min( max_coils, Num_Coils)
 
         # Get the MRI Raw structure setup
         mri_raw = MRI_Raw()
@@ -1626,7 +1017,7 @@ if __name__ == "__main__":
     parser.add_argument('--device', type=int, default=0)
     parser.add_argument('--thresh', type=float, default=0.1)
     parser.add_argument('--scale', type=float, default=1.0)
-    parser.add_argument('--frames',type=int, default=50, help='Number of time frames')
+    parser.add_argument('--frames',type=int, default=100, help='Number of time frames')
     parser.add_argument('--mps_ker_width', type=int, default=16)
     parser.add_argument('--ksp_calib_width', type=int, default=32)
     parser.add_argument('--lamda', type=float, default=0.0001)
@@ -1635,6 +1026,10 @@ if __name__ == "__main__":
     parser.add_argument('--jsense_max_inner_iter', type=int, default=10)
     parser.add_argument('--epochs', type=int, default=20)
     parser.add_argument('--gate_type', type=str, default='time')  # recon type
+    parser.add_argument('--fast_maxeig', dest='fast_maxeig', action='store_true')
+    parser.set_defaults(fast_maxeig=False)
+    parser.add_argument('--test_run', dest='test_run', action='store_true')
+    parser.set_defaults(test_run=False)
 
     # Input Output
     parser.add_argument('--filename', type=str, help='filename for data (e.g. MRI_Raw.h5)')
@@ -1651,14 +1046,20 @@ if __name__ == "__main__":
         from tkinter.filedialog import askopenfilename
         Tk().withdraw()
         args.filename = askopenfilename()
-        out_folder = os.path.dirname(args.filename)
+
+    # Save to input raw data folder
+    out_folder = os.path.dirname(args.filename)
 
     # Save to Folder
     logger.info(f'Saving to {out_folder}')
 
     # Load Data
     logger.info(f'Load MRI from {args.filename}')
-    mri_raw = load_MRI_raw(h5_filename=args.filename)
+    if args.test_run:
+        mri_raw = load_MRI_raw(h5_filename=args.filename, max_coils=2)
+    else:
+        mri_raw = load_MRI_raw(h5_filename=args.filename)
+
     num_enc = mri_raw.Num_Encodings
     crop_kspace(mri_rawdata=mri_raw, crop_factor=2.5)  # 2.5 (320/128)
 
@@ -1682,12 +1083,11 @@ if __name__ == "__main__":
         print(f'mri_raw.coords.shape = {mri_raw.coords.shape}')
         comm = sp.Communicator()
 
-        lrimg = LowRankRecon(mri_raw.kdata, coord=mri_raw.coords, weights=mri_raw.dcf, mps=smaps,
+        lrimg = MultiScaleLowRankRecon(mri_raw.kdata, coord=mri_raw.coords, weights=mri_raw.dcf, mps=smaps,
                            num_levels=3, scale_ratio=2,
                            normalize=True, coil_batch_size=1,
-                           alpha=0.1, lamda=1e-10, init_scale=1e-5,
-                           device=sp.Device(args.device), comm=comm, seed=0,
-                           max_inner_iter=10, max_power_iter=30, max_iter=mri_raw.Num_Encodings*args.epochs,
+                           alpha=0.1, lamda=1e-9, device=sp.Device(args.device), comm=comm, seed=0,
+                           max_power_iter=30, max_iter=mri_raw.Num_Encodings*args.epochs,
                            show_pbar=True).run()
 
         img = np.zeros(lrimg.shape, dtype=mri_raw.kdata.dtype)
@@ -1704,7 +1104,7 @@ if __name__ == "__main__":
         img = BatchedSenseRecon(mri_raw.kdata, mps=smaps, weights=mri_raw.dcf, coord=mri_raw.coords,
                                 device=sp.Device(args.device), lamda=args.lamda, num_enc=num_enc,
                                 coil_batch_size=1, max_iter=args.max_iter, batched_iter=args.max_iter,
-                                gate_type=args.gate_type).run()
+                                gate_type=args.gate_type, fast_maxeig=args.fast_maxeig).run()
 
         img = sp.to_device(img, sp.cpu_device)
 
