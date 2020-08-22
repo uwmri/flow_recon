@@ -133,7 +133,8 @@ class SingularValueThresholdingNumba(sp.prox.Prox):
         #print(f'Pre {np.linalg.norm(input)}')
         # SVT thresholding
         output = np.zeros_like(input)
-        bthresh = float(self.lamda*alpha * np.sqrt(np.prod(self.block_shape)))
+        # noticed block_shape is define differently in the numba svt.
+        bthresh = float(self.lamda*alpha * np.sqrt(self.num_encodes*np.prod(self.block_shape)))
         output = svt_numba(output, input, bthresh, tuple(self.block_shape), tuple(self.block_stride), self.block_iter, self.num_encodes)
         #svt_numba.parallel_diagnostics(level=4)
 
