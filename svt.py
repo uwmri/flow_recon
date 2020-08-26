@@ -14,16 +14,15 @@ def svt_numba(output, input, lamda, blk_shape, blk_strides, block_iter, num_enco
     by = input.shape[2] // blk_strides[1]
     bx = input.shape[3] // blk_strides[2]
 
-    Sz = input.shape[1]
-    Sy = input.shape[2]
-    Sx = input.shape[3]
+    Sz = int(input.shape[1])
+    Sy = int(input.shape[2])
+    Sx = int(input.shape[3])
 
     scale = float(1.0 / block_iter)
 
     num_frames = int(input.shape[0]/num_encodes)
     # bmat_shape = (num_frames, num_encodes*blk_shape[0] * blk_shape[1] * blk_shape[2])
     bmat_shape = (num_encodes*blk_shape[0] * blk_shape[1] * blk_shape[2], num_frames)
-
 
     shifts = np.zeros((3, block_iter), np.int32)
     for d in range(3):
@@ -32,9 +31,9 @@ def svt_numba(output, input, lamda, blk_shape, blk_strides, block_iter, num_enco
 
     for iter in range(block_iter):
 
-        shiftz = shifts[0,iter]
-        shifty = shifts[1,iter]
-        shiftx = shifts[2,iter]
+        shiftz = shifts[0, iter]
+        shifty = shifts[1, iter]
+        shiftx = shifts[2, iter]
 
         for nz in nb.prange(bz):
             sz = nz * blk_strides[0] + shiftz
@@ -55,7 +54,7 @@ def svt_numba(output, input, lamda, blk_shape, blk_strides, block_iter, num_enco
                     for tframe in range(num_frames):
                         count = 0
                         for encode in range(num_encodes):
-                            store_pos = encode*num_frames + tframe
+                            store_pos = int(tframe * num_encodes + encode)
                             for k in range(sz, ez):
                                 for j in range(sy, ey):
                                     for i in range(sx, ex):
@@ -88,7 +87,7 @@ def svt_numba(output, input, lamda, blk_shape, blk_strides, block_iter, num_enco
                     for tframe in range(num_frames):
                         count = 0
                         for encode in range(num_encodes):
-                            store_pos = encode*num_frames + tframe
+                            store_pos = int(tframe * num_encodes + encode)
                             for k in range(sz, ez):
                                 for j in range(sy, ey):
                                     for i in range(sx, ex):
@@ -147,6 +146,7 @@ class SingularValueThresholdingNumba(sp.prox.Prox):
         output = np.zeros_like(input)
         # noticed block_shape is define differently in the numba svt.
         bthresh = float(self.lamda*alpha * np.sqrt(self.num_encodes*np.prod(self.block_shape)))
+        print(f'Numba {bthresh}')
         output = svt_numba(output, input, bthresh, tuple(self.block_shape), tuple(self.block_stride), self.block_iter, self.num_encodes)
         #svt_numba.parallel_diagnostics(level=4)
 
@@ -192,6 +192,7 @@ def svt_torch_batch(x, lamda, blk_size, blk_stride, num_enc, num_frames, blk_sha
     old_shape = image.shape
 
     new_shape = (-1, image.shape[3] // num_enc, num_enc * np.prod(blk_size))
+    print(f'Old shape = {old_shape} new shape = {new_shape}')
     image = torch.reshape(torch.from_numpy(image), new_shape)
     # print('image reshape', image.shape)
     image = image.numpy()
@@ -213,6 +214,7 @@ def svt_torch_batch(x, lamda, blk_size, blk_stride, num_enc, num_frames, blk_sha
 
     # Scale lamda by block elements
     lamda *= np.sqrt(np.prod(blk_shape))  # is this dependent on the array shape of the svd?
+    print(f'Torch inner {lamda}')
     nuclear_norm = 0.0
     # do the batched SVD, want shape of (batch, much larger ,much smaller) typically is fastest
     lr_batch_size = 64
@@ -287,6 +289,7 @@ class SingularValueThresholding(sp.prox.Prox):
         self.block_stride = [block_stride, block_stride, block_stride]
 
         self.block_shape = (num_encodes, block_size, block_size, block_size)
+        self.iter_counter = 0
 
         print(f'Old shape = {self.old_shape}')
         print(f'New shape = {self.new_shape}')
@@ -343,9 +346,10 @@ class SingularValueThresholding(sp.prox.Prox):
 
         input = torch.reshape(torch.from_numpy(input), self.new_shape)
         bthresh = float(alpha * self.lamda)
+        print(f'Torch {bthresh}')
         t = time.time()
 
-        if iter_counter <= self.batched_iter // 2:
+        if self.iter_counter < self.batched_iter // 2:
             # SVT biter (cycle spinning) = 1
             # Block shifts are always negative
             block_shift = [-np.random.randint(0, self.block_stride[e]) for e in range(3)]
@@ -417,6 +421,8 @@ class SingularValueThresholding(sp.prox.Prox):
 
         input = torch.reshape(input, tuple(self.old_shape))
         input = input.numpy()
+
+        self.iter_counter = self.iter_counter + 1
 
         # input = initial_device.xp.copy(input_avg)/self.block_iter
         # input = initial_device.xp.reshape(input, self.old_shape)
@@ -698,3 +704,78 @@ class SingularValueThresholding(sp.prox.Prox):
         x = np.reshape(x, old_shape)  # [tf*#encodes, z, x, y]
 
         return x
+
+if __name__ == '__main__':
+
+    num_encodes = 4
+    ishape = (40*128, 128, 128)
+    frames = 10
+
+    # random noise
+    noise = np.random.random_sample(ishape).astype(np.complex64) + \
+            1j * np.random.random_sample(ishape).astype(np.complex64)
+    noise -= 0.5 + 0.5*1j
+
+    x = np.zeros_like(noise)
+    for t in range(ishape[0]):
+        spos = t // 128
+        x[t,...] = (t // 128 )  // num_encodes
+
+    y = x + noise
+
+    svtn = SingularValueThresholdingNumba(ishape, frames, num_encodes, lamda=1, block_size=4, block_stride=4, axis=0, block_iter=4, batched_iter=0)
+    svtp = SingularValueThresholding(ishape, frames, num_encodes, lamda=1, block_size=4, block_stride=4, axis=0, block_iter=4, batched_iter=0)
+
+    t = time.time()
+    out_svtn = svtn._prox(1.0, y)
+    print(f'Numba took {time.time() - t}')
+
+    t = time.time()
+    out_svtp = svtp._prox(1.0, y)
+    print(f'Pytorch took {time.time() - t}')
+
+    diff = np.linalg.norm(np.abs(out_svtn-out_svtp))
+    base = np.linalg.norm(np.abs(y))
+
+    print(f'Diff = {diff/base}')
+
+    import matplotlib.pyplot as plt
+
+    plt.figure()
+    plt.plot(out_svtn[:, 64, 64])
+    plt.plot(out_svtp[:, 64, 64])
+    plt.plot(y[:, 64, 64])
+    plt.plot(x[:, 64, 64])
+
+    plt.legend(('Numba','Pytorch','Original','Ideal'))
+    plt.show()
+
+    plt.figure()
+    plt.subplot(221)
+    temp = np.concatenate((np.abs(out_svtn[64+0, :,:]), np.abs(out_svtn[64+128, :,:])))
+    plt.imshow(temp, vmin=-0.1, vmax=1.2)
+    plt.title('Numba')
+
+    plt.subplot(222)
+    temp = np.concatenate((np.abs(out_svtp[64+0, :,:]), np.abs(out_svtp[64+128, :,:])))
+    plt.imshow(temp, vmin=-0.1, vmax=1.2)
+    plt.title('Pytorch')
+
+    plt.subplot(223)
+    temp = np.concatenate((np.abs(y[64+0, :,:]), np.abs(y[64+128, :,:])))
+    plt.imshow(temp, vmin=-0.1, vmax=1.2)
+    plt.title('Ideal + Noise')
+
+    plt.subplot(224)
+    temp = np.concatenate((np.abs(x[64+0, :,:]), np.abs(x[64+128, :,:])))
+    plt.imshow(temp, vmin=-0.1, vmax=1.2)
+    plt.title('Ideal')
+    plt.show()
+
+
+
+
+
+
+
+

@@ -48,8 +48,6 @@ from svt import *
 import numba as nb
 import torch as torch
 
-iter_counter = 0
-
 class SubtractArray(sp.linop.Linop):
     """Subtract array operator, subtracts a given array allowing composed operator
 
@@ -274,8 +272,6 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
 
     def _write_log(self):
 
-        global iter_counter  # used in svt
-        iter_counter += 1
         self.logger.info(f'Logging to file {self.log_out_name}')
         xp = sp.get_device(self.x).xp
         out_slice = (self.x.shape[0] / self.frames ) // 2
