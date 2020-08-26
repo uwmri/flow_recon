@@ -248,7 +248,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
                                               lamda=lamda, block_size=4, block_stride=4, batched_iter=batched_iter)
         else:
             proxg = SingularValueThresholdingNumba(A.ishape, frames=self.frames, num_encodes=self.num_encodes,
-                                              lamda=lamda, block_size=16, block_stride=16, batched_iter=batched_iter)
+                                              lamda=lamda, block_size=4, block_stride=4, batched_iter=batched_iter)
 
         if comm is not None:
             show_pbar = show_pbar and comm.rank == 0

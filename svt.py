@@ -20,75 +20,87 @@ def svt_numba(output, input, lamda, blk_shape, blk_strides, block_iter, num_enco
 
     scale = float(1.0 / block_iter)
 
-    num_frames = int( input.shape[0]/num_encodes)
-    bmat_shape = (num_frames, num_encodes*blk_shape[0] * blk_shape[1] * blk_shape[2])
+    num_frames = int(input.shape[0]/num_encodes)
+    # bmat_shape = (num_frames, num_encodes*blk_shape[0] * blk_shape[1] * blk_shape[2])
+    bmat_shape = (num_encodes*blk_shape[0] * blk_shape[1] * blk_shape[2], num_frames)
+
 
     shifts = np.zeros((3, block_iter), np.int32)
     for d in range(3):
         for biter in range(block_iter):
             shifts[d,biter] = np.random.randint(blk_shape[d])
 
-    for iter in nb.prange(block_iter * bz):
+    for iter in range(block_iter):
 
-        nz = iter % bz
-        biter = iter // bz
+        shiftz = shifts[0,iter]
+        shifty = shifts[1,iter]
+        shiftx = shifts[2,iter]
 
-        shiftz = shifts[biter,0]
-        shifty = shifts[biter,1]
-        shiftx = shifts[biter,2]
+        for nz in nb.prange(bz):
+            sz = nz * blk_strides[0] + shiftz
+            ez = sz + blk_shape[0]
 
-        #for nz in nb.prange(bz):
-        sz = nz * blk_strides[0] + shiftz
-        ez = sz + blk_shape[0]
+            for ny in range(by):
+                sy = ny * blk_strides[1] + shifty
+                ey = sy + blk_shape[1]
 
-        for ny in range(by):
-            sy = ny * blk_strides[1] + shifty
-            ey = sy + blk_shape[1]
+                for nx in range(bx):
 
-            for nx in range(bx):
+                    sx = nx * blk_strides[2] + shiftx
+                    ex = sx + blk_shape[2]
 
-                sx = nx * blk_strides[2] + shiftx
-                ex = sx + blk_shape[2]
+                    block = np.zeros(bmat_shape, input.dtype)
 
-                block = np.zeros(bmat_shape, input.dtype)
+                    # Grab a block
+                    for tframe in range(num_frames):
+                        count = 0
+                        for encode in range(num_encodes):
+                            store_pos = encode*num_frames + tframe
+                            for k in range(sz, ez):
+                                for j in range(sy, ey):
+                                    for i in range(sx, ex):
+                                        # block[tframe, count] = input[store_pos, k % Sz, j % Sy, i % Sx]
+                                        block[count, tframe] = input[store_pos, k % Sz, j % Sy, i % Sx]
+                                        count += 1
 
-                # Grab a block
-                for tframe in range(num_frames):
-                    count = 0
-                    for encode in range(num_encodes):
-                        store_pos = encode*num_frames + tframe
-                        for k in range(sz, ez):
-                            for j in range(sy, ey):
-                                for i in range(sx, ex):
-                                    block[tframe, count] = input[store_pos, k % Sz, j % Sy, i % Sx]
-                                    count += 1
+                    # Svd
+                    u, s, vh = np.linalg.svd(block, full_matrices=False)
 
-                # Svd
-                u, s, vh = np.linalg.svd(block, full_matrices=False)
+                    for k in range(u.shape[1]):
 
-                for k in range(u.shape[1]):
-                    s[k] = max(s[k] - lamda, 0)
-                    for i in range(u.shape[0]):
-                        u[i, k] *= s[k]
+                        # s[k] = max(s[k] - lamda, 0)
+                        abs_input = abs(s[k])
+                        if abs_input == 0:
+                            sign = 0
+                        else:
+                            sign = s[k] / abs_input
 
-                block = np.dot(u, vh)
+                        s[k] = abs_input - lamda
+                        s[k] = (abs(s[k]) + s[k]) / 2
+                        s[k] = s[k] * sign
 
-                # Put block back
-                for tframe in range(num_frames):
-                    count = 0
-                    for encode in range(num_encodes):
-                        store_pos = encode*num_frames + tframe
-                        for k in range(sz, ez):
-                            for j in range(sy, ey):
-                                for i in range(sx, ex):
-                                    output[store_pos, k % Sz, j % Sy, i % Sx] += scale*block[tframe, count]
-                                    count += 1
+                        for i in range(u.shape[0]):
+                            u[i, k] *= s[k]
+
+                    block = np.dot(u, vh)
+
+                    # Put block back
+                    for tframe in range(num_frames):
+                        count = 0
+                        for encode in range(num_encodes):
+                            store_pos = encode*num_frames + tframe
+                            for k in range(sz, ez):
+                                for j in range(sy, ey):
+                                    for i in range(sx, ex):
+                                        # output[store_pos, k % Sz, j % Sy, i % Sx] += scale*block[tframe, count]
+                                        output[store_pos, k % Sz, j % Sy, i % Sx] += scale*block[count, tframe]
+                                        count += 1
 
     return output
 
 class SingularValueThresholdingNumba(sp.prox.Prox):
 
-    def __init__(self, ishape, frames, num_encodes, lamda=None, block_size=8, block_stride=8, axis=0, block_iter=4, batched_iter=0):
+    def __init__(self, ishape, frames, num_encodes, lamda=None, block_size=8, block_stride=8, axis=0, block_iter=1, batched_iter=0):
 
         self.frames = frames
         self.num_encodes = num_encodes
@@ -120,7 +132,7 @@ class SingularValueThresholdingNumba(sp.prox.Prox):
 
         if math.isclose(self.lamda, 0.0):
             return input
-
+        # org_image = np.copy(input)
         t = time.time()
 
         # Save input device
@@ -143,6 +155,8 @@ class SingularValueThresholdingNumba(sp.prox.Prox):
         output = initial_device.xp.reshape(output, self.old_shape)
 
         print(f'SVT took {time.time() - t}')
+
+        # print(f'norms are: {np.linalg.norm(org_image)} original, {np.linalg.norm(output)} recovered, {np.linalg.norm(org_image - output)} diff')
 
         return output
 
