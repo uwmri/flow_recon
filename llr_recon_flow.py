@@ -753,7 +753,7 @@ def gate_kspace(mri_raw=None, num_frames=10, gate_type='time'):
             count += 1
     return(mri_rawG)
 
-def load_MRI_raw(h5_filename=None, max_coils=None):
+def load_MRI_raw(h5_filename=None, max_coils=None, compress_coils=False):
     with h5py.File(h5_filename, 'r') as hf:
 
         try:
@@ -906,14 +906,15 @@ def load_MRI_raw(h5_filename=None, max_coils=None):
         kdata_max = [np.abs(ksp).max() for ksp in mri_raw.kdata]
         print(f'Max kdata {kdata_max}')
 
-        # Compress Coils
-        #if 18 < Num_Coils <= 32:
-        #    mri_raw.kdata = pca_coil_compression(kdata=mri_raw.kdata, axis=0, target_channels=20)
-        #    mri_raw.Num_Coils = 20
+        if compress_coils:
+            # Compress Coils
+            if 18 < Num_Coils <= 32:
+                mri_raw.kdata = pca_coil_compression(kdata=mri_raw.kdata, axis=0, target_channels=20)
+                mri_raw.Num_Coils = 20
 
-        #if Num_Coils > 32:
-        #    mri_raw.kdata = pca_coil_compression(kdata=mri_raw.kdata, axis=0, target_channels=28)
-        #    mri_raw.Num_Coils = 28
+            if Num_Coils > 32:
+                mri_raw.kdata = pca_coil_compression(kdata=mri_raw.kdata, axis=0, target_channels=28)
+                mri_raw.Num_Coils = 28
 
         return mri_raw
 
@@ -1050,6 +1051,8 @@ if __name__ == "__main__":
     parser.set_defaults(fast_maxeig=False)
     parser.add_argument('--test_run', dest='test_run', action='store_true')
     parser.set_defaults(test_run=False)
+    parser.add_argument('--compress_coils', dest='compress_coils', action='store_true')
+    parser.set_defaults(compress_coils=False)
 
     # Input Output
     parser.add_argument('--filename', type=str, help='filename for data (e.g. MRI_Raw.h5)')
@@ -1078,7 +1081,7 @@ if __name__ == "__main__":
     if args.test_run:
         mri_raw = load_MRI_raw(h5_filename=args.filename, max_coils=2)
     else:
-        mri_raw = load_MRI_raw(h5_filename=args.filename)
+        mri_raw = load_MRI_raw(h5_filename=args.filename, compress_coils=args.compress_coils)
 
     num_enc = mri_raw.Num_Encodings
     crop_kspace(mri_rawdata=mri_raw, crop_factor=2.5)  # 2.5 (320/128)
