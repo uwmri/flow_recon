@@ -145,23 +145,47 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
         weights = sp.to_device(weights, self.gpu_device)
 
         # Get max eigen value for each encode
-        for e in range(self.num_images):
-            A = sp.mri.linop.Sense(mps, coord[e, ...], weights[e, ...], ishape=None,
-                                             coil_batch_size=coil_batch_size, comm=comm)
+        #for e in range(self.num_images):
+        #    A = sp.mri.linop.Sense(mps, coord[e, ...], weights[e, ...], ishape=None,
+        #                                     coil_batch_size=coil_batch_size, comm=comm)
 
+        #    AHA = A.H * A
+        #    max_eig = sp.app.MaxEig(AHA, dtype=y.dtype, device=self.gpu_device,
+        #                     max_iter=self.max_power_iter,
+        #                     show_pbar=self.show_pbar).run()
+
+        #    if fast_maxeig:
+        #        with sp.get_device(weights):
+        #            weights *= 1.0 / max_eig
+        #        break
+        #    else:
+                # Scale the weights, for the max eigen value is one
+        #        with sp.get_device(weights):
+        #             weights[e, ...] *= 1.0/(max_eig)
+
+        if fast_maxeig:
+            A = sp.mri.linop.Sense(mps, coord[0, ...], weights[0, ...], ishape=None,
+                                             coil_batch_size=coil_batch_size, comm=comm)
             AHA = A.H * A
             max_eig = sp.app.MaxEig(AHA, dtype=y.dtype, device=self.gpu_device,
                              max_iter=self.max_power_iter,
                              show_pbar=self.show_pbar).run()
+        else:
+            #global max eigen
+            ops_list = [sp.mri.linop.Sense(mps, coord[e, ...], weights[e, ...], ishape=None,
+                        coil_batch_size=coil_batch_size, comm=comm) for e in range(self.num_images)]
 
-            if fast_maxeig:
-                with sp.get_device(weights):
-                    weights *= 1.0 / max_eig
-                break
-            else:
-                # Scale the weights, for the max eigen value is one
-                with sp.get_device(weights):
-                     weights[e, ...] *= 1.0/(max_eig)
+            grad_ops_nodev = [ops_list[e].H * ops_list[e] for e in range(len(ops_list))]
+            # A.h*A
+            # wrap to run GPU
+            grad_ops = [sp.linop.ToDevice(op.oshape, self.cpu_device, self.gpu_device) * op * sp.linop.ToDevice(op.ishape, self.gpu_device, self.cpu_device) for op in grad_ops_nodev]
+            # Get AHA opts list
+            AHA = sp.linop.Diag(grad_ops, oaxis=0, iaxis=0)
+            max_eig = sp.app.MaxEig(AHA, dtype=y.dtype, device=self.cpu_device, max_iter=self.max_power_iter, show_pbar=self.show_pbar).run()
+
+        # Scale the weights
+        with sp.get_device(weights):
+            weights *= 1.0 / max_eig
 
         # Put on GPU
         y = sp.to_device(y, self.gpu_device)
@@ -222,15 +246,16 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
 
         # Update ops list with weights
         ops_list = [sp.mri.linop.Sense(mps, coord[e, ...], weights[e, ...], ishape=None,
-                                             coil_batch_size=coil_batch_size, comm=comm) for e in
-                          range(self.num_images)]
+                                             coil_batch_size=coil_batch_size, comm=comm) for e in range(self.num_images)]
 
         sub_list = [ SubtractArray(y[e,...]) for e in range(self.num_images)]
         #grad_ops_nodev = [ ops_list[e].H * sub_list[e] *ops_list[e] for e in range(len(ops_list))]
         grad_ops_nodev = [ ops_list[e].H * sub_list[e] *ops_list[e] for e in range(len(ops_list))]
+        # A.h*(Ax-y)
 
         # wrap to run GPU
         grad_ops = [sp.linop.ToDevice(op.oshape, self.cpu_device, self.gpu_device)*op*sp.linop.ToDevice(op.ishape,self.gpu_device,self.cpu_device) for op in grad_ops_nodev]
+        # * is a function
 
         # Get AHA opts list
         A = sp.linop.Diag(grad_ops, oaxis=0, iaxis=0)
@@ -246,7 +271,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
                                               lamda=lamda, block_size=4, block_stride=4, batched_iter=batched_iter)
         else:
             proxg = SingularValueThresholdingNumba(A.ishape, frames=self.frames, num_encodes=self.num_encodes,
-                                              lamda=lamda, block_size=4, block_stride=4, batched_iter=batched_iter)
+                                              lamda=lamda, block_size=16, block_stride=16, batched_iter=batched_iter)
 
         if comm is not None:
             show_pbar = show_pbar and comm.rank == 0
@@ -882,14 +907,13 @@ def load_MRI_raw(h5_filename=None, max_coils=None):
         print(f'Max kdata {kdata_max}')
 
         # Compress Coils
+        #if 18 < Num_Coils <= 32:
+        #    mri_raw.kdata = pca_coil_compression(kdata=mri_raw.kdata, axis=0, target_channels=20)
+        #    mri_raw.Num_Coils = 20
 
-        if 18 < Num_Coils <= 32:
-            mri_raw.kdata = pca_coil_compression(kdata=mri_raw.kdata, axis=0, target_channels=20)
-            mri_raw.Num_Coils = 20
-
-        if Num_Coils > 32:
-            mri_raw.kdata = pca_coil_compression(kdata=mri_raw.kdata, axis=0, target_channels=28)
-            mri_raw.Num_Coils = 28
+        #if Num_Coils > 32:
+        #    mri_raw.kdata = pca_coil_compression(kdata=mri_raw.kdata, axis=0, target_channels=28)
+        #    mri_raw.Num_Coils = 28
 
         return mri_raw
 

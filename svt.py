@@ -30,7 +30,7 @@ def svt_numba(output, input, lamda, blk_shape, blk_strides, block_iter, num_enco
             shifts[d,biter] = np.random.randint(blk_shape[d])
 
     for iter in range(block_iter):
-
+        print('block iter = ',iter)
         shiftz = shifts[0, iter]
         shifty = shifts[1, iter]
         shiftx = shifts[2, iter]
@@ -99,7 +99,7 @@ def svt_numba(output, input, lamda, blk_shape, blk_strides, block_iter, num_enco
 
 class SingularValueThresholdingNumba(sp.prox.Prox):
 
-    def __init__(self, ishape, frames, num_encodes, lamda=None, block_size=8, block_stride=8, axis=0, block_iter=1, batched_iter=0):
+    def __init__(self, ishape, frames, num_encodes, lamda=None, block_size=8, block_stride=8, axis=0, block_iter=4, batched_iter=0):
 
         self.frames = frames
         self.num_encodes = num_encodes
