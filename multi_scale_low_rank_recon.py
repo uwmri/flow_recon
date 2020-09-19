@@ -137,6 +137,7 @@ class MultiScaleLowRankRecon(object):
             max_eig = sp.app.MaxEig(F.H * W * F, max_iter=self.max_power_iter,
                                     dtype=self.dtype, device=self.device,
                                     show_pbar=self.show_pbar).run()
+            print(f'Max_eig {max_eig}')
             self.dcf /= max_eig
 
             # Estimate scaling.
@@ -146,7 +147,7 @@ class MultiScaleLowRankRecon(object):
                 for frame in range(self.T):
                     dcf_t = sp.to_device(self.dcf[frame, ...], self.device)
                     ksp_c = sp.to_device(self.ksp[frame, c, ...], self.device)
-                    coord_t = sp.to_device( self.coord[frame, ...], self.device)
+                    coord_t = sp.to_device(self.coord[frame, ...], self.device)
                     img_adj_c = sp.nufft_adjoint(ksp_c * dcf_t, coord_t, self.img_shape)
                     img_adj_c *= self.xp.conj(mps_c)
                     img_adj += img_adj_c
@@ -155,6 +156,7 @@ class MultiScaleLowRankRecon(object):
                 self.comm.allreduce(img_adj)
 
             img_adj_norm = self.xp.linalg.norm(img_adj).item()
+            print(f'img_adj_norm = {img_adj_norm}')
             self.ksp /= img_adj_norm
 
     def _init_vars(self):
