@@ -31,16 +31,12 @@ class SubtractArray(sp.linop.Linop):
 
 class BatchedSenseRecon(sp.app.LinearLeastSquares):
     r"""SENSE Reconstruction.
-
     Considers the problem
-
     .. math::
         \min_x \frac{1}{2} \| P F S x - y \|_2^2 +
         \frac{\lambda}{2} \| x \|_2^2
-
     where P is the sampling operator, F is the Fourier transform operator,
     S is the SENSE operator, x is the image, and y is the k-space measurements.
-
     Args:
         y (array): k-space measurements.
         mps (array): sensitivity maps.
@@ -52,23 +48,20 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
             Only affects memory usage.
         comm (Communicator): communicator for distributed computing.
         **kwargs: Other optional arguments.
-
     References:
         Pruessmann, K. P., Weiger, M., Scheidegger, M. B., & Boesiger, P.
         (1999).
         SENSE: sensitivity encoding for fast MRI.
         Magnetic resonance in medicine, 42(5), 952-962.
-
         Pruessmann, K. P., Weiger, M., Bornert, P., & Boesiger, P. (2001).
         Advances in sensitivity encoding with arbitrary k-space trajectories.
         Magnetic resonance in medicine, 46(4), 638-651.
-
     """
 
     def __init__(self, y, mps, lamda=0, weights=None, num_enc=0, gate_type='time',
                  coord=None, device=sp.cpu_device, coil_batch_size=None,
                  comm=None, show_pbar=True, max_power_iter=40, batched_iter=50, fast_maxeig=False,
-                 composite_init=False, log_folder=None, **kwargs):
+                 composite_init=True, **kwargs):
 
         # Temp
         self.num_encodes = num_enc
@@ -83,11 +76,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
         self.max_power_iter = max_power_iter
         self.show_pbar = True
         self.log_images = True
-
-        if log_folder is None:
-            self.log_out_name = 'ReconLog.h5'
-        else:
-            self.log_out_name = os.path.join(log_folder, 'LLR_ReconLog.h5')
+        self.log_out_name = 'ReconLog.h5'
 
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger('BatchedSenseRecon')
@@ -110,23 +99,47 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
         weights = sp.to_device(weights, self.gpu_device)
 
         # Get max eigen value for each encode
-        for e in range(self.num_images):
-            A = sp.mri.linop.Sense(mps, coord[e, ...], weights[e, ...], ishape=None,
-                                             coil_batch_size=coil_batch_size, comm=comm)
+        #for e in range(self.num_images):
+        #    A = sp.mri.linop.Sense(mps, coord[e, ...], weights[e, ...], ishape=None,
+        #                                     coil_batch_size=coil_batch_size, comm=comm)
 
+        #    AHA = A.H * A
+        #    max_eig = sp.app.MaxEig(AHA, dtype=y.dtype, device=self.gpu_device,
+        #                     max_iter=self.max_power_iter,
+        #                     show_pbar=self.show_pbar).run()
+
+        #    if fast_maxeig:
+        #        with sp.get_device(weights):
+        #            weights *= 1.0 / max_eig
+        #        break
+        #    else:
+                # Scale the weights, for the max eigen value is one
+        #        with sp.get_device(weights):
+        #             weights[e, ...] *= 1.0/(max_eig)
+
+        if fast_maxeig:
+            A = sp.mri.linop.Sense(mps, coord[0, ...], weights[0, ...], ishape=None,
+                                             coil_batch_size=coil_batch_size, comm=comm)
             AHA = A.H * A
             max_eig = sp.app.MaxEig(AHA, dtype=y.dtype, device=self.gpu_device,
                              max_iter=self.max_power_iter,
                              show_pbar=self.show_pbar).run()
+        else:
+            #global max eigen
+            ops_list = [sp.mri.linop.Sense(mps, coord[e, ...], weights[e, ...], ishape=None,
+                        coil_batch_size=coil_batch_size, comm=comm) for e in range(self.num_images)]
 
-            if fast_maxeig:
-                with sp.get_device(weights):
-                    weights *= 1.0 / max_eig
-                break
-            else:
-                # Scale the weights, for the max eigen value is one
-                with sp.get_device(weights):
-                     weights[e, ...] *= 1.0/(max_eig)
+            grad_ops_nodev = [ops_list[e].H * ops_list[e] for e in range(len(ops_list))]
+            # A.h*A
+            # wrap to run GPU
+            grad_ops = [sp.linop.ToDevice(op.oshape, self.cpu_device, self.gpu_device) * op * sp.linop.ToDevice(op.ishape, self.gpu_device, self.cpu_device) for op in grad_ops_nodev]
+            # Get AHA opts list
+            AHA = sp.linop.Diag(grad_ops, oaxis=0, iaxis=0)
+            max_eig = sp.app.MaxEig(AHA, dtype=y.dtype, device=self.cpu_device, max_iter=self.max_power_iter, show_pbar=self.show_pbar).run()
+
+        # Scale the weights
+        with sp.get_device(weights):
+            weights *= 1.0 / max_eig
 
         # Put on GPU
         y = sp.to_device(y, self.gpu_device)
@@ -187,15 +200,16 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
 
         # Update ops list with weights
         ops_list = [sp.mri.linop.Sense(mps, coord[e, ...], weights[e, ...], ishape=None,
-                                             coil_batch_size=coil_batch_size, comm=comm) for e in
-                          range(self.num_images)]
+                                             coil_batch_size=coil_batch_size, comm=comm) for e in range(self.num_images)]
 
         sub_list = [ SubtractArray(y[e,...]) for e in range(self.num_images)]
         #grad_ops_nodev = [ ops_list[e].H * sub_list[e] *ops_list[e] for e in range(len(ops_list))]
         grad_ops_nodev = [ ops_list[e].H * sub_list[e] *ops_list[e] for e in range(len(ops_list))]
+        # A.h*(Ax-y)
 
         # wrap to run GPU
         grad_ops = [sp.linop.ToDevice(op.oshape, self.cpu_device, self.gpu_device)*op*sp.linop.ToDevice(op.ishape,self.gpu_device,self.cpu_device) for op in grad_ops_nodev]
+        # * is a function
 
         # Get AHA opts list
         A = sp.linop.Diag(grad_ops, oaxis=0, iaxis=0)
@@ -211,7 +225,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
                                               lamda=lamda, block_size=4, block_stride=4, batched_iter=batched_iter)
         else:
             proxg = SingularValueThresholdingNumba(A.ishape, frames=self.frames, num_encodes=self.num_encodes,
-                                              lamda=lamda, block_size=4, block_stride=4, batched_iter=batched_iter)
+                                              lamda=lamda, block_size=16, block_stride=16, batched_iter=batched_iter)
 
         if comm is not None:
             show_pbar = show_pbar and comm.rank == 0

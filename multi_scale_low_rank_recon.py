@@ -51,7 +51,7 @@ class MultiScaleLowRankRecon(object):
         show_pbar (bool): show progress bar.
 
     """
-    def __init__(self, ksp, coord, dcf, mps, T, lamda,
+    def __init__(self, ksp, coord, dcf, mps, lamda,
                  blk_widths=[32, 64, 128], alpha=1, beta=0.5, sgw=None,
                  device=sp.cpu_device, comm=None, seed=0,
                  max_epoch=120, decay_epoch=30, max_power_iter=5,
