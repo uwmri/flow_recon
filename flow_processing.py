@@ -284,7 +284,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--venc', type=float, default=80.0)
     # Input Output
-    parser.add_argument('--filename', type=str, help='filename for data (e.g. FullRecon.h5)')
+    parser.add_argument('--filename', type=str, help='filename for data (e.g. FullRecon.h5)', default=None)
     parser.add_argument('--logdir', type=str, help='folder to log files to, default is current directory')
 
     args = parser.parse_args()
@@ -297,16 +297,21 @@ if __name__ == "__main__":
         Tk().withdraw()
         args.filename = askopenfilename()
 
-    with h5py.File('FullRecon.h5', 'r') as hf:
-        temp = hf['IMAGE']
+    out_folder = os.path.dirname(args.filename)
+
+    print(f'Loading {args.filename}')
+    with h5py.File(args.filename, 'r') as hf:
+        temp = np.array(hf['IMAGE'])
         print(temp.shape)
         #temp = temp['real'] + 1j*temp['imag']
         #temp = np.moveaxis(temp, -1, 0)
-        #  frames = int(temp.shape[0]/5)
-        # temp = np.reshape(temp, newshape=(frames,5, temp.shape[1], temp.shape[2], temp.shape[3]))
+        #frames = int(temp.shape[0]/4)
+        #temp = np.reshape(temp, newshape=(frames,4, temp.shape[1], temp.shape[2], temp.shape[3]))
+        temp = np.reshape(temp, newshape=(10,4, temp.shape[-3], temp.shape[-2], temp.shape[-1]))
 
         frames = int(temp.shape[0])
         num_encodes = int(temp.shape[1])
+
         print(f' num of frames =  {frames}')
         print(f' num of encodes = {num_encodes}')
         #temp = np.reshape(temp,newshape=(5, frames,temp.shape[1],temp.shape[2],temp.shape[3]))
@@ -333,7 +338,7 @@ if __name__ == "__main__":
     mri_flow.update_angiogram()
 
     # Export to file
-    out_name = 'Flow.h5'
+    out_name = os.path.join(out_folder, 'Flow.h5')
     try:
         os.remove(out_name)
     except OSError:

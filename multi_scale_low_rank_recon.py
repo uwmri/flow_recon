@@ -55,7 +55,7 @@ class MultiScaleLowRankRecon(object):
                  blk_widths=[32, 64, 128], alpha=1, beta=0.5, sgw=None,
                  device=sp.cpu_device, comm=None, seed=0,
                  max_epoch=120, decay_epoch=30, max_power_iter=5,
-                 show_pbar=True):
+                 show_pbar=True, num_encodings=1, log_dir=None):
         self.ksp = ksp
         self.coord = coord
         self.dcf = dcf
@@ -73,6 +73,7 @@ class MultiScaleLowRankRecon(object):
         self.decay_epoch = decay_epoch
         self.max_power_iter = max_power_iter
         self.show_pbar = show_pbar and (comm is None or comm.rank == 0)
+        self.log_dir = log_dir
 
         print(self.device)
         print(f'Ksp: Size = {ksp.shape} , Device = {sp.get_device(ksp)}')
@@ -80,22 +81,24 @@ class MultiScaleLowRankRecon(object):
         print(f'dcf: Size = {dcf.shape} , Device = {sp.get_device(dcf)}')
         print(f'Ksp: Size = {mps.shape} , Device = {sp.get_device(mps)}')
 
+        # Initialize random seed so code is reproducible
         np.random.seed(self.seed)
         self.xp = self.device.xp
         with self.device:
             self.xp.random.seed(self.seed)
 
+
         self.dtype = self.ksp.dtype
-        self.C = self.mps.shape[0]
-        #self.tr_per_frame = self.num_tr // self.T
+        self.num_coils = self.mps.shape[0]
         self.img_shape = self.mps.shape[1:]
-        self.D = len(self.img_shape)
-        self.J = len(self.blk_widths)
+        self.num_encodings = num_encodings
+        self.num_dim = len(self.img_shape)
+        self.num_scales = len(self.blk_widths)
         if self.sgw is not None:
             self.dcf *= np.expand_dims(self.sgw, -1)
 
-        self.B = [self._get_B(j) for j in range(self.J)]
-        self.G = [self._get_G(j) for j in range(self.J)]
+        self.B = [self._get_B(j) for j in range(self.num_scales)]
+        self.G = [self._get_G(j) for j in range(self.num_scales)]
 
         self._normalize()
 
@@ -107,8 +110,11 @@ class MultiScaleLowRankRecon(object):
                for i, b, s in zip(self.img_shape, b_j, s_j)]
 
         C_j = sp.linop.Resize(self.img_shape, i_j,
-                              ishift=[0] * self.D, oshift=[0] * self.D)
+                              ishift=[0] * self.num_dim, oshift=[0] * self.num_dim)
+
         B_j = sp.linop.BlocksToArray(i_j, b_j, s_j)
+
+        # Hanning window to reduce block artifacts
         with self.device:
             w_j = sp.hanning(b_j, dtype=self.dtype, device=self.device)**0.5
         W_j = sp.linop.Multiply(B_j.ishape, w_j)
@@ -142,7 +148,7 @@ class MultiScaleLowRankRecon(object):
 
             # Estimate scaling.
             img_adj = 0
-            for c in range(self.C):
+            for c in range(self.num_coils):
                 mps_c = sp.to_device(self.mps[c, ...], self.device)
                 for frame in range(self.T):
                     dcf_t = sp.to_device(self.dcf[frame, ...], self.device)
@@ -163,11 +169,11 @@ class MultiScaleLowRankRecon(object):
         # Initialize L.
         self.L = []
         self.R = []
-        for j in range(self.J):
+        for j in range(self.num_scales):
             L_j_shape = self.B[j].ishape
             L_j = sp.randn(L_j_shape, dtype=self.dtype, device=self.device)
-            L_j_norm = self.xp.sum(self.xp.abs(L_j)**2,
-                                   axis=range(-self.D, 0), keepdims=True)**0.5
+            L_j_norm = self.xp.sum(self.xp.abs(L_j) ** 2,
+                                   axis=range(-self.num_dim, 0), keepdims=True) ** 0.5
             L_j /= L_j_norm
 
             R_j_shape = (self.T, ) + L_j_norm.shape
@@ -186,7 +192,7 @@ class MultiScaleLowRankRecon(object):
                     pbar.update()
 
             # Normalize R
-            for j in range(self.J):
+            for j in range(self.num_scales):
                 R_j_norm = self.xp.sum(self.xp.abs(self.R[j])**2,
                                        axis=0, keepdims=True)**0.5
                 self.R[j] /= R_j_norm
@@ -195,7 +201,7 @@ class MultiScaleLowRankRecon(object):
             with tqdm(desc='PowerIter L {}/{}'.format(
                     it + 1, self.max_power_iter),
                       total=self.T, disable=not self.show_pbar, leave=True) as pbar:
-                for j in range(self.J):
+                for j in range(self.num_scales):
                     self.L[j].fill(0)
 
                 for t in range(self.T):
@@ -204,14 +210,14 @@ class MultiScaleLowRankRecon(object):
 
             # Normalize L.
             sigma = []
-            for j in range(self.J):
-                L_j_norm = self.xp.sum(self.xp.abs(self.L[j])**2,
-                                       axis=range(-self.D, 0), keepdims=True)**0.5
+            for j in range(self.num_scales):
+                L_j_norm = self.xp.sum(self.xp.abs(self.L[j]) ** 2,
+                                       axis=range(-self.num_dim, 0), keepdims=True) ** 0.5
                 self.L[j] /= L_j_norm
                 sigma.append(L_j_norm)
 
         sigma_max = 0
-        for j in range(self.J):
+        for j in range(self.num_scales):
             self.L[j] *= sigma[j]**0.5
             self.R[j] *= sigma[j]**0.5
             sigma_max = max(sigma[j].max().item(), sigma_max)
@@ -228,7 +234,7 @@ class MultiScaleLowRankRecon(object):
 
         # A^H(y_t)
         AHy_t = 0
-        for c in range(self.C):
+        for c in range(self.num_coils):
             mps_c = sp.to_device(self.mps[c], self.device)
             AHy_tc = sp.nufft_adjoint(dcf_t * ksp_t[c], coord_t,
                                       oshape=self.img_shape)
@@ -238,10 +244,10 @@ class MultiScaleLowRankRecon(object):
         if self.comm is not None:
             self.comm.allreduce(AHy_t)
 
-        for j in range(self.J):
+        for j in range(self.num_scales):
             AHy_tj= self.B[j].H(AHy_t)
             self.R[j][t] = self.xp.sum(AHy_tj * self.xp.conj(self.L[j]),
-                                       axis=range(-self.D, 0), keepdims=True)
+                                       axis=range(-self.num_dim, 0), keepdims=True)
 
     def _AHy_R(self, t):
         # Download k-space arrays.
@@ -253,7 +259,7 @@ class MultiScaleLowRankRecon(object):
 
         # A^H(y_t)
         AHy_t = 0
-        for c in range(self.C):
+        for c in range(self.num_coils):
             mps_c = sp.to_device(self.mps[c], self.device)
             AHy_tc = sp.nufft_adjoint(dcf_t * ksp_t[c], coord_t,
                                       oshape=self.img_shape)
@@ -263,7 +269,7 @@ class MultiScaleLowRankRecon(object):
         if self.comm is not None:
             self.comm.allreduce(AHy_t)
 
-        for j in range(self.J):
+        for j in range(self.num_scales):
             AHy_tj = self.B[j].H(AHy_t)
             self.L[j] += AHy_tj * self.xp.conj(self.R[j][t])
 
@@ -273,7 +279,7 @@ class MultiScaleLowRankRecon(object):
             self._power_method()
             self.L_init = []
             self.R_init = []
-            for j in range(self.J):
+            for j in range(self.num_scales):
                 self.L_init.append(sp.to_device(self.L[j]))
                 self.R_init.append(sp.to_device(self.R[j]))
 
@@ -282,7 +288,7 @@ class MultiScaleLowRankRecon(object):
                 try:
                     self.L = []
                     self.R = []
-                    for j in range(self.J):
+                    for j in range(self.num_scales):
                         self.L.append(sp.to_device(self.L_init[j], self.device))
                         self.R.append(sp.to_device(self.R_init[j], self.device))
 
@@ -316,11 +322,11 @@ class MultiScaleLowRankRecon(object):
                 # Form image for export.
                 t = 17
                 img_t = 0
-                for j in range(self.J):
+                for j in range(self.num_scales):
                     img_t += self.B[j](self.L[j] * self.R[j][t])
                 im = sp.to_device(img_t, sp.cpu_device)
 
-                out_name = 'IterMon.h5'
+                out_name = os.path.join(self.log_dir, 'IterMon.h5')
                 if self.epoch == 0:
                     try:
                         os.remove(out_name)
@@ -335,7 +341,7 @@ class MultiScaleLowRankRecon(object):
     def _update(self, t):
         # Form image.
         img_t = 0
-        for j in range(self.J):
+        for j in range(self.num_scales):
             img_t += self.B[j](self.L[j] * self.R[j][t])
 
         # Download k-space arrays.
@@ -348,7 +354,7 @@ class MultiScaleLowRankRecon(object):
         # Data consistency.
         e_t = 0
         loss_t = 0
-        for c in range(self.C):
+        for c in range(self.num_coils):
             mps_c = sp.to_device(self.mps[c], self.device)
             e_tc = sp.nufft(img_t * mps_c, coord_t)
             e_tc -= ksp_t[c]
@@ -366,7 +372,7 @@ class MultiScaleLowRankRecon(object):
         loss_t = loss_t.item()
 
         # Compute gradient.
-        for j in range(self.J):
+        for j in range(self.num_scales):
             lamda_j = self.lamda * self.G[j]
 
             # L gradient.
@@ -378,7 +384,7 @@ class MultiScaleLowRankRecon(object):
             # R gradient.
             g_R_jt = self.B[j].H(e_t)
             g_R_jt *= self.xp.conj(self.L[j])
-            g_R_jt = self.xp.sum(g_R_jt, axis=range(-self.D, 0), keepdims=True)
+            g_R_jt = self.xp.sum(g_R_jt, axis=range(-self.num_dim, 0), keepdims=True)
             g_R_jt += lamda_j * self.R[j][t]
 
             # Loss.

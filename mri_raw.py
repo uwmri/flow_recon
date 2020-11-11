@@ -104,7 +104,7 @@ def pca_coil_compression(kdata=None, axis=0, target_channels=None):
 
 
 
-def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None):
+def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thresh_maps=True):
     logger = logging.getLogger('Get sensitivity maps')
 
     # Set to GPU
@@ -155,33 +155,6 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None):
                                        max_iter=args.jsense_max_iter,
                                        max_inner_iter=args.jsense_max_inner_iter).run()
 
-            # Low resolution images
-            #res = 16
-            #lpf = np.sum(coord ** 2, axis=-1)
-            #lpf = np.exp(-lpf / (2.0 * res * res))  #Gaussian blur
-            #lpf  = (1/res) * (1/(1+2*lpf/(res*res)))  #Lorentzian blur
-
-            #img_shape = sp.estimate_shape(coord)
-            #ksp = xp.ones([mri_rawdata.Num_Coils] + img_shape, dtype=xp.complex64)
-            #sos = xp.zeros(img_shape, dtype=xp.float32)
-
-            #for c in range(mri_rawdata.Num_Coils):
-            #    logger.info(f'Reconstructing  coil {c}')
-                #ksp_t = np.copy(kdata[c, :, :, :])
-           #     ksp_t = np.copy(kdata[c, ...])
-           #     ksp_t *= np.squeeze(dcf)
-           #     ksp_t *= np.squeeze(lpf)
-           #     ksp_t = sp.to_device(ksp_t, device=device)
-           #     ksp[c, :, :, :] = sp.nufft_adjoint(ksp_t, coord, img_shape)
-           #     sos += xp.square(xp.abs(sp.nufft_adjoint(ksp_t, coord, img_shape)))
-
-            # Put onto CPU
-            #sos = xp.sqrt(sos)
-            #sos = sp.to_device(sos,sp.cpu_device) #sos image
-            #ksp = sp.to_device(ksp, sp.cpu_device) # Low Res coil images
-            #smaps = ksp
-            #smaps = ksp/sos
-            #images_hres = ksp
 
             # Get a composite image
             img_shape = sp.estimate_shape(coord)
@@ -199,40 +172,39 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None):
                     coords_temp = sp.to_device(mri_rawdata.coords[e], device)
                     image += xp.abs(sp.nufft_adjoint(ksp, coords_temp, img_shape)) ** 2
 
-            image = xp.sqrt(image)  #sos image
-            image = sp.to_device(image, sp.get_device(smaps))
+            if thresh_maps:
+                image = xp.sqrt(image)  #sos image
+                image = sp.to_device(image, sp.get_device(smaps))
 
-            xp = sp.get_device(smaps).xp
+                xp = sp.get_device(smaps).xp
 
-            #print(sp.get_device(smaps))
-            #print(sp.get_device(image))
+                # Threshold
+                image = xp.abs(image)
+                image /= xp.max(image)
+                thresh = 0.015
+                #print(thresh)
+                mask = image > thresh
 
-            # Threshold
-            image = xp.abs(image)
-            image /= xp.max(image)
-            thresh = 0.015
-            #print(thresh)
-            mask = image > thresh
+                mask = sp.to_device(mask, sp.cpu_device)
+                zz, xx, yy = np.meshgrid( np.linspace(-1,1,11), np.linspace(-1,1,11), np.linspace(-1,1,11))
+                rad = zz**2 + xx**2 + yy**2
+                smap_mask = rad < 1.0
+                #print(smap_mask)
+                mask = ndimage.morphology.binary_dilation(mask, smap_mask)
+                mask = np.array( mask, dtype=np.float32)
+                mask = sp.to_device(mask, sp.get_device(smaps))
 
-            mask = sp.to_device(mask, sp.cpu_device)
-            zz, xx, yy = np.meshgrid( np.linspace(-1,1,11), np.linspace(-1,1,11), np.linspace(-1,1,11))
-            rad = zz**2 + xx**2 + yy**2
-            smap_mask = rad < 1.0
-            #print(smap_mask)
-            mask = ndimage.morphology.binary_dilation(mask, smap_mask)
-            mask = np.array( mask, dtype=np.float32)
-            mask = sp.to_device(mask, sp.get_device(smaps))
-
-            #print(image)
-            #print(image.shape)
-            #print(smaps.shape)
-            smaps = mask * smaps
+                #print(image)
+                #print(image.shape)
+                #print(smaps.shape)
+                smaps = mask * smaps
 
 
     smaps_cpu= sp.to_device(smaps, sp.cpu_device)
     image_cpu = sp.to_device(image, sp.cpu_device)
-    mask_cpu = sp.to_device(mask, sp.cpu_device)
-    #images_hres_cpu = sp.to_device(images_hres, sp.cpu_device)
+    if thresh_maps:
+        mask_cpu = sp.to_device(mask, sp.cpu_device)
+
     # Export to file
     out_name = 'SenseMaps.h5'
     logger.info('Saving images to ' + out_name)
@@ -243,8 +215,8 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None):
     with h5py.File(out_name, 'w') as hf:
         hf.create_dataset("IMAGE", data=np.abs(image_cpu))
         hf.create_dataset("SMAPS", data=np.abs(smaps_cpu))
-        hf.create_dataset("MASK", data=np.abs(mask_cpu))
-        #hf.create_dataset("IMAGES_hres", data=np.stack(images_hres_cpu))
+        if thresh_maps:
+            hf.create_dataset("MASK", data=np.abs(mask_cpu))
 
     return smaps
 

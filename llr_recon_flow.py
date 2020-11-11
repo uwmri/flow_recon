@@ -35,7 +35,7 @@ if __name__ == "__main__":
     parser.add_argument('--jsense_max_inner_iter', type=int, default=10)
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--gate_type', type=str, default='time')  # recon type
-    parser.add_argument('--crop_factor', type=float, default=2)
+    parser.add_argument('--crop_factor', type=float, default=2.5)
     parser.add_argument('--recon_type', type=str, default='llr')
 
     parser.set_defaults(discrete_gates=False)
@@ -93,7 +93,11 @@ if __name__ == "__main__":
         xp = sp.Device(args.device).xp
         smaps = xp.ones([mri_raw.Num_Coils] + img_shape, dtype=xp.complex64)
     else:
-        smaps = get_smaps(mri_rawdata=mri_raw, args=args)
+        if args.recon_type == 'mslr':
+            # MSLR doesn't work with zeros in sensitivity map yet
+            smaps = get_smaps(mri_rawdata=mri_raw, args=args, thresh_maps=False)
+        else:
+            smaps = get_smaps(mri_rawdata=mri_raw, args=args, thresh_maps=True)
 
     # Gate k-space
     mri_raw = gate_kspace(mri_raw=mri_raw,
@@ -111,10 +115,12 @@ if __name__ == "__main__":
         print(f'max kspace {np.max(np.abs(mri_raw.kdata))}')
         lrimg = MultiScaleLowRankRecon(mri_raw.kdata, coord=mri_raw.coords, dcf=mri_raw.dcf, mps=smaps,
                            sgw=None,
-                           blk_widths=(32, 64, 128),
+                           blk_widths=(8, 16, 32, 64),
                            lamda=args.lamda,
                            max_epoch=args.epochs,
-                           device=sp.Device(args.device), comm=comm).run()
+                           device=sp.Device(args.device),
+                           comm=comm,
+                           log_dir=args.out_folder).run()
 
         out_name = os.path.join(args.out_folder,'MSLRObject.h5')
         lrimg.save(out_name)
@@ -138,6 +144,19 @@ if __name__ == "__main__":
             hf.create_dataset('Sy', data=np.abs(Sy))
             hf.create_dataset('Sx', data=np.abs(Sx))
             hf.create_dataset('Frame0', data=np.abs(Im0))
+
+        # Export to file
+        Im0 = np.reshape(Im0, (args.frames, -1) + Im0.shape[1:])
+        out_name = os.path.join(args.out_folder, 'FullRecon.h5')
+        logger.info('Saving images to ' + out_name)
+        try:
+            os.remove(out_name)
+        except OSError:
+            pass
+        with h5py.File(out_name, 'w') as hf:
+            hf.create_dataset("IMAGE", data=Im0)
+
+
     else:
         logger.info(f'Reconstruct Images ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
         img = BatchedSenseRecon(mri_raw.kdata, mps=smaps, weights=mri_raw.dcf, coord=mri_raw.coords,
