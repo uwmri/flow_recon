@@ -307,7 +307,7 @@ if __name__ == "__main__":
         #temp = np.moveaxis(temp, -1, 0)
         #frames = int(temp.shape[0]/4)
         #temp = np.reshape(temp, newshape=(frames,4, temp.shape[1], temp.shape[2], temp.shape[3]))
-        temp = np.reshape(temp, newshape=(10,4, temp.shape[-3], temp.shape[-2], temp.shape[-1]))
+        # temp = np.reshape(temp, newshape=(10,4, temp.shape[-3], temp.shape[-2], temp.shape[-1]))
 
         frames = int(temp.shape[0])
         num_encodes = int(temp.shape[1])

@@ -312,7 +312,7 @@ def gate_kspace(mri_raw=None, num_frames=10, gate_type='time', discrete_gates=Fa
     # Get the MRI Raw structure setup
     mri_rawG = MRI_Raw()
     mri_rawG.Num_Coils =  mri_raw.Num_Coils
-    mri_rawG.Num_Encodings =  mri_raw.Num_Encodings*num_frames
+    mri_rawG.Num_Encodings =  mri_raw.Num_Encodings
     mri_rawG.dft_needed = mri_raw.dft_needed
     mri_rawG.trajectory_type = mri_raw.trajectory_type
 

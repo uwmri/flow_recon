@@ -23,17 +23,22 @@ class MultiScaleLowRankImage(object):
     """
     def __init__(self, shape, L, R, res=None):
         self.shape = tuple(shape)
-        self.img_shape = self.shape[1:]
+        self.img_shape = self.shape[2:]
         self.T = self.shape[0]
+        self.num_encodings = self.shape[1]
+        self.total_images = self.num_encodings*self.T
         self.size = sp.prod(self.shape)
         self.ndim = len(self.shape)
         self.dtype = L[0].dtype
         self.J = len(L)
-        self.D = self.ndim - 1
-        self.blk_widths = [max(L[j].shape[-self.D:]) for j in range(self.J)]
+        self.D = self.ndim - 2
+        self.blk_widths = [max(L[j][0].shape[-self.D:]) for j in range(self.J)]
         self.L = L
         self.R = R
         self.device = sp.cpu_device
+        self.t_map = [t // self.num_encodings for t in range(self.total_images)]
+        self.e_map = [t % self.num_encodings for t in range(self.total_images)]
+
         if res is None:
             self.res = (1, ) * self.D
 
@@ -59,24 +64,29 @@ class MultiScaleLowRankImage(object):
     def __len__(self):
         return self.T
 
-    def _get_img(self, t, idx=None):
+    def _get_img(self, tidx, idx=None):
         with self.device:
             img_t = 0
+
+            # Get the time index
+            t = self.t_map[tidx]
+            e = self.e_map[tidx]
+
             for j in range(self.J):
                 B_j = self._get_B(j)
-                img_t += B_j(self.L[j] * self.R[j][t])[idx]
+                img_t += B_j(self.L[j][e] * self.R[j][t])[idx]
 
         img_t = sp.to_device(img_t, sp.cpu_device)
         return img_t
 
     def __getitem__(self, index):
         if isinstance(index, slice):
-            return np.stack([self._get_img(t) for t in range(self.T)[index]])
+            return np.stack([self._get_img(t) for t in range(self.total_images)[index]])
         elif isinstance(index, tuple):
             tslc = index[0]
             if isinstance(tslc, slice):
                 return np.stack([self._get_img(t, index[1:])
-                                 for t in range(self.T)[tslc]])
+                                 for t in range(self.total_images)[tslc]])
             else:
                 return self._get_img(tslc, index[1:])
         else:

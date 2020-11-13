@@ -115,12 +115,13 @@ if __name__ == "__main__":
         print(f'max kspace {np.max(np.abs(mri_raw.kdata))}')
         lrimg = MultiScaleLowRankRecon(mri_raw.kdata, coord=mri_raw.coords, dcf=mri_raw.dcf, mps=smaps,
                            sgw=None,
-                           blk_widths=(8, 16, 32, 64),
+                           blk_widths=(8, 12, 16, 20, 32, 64),
                            lamda=args.lamda,
                            max_epoch=args.epochs,
                            device=sp.Device(args.device),
                            comm=comm,
-                           log_dir=args.out_folder).run()
+                           log_dir=args.out_folder,
+                           num_encodings=mri_raw.Num_Encodings).run()
 
         out_name = os.path.join(args.out_folder,'MSLRObject.h5')
         lrimg.save(out_name)
@@ -144,6 +145,7 @@ if __name__ == "__main__":
             hf.create_dataset('Sy', data=np.abs(Sy))
             hf.create_dataset('Sx', data=np.abs(Sx))
             hf.create_dataset('Frame0', data=np.abs(Im0))
+            hf.create_dataset('aFrame0', data=np.angle(Im0))
 
         # Export to file
         Im0 = np.reshape(Im0, (args.frames, -1) + Im0.shape[1:])
