@@ -74,19 +74,13 @@ class MultiScaleLowRankRecon(object):
         self.show_pbar = show_pbar and (comm is None or comm.rank == 0)
         self.log_dir = log_dir
 
-        print(self.device)
-        print(f'Ksp: Size = {ksp.shape} , Device = {sp.get_device(ksp)}')
-        print(f'Coord: Size = {coord.shape} , Device = {sp.get_device(coord)}')
-        print(f'dcf: Size = {dcf.shape} , Device = {sp.get_device(dcf)}')
-        print(f'Ksp: Size = {mps.shape} , Device = {sp.get_device(mps)}')
-
         # Initialize random seed so code is reproducible
         np.random.seed(self.seed)
         self.xp = self.device.xp
         with self.device:
             self.xp.random.seed(self.seed)
 
-        self.dtype = self.ksp.dtype
+        self.dtype = self.ksp[0].dtype
         self.num_coils = self.mps.shape[0]
         self.img_shape = self.mps.shape[1:]
         self.num_encodings = num_encodings
@@ -167,7 +161,8 @@ class MultiScaleLowRankRecon(object):
                                     dtype=self.dtype, device=self.device,
                                     show_pbar=self.show_pbar).run()
             print(f'Max_eig {max_eig}')
-            self.dcf /= max_eig
+            for d in self.dcf:
+                d /= max_eig
 
             # Estimate scaling by gridding all the frames
             img_adj = 0
@@ -186,7 +181,8 @@ class MultiScaleLowRankRecon(object):
 
             img_adj_norm = self.xp.linalg.norm(img_adj).item()
             print(f'img_adj_norm = {img_adj_norm}')
-            self.ksp /= img_adj_norm
+            for k in self.ksp:
+                k /= img_adj_norm
 
     def _init_vars(self):
 
