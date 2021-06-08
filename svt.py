@@ -1,7 +1,7 @@
 import time
 import math
 import numba as nb
-import torch as torch
+#import torch as torch
 import sigpy as sp
 import numpy as np
 
@@ -30,7 +30,7 @@ def svt_numba3(output, input, lamda, blk_shape, blk_strides, block_iter, num_enc
             shifts[d,biter] = np.random.randint(blk_shape[d])
 
     for iter in range(block_iter):
-        print('block iter = ',iter)
+        #print('block iter = ',iter)
         shiftz = shifts[0, iter]
         shifty = shifts[1, iter]
         shiftx = shifts[2, iter]
@@ -117,7 +117,7 @@ def svt_numba2(output, input, lamda, blk_shape, blk_strides, block_iter, num_enc
             shifts[d,biter] = np.random.randint(blk_shape[d])
 
     for iter in range(block_iter):
-        print('block iter = ',iter)
+        #print('block iter = ',iter)
         shiftx = shifts[0, iter]
         shifty = shifts[1, iter]
 

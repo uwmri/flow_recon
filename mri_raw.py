@@ -13,7 +13,7 @@ from multi_scale_low_rank_recon import *
 from llr_recon import *
 from svt import *
 import numba as nb
-import torch as torch
+#import torch as torch
 import os
 import scipy.ndimage as ndimage
 
@@ -103,7 +103,7 @@ def pca_coil_compression(kdata=None, axis=0, target_channels=None):
     return kdata
 
 
-def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thresh_maps=True):
+def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thresh_maps=True, log_dir=''):
     logger = logging.getLogger('Get sensitivity maps')
 
     # Set to GPU
@@ -202,8 +202,39 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
             blocked_image = np.moveaxis(blocked_image, -1, 0)  # First axis is coil
 
             smaps = B.H*blocked_image
+        elif smap_type == "lowres":
+            # Get a composite image
+            img_shape = sp.estimate_shape(coord)
+            image = xp.zeros([mri_rawdata.Num_Coils] + img_shape, dtype=xp.complex64)
+
+            for e in range(mri_rawdata.Num_Encodings):
+                kr = sp.get_device(mri_rawdata.coords[e]).xp.sum(mri_rawdata.coords[e] ** 2, axis=-1)
+                kr = sp.to_device(kr, device)
+                lpf = xp.exp(-kr / (2 * (32. ** 2)))
+
+                for c in range(mri_rawdata.Num_Coils):
+                    logger.info(f'Reconstructing encode, coil {e} , {c} ')
+                    ksp = sp.to_device(mri_rawdata.kdata[e][c, ...], device)
+                    ksp *= sp.to_device(mri_rawdata.dcf[e], device)
+                    ksp *= lpf
+                    coords_temp = sp.to_device(mri_rawdata.coords[e], device)
+                    image[c] += sp.nufft_adjoint(ksp, coords_temp, img_shape)
+
+            # Need on CPU for reliable SVD
+            image = sp.to_device(image)
+
+            sos = np.sqrt( np.sum( np.abs(image) **2, axis=0))
+            sos = np.expand_dims(sos, axis=0)
+            sos = sos + np.max(sos)*1e-5
+
+            smaps = image / sos
 
         else:
+
+            dcf = sp.to_device(dcf, device)
+            coord = sp.to_device(coord, device)
+            kdata = sp.to_device(kdata, device)
+
             smaps = mr.app.JsenseRecon(kdata,
                                        coord=coord,
                                        weights=dcf,
@@ -267,7 +298,7 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
     #     mask_cpu = sp.to_device(mask, sp.cpu_device)
 
     # Export to file
-    out_name = 'SenseMaps.h5'
+    out_name = os.path.join(log_dir,'SenseMaps.h5')
     logger.info('Saving images to ' + out_name)
     try:
         os.remove(out_name)
@@ -585,6 +616,7 @@ def load_MRI_raw(h5_filename=None, max_coils=None, compress_coils=False):
             ecg = ecg.flatten()
             dcf = dcf.flatten()
             time = time.flatten()
+            print(f'Min/max = {np.min(time)} {np.max(time)}')
 
             # Get k-space
             ksp = []
@@ -653,6 +685,9 @@ def load_MRI_raw_ou(h5_filename=None, max_coils=None, compress_coils=False):
 
 
     proj = 688*12
+    prep = np.arange(688*12) % 688
+    idx = np.where( (prep < 320) & (prep%2==0) )
+
     with h5py.File(h5_filename, 'r') as hf:
 
         try:
@@ -705,7 +740,7 @@ def load_MRI_raw_ou(h5_filename=None, max_coils=None, compress_coils=False):
             for i in ['Z', 'Y', 'X']:
                 logging.info(f'Loading {i} coord.')
 
-                kcoord = np.array(hf['Kdata'][f'K{i}_E{encode}'])[:,:proj:2,...]
+                kcoord = np.array(hf['Kdata'][f'K{i}_E{encode}'])[:,idx,...]
 
                 # Check range to distinguish 2D from 3D
                 if i == 'Z':
@@ -720,23 +755,23 @@ def load_MRI_raw_ou(h5_filename=None, max_coils=None, compress_coils=False):
             #coordI = -math.sin(math.pi*37/180)*coord[...,0] + math.cos(math.pi*37/180)*coord[...,1]
             #coord = np.stack([coordR, coordI], axis=-1)
 
-            dcf = np.array(hf['Kdata'][f'KW_E{encode}'])[:,:proj:2,...]
+            dcf = np.array(hf['Kdata'][f'KW_E{encode}'])[:,idx,...]
             #dcf = np.ones_like(dcf)
 
             # Load time data
             try:
-                time_readout = np.array(hf['Gating']['time'])[:,:proj:2,...]
+                time_readout = np.array(hf['Gating']['time'])[:,idx,...]
             except Exception:
-                time_readout = np.array(hf['Gating'][f'TIME_E{encode}'])[:,:proj:2,...]
+                time_readout = np.array(hf['Gating'][f'TIME_E{encode}'])[:,idx,...]
 
             temp = np.array(hf['Gating'][f'TIME_E{encode}'])
 
             print(temp.shape)
 
             try:
-                ecg_readout = np.array(hf['Gating']['ecg'])[:,:proj:2,...]
+                ecg_readout = np.array(hf['Gating']['ecg'])[:,idx,...]
             except Exception:
-                ecg_readout = np.array(hf['Gating'][f'ECG_E{encode}'])[:,:proj:2,...]
+                ecg_readout = np.array(hf['Gating'][f'ECG_E{encode}'])[:,idx,...]
 
             '''
             import matplotlib.pyplot as plt
@@ -746,14 +781,14 @@ def load_MRI_raw_ou(h5_filename=None, max_coils=None, compress_coils=False):
             '''
 
             try:
-                prep_readout = np.array(hf['Gating']['prep'])[:,:proj:2,...]
+                prep_readout = np.array(hf['Gating']['prep'])[:,idx,...]
             except Exception:
-                prep_readout = np.array(hf['Gating'][f'PREP_E{encode}'])[:,:proj:2,...]
+                prep_readout = np.array(hf['Gating'][f'PREP_E{encode}'])[:,idx,...]
 
             try:
-                resp_readout = np.array(hf['Gating']['resp'])[:,:proj:2,...]
+                resp_readout = np.array(hf['Gating']['resp'])[:,idx,...]
             except Exception:
-                resp_readout = np.array(hf['Gating'][f'RESP_E{encode}'])[:,:proj:2,...]
+                resp_readout = np.array(hf['Gating'][f'RESP_E{encode}'])[:,idx,...]
 
             # This assigns the same time to each point in the readout
             time_readout = np.expand_dims(time_readout, -1)
@@ -788,7 +823,7 @@ def load_MRI_raw_ou(h5_filename=None, max_coils=None, compress_coils=False):
                 logging.info(f'Loading kspace, coil {c + 1} / {Num_Coils}.')
 
                 k = hf['Kdata'][f'KData_E{encode}_C{c}']
-                ksp.append(np.array(k['real'] + 1j * k['imag'])[:,:proj:2,...].flatten())
+                ksp.append(np.array(k['real'] + 1j * k['imag'])[:,idx,...].flatten())
             ksp = np.stack(ksp, axis=0)
 
             # Append to list
@@ -954,6 +989,9 @@ def autofov(mri_raw=None, device=None,
 
     new_img_shape = sp.estimate_shape(mri_raw.coords[0])
     print(sp.estimate_shape(mri_raw.coords[0]))
+
+
+    #mri_raw.time[0] = np.arange(len(mri_raw.time[0]))
     # print(sp.estimate_shape(mri_raw.coords[1]))
     # print(sp.estimate_shape(mri_raw.coords[2]))
     # print(sp.estimate_shape(mri_raw.coords[3]))

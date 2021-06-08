@@ -362,6 +362,21 @@ class MultiScaleLowRankRecon(object):
                     img_t += self.B[j](self.L[j][e] * self.R[j][t])
                 im = sp.to_device(img_t, sp.cpu_device)
 
+                # Form Dynamic images
+                im_y = []
+                for t in range(self.T):
+                    img_t = 0
+                    for j in range(self.num_scales):
+                        img_t += self.B[j](self.L[j][e] * self.R[j][t])
+
+                    if len(img_t.shape) == 3:
+                        im_slice = img_t[:, img_t.shape[1]//2, :]
+                    elif len(img_t.shape) == 2:
+                        im_slice = img_t
+                    im_y.append(sp.to_device(im_slice, sp.cpu_device))
+                im_y = np.stack(im_y)
+
+
                 out_name = os.path.join(self.log_dir, 'IterMon.h5')
                 if self.epoch == 0:
                     try:
@@ -371,10 +386,12 @@ class MultiScaleLowRankRecon(object):
                     with h5py.File(out_name, 'w') as hf:
                         hf.create_dataset(f'Im{self.epoch:05}', data=np.abs(im))
                         hf.create_dataset(f'Phase{self.epoch:05}', data=np.angle(im))
+                        hf.create_dataset(f'Y{self.epoch:05}', data=np.abs(im_y))
                 else:
                     with h5py.File(out_name, 'a') as hf:
                         hf.create_dataset(f'Im{self.epoch:05}', data=np.abs(im))
                         hf.create_dataset(f'Phase{self.epoch:05}', data=np.angle(im))
+                        hf.create_dataset(f'Y{self.epoch:05}', data=np.abs(im_y))
 
     def _update(self, idx):
 

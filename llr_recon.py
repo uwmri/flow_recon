@@ -1,5 +1,7 @@
 import numpy as np
 import h5py
+import cupy
+import cupy.cudnn
 import sigpy as sp
 import sigpy.mri as mr
 import logging
@@ -95,12 +97,13 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
 
         # put coord and mps to gpu
         mps = sp.to_device(mps, self.gpu_device)
-        coord = sp.to_device(coord, self.gpu_device)
-        weights = sp.to_device(weights, self.gpu_device)
 
-
+        for i in range(len(coord)):
+            coord[i] = sp.to_device(coord[i], sp.Device(self.gpu_device))
+            weights[i] = sp.to_device(weights[i], sp.Device(self.gpu_device))
 
         if fast_maxeig:
+            print('Fast Maxeig')
             A = sp.mri.linop.Sense(mps, coord[0], weights[0], ishape=None,
                                              coil_batch_size=coil_batch_size, comm=comm)
             AHA = A.H * A
@@ -121,16 +124,18 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
             max_eig = sp.app.MaxEig(AHA, dtype=y[0].dtype, device=self.cpu_device, max_iter=self.max_power_iter, show_pbar=self.show_pbar).run()
 
         # Scale the weights
-        with sp.get_device(weights):
-            weights *= 1.0 / max_eig
+        for i in range(len(weights)):
+            with sp.get_device(weights[i]):
+                weights[i] *= 1.0 / max_eig
 
         # Put on GPU
-        y = sp.to_device(y, self.gpu_device)
+        for i in range(len(y)):
+            y[i] = sp.to_device(y[i], self.gpu_device)
 
         # Initialize with an average reconstruction
         if composite_init:
 
-            xp = sp.get_device(y).xp
+            xp = sp.get_device(y[0]).xp
 
             # Create a composite image
             for e in range(self.num_images):
@@ -198,7 +203,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
         A = sp.linop.Diag(grad_ops, oaxis=0, iaxis=0)
 
         if composite_init == False:
-            x = self.cpu_device.xp.zeros(A.ishape, dtype=y.dtype)
+            x = self.cpu_device.xp.zeros(A.ishape, dtype=y[0].dtype)
 
         # block size and stride should be equal, now testing different stride for block shifting problem
         # cardiac recon expected to be lower rank than temporal recon, thus smaller block size (as in cpp wrapper)
@@ -241,8 +246,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
             out_encode = self.num_encodes // 2
             Xiter = xp.copy( temp[out_frame, out_encode])
         else:
-            temp = self.x
-            out_slice = (self.x.shape[0] / self.frames ) // 2
+            out_slice = int((self.x.shape[0] / self.frames ) // 2)
             Xiter = xp.copy( self.x[out_slice])
 
         Xiter = sp.to_device(Xiter, sp.cpu_device)
