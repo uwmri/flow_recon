@@ -38,6 +38,7 @@ if __name__ == "__main__":
     parser.add_argument('--out_folder', type=str, default=None)
     parser.add_argument('--compress_coils', type=int, default=18)
     parser.add_argument('--crop_factor', type=float, default=2)
+    parser.add_argument('--max_encodes', type=int, default=None)
 
     # Input Output
     parser.add_argument('--filename', type=str, help='filename for data (e.g. MRI_Raw.h5)')

@@ -149,20 +149,21 @@ class MRI_4DFlow:
         # Unwrap phase for all encodes
         num_enc = phase.shape[4]
 
-        # Start loop in second encode (first was use to reference)
-        phase_wrap = []
-        phase = np.squeeze(phase)
-        print('Starting Laplacian based phase unwrapping')
-        for i in range(num_enc - 1):
-            phase_wrap = np.copy(phase[:, :, :, :, i + 1])
-            # Find phase wraps
-            n_jumps = unwrap_4d(phase_wrap)
+        if phase.shape[0] > 1:
+            # Start loop in second encode (first was use to reference)
+            phase_wrap = []
+            phase = np.squeeze(phase)
+            print('Starting Laplacian based phase unwrapping')
+            for i in range(num_enc - 1):
+                phase_wrap = np.copy(phase[:, :, :, :, i + 1])
+                # Find phase wraps
+                n_jumps = unwrap_4d(phase_wrap)
 
-            # Unwrap phase
-            phase[:, :, :, :, i + 1] = phase[:, :, :, :, i + 1] + 2 * np.pi * n_jumps
+                # Unwrap phase
+                phase[:, :, :, :, i + 1] = phase[:, :, :, :, i + 1] + 2 * np.pi * n_jumps
 
-        phase = np.expand_dims(phase, -1)
-        print('Laplacian based phase unwrapping finished')
+            phase = np.expand_dims(phase, -1)
+            print('Laplacian based phase unwrapping finished')
 
         #Solve for velocity
         self.velocity_estimate = np.matmul(self.DecodingMatrix*self.Venc,phase)
@@ -308,6 +309,9 @@ if __name__ == "__main__":
         #frames = int(temp.shape[0]/4)
         #temp = np.reshape(temp, newshape=(frames,4, temp.shape[1], temp.shape[2], temp.shape[3]))
         # temp = np.reshape(temp, newshape=(10,4, temp.shape[-3], temp.shape[-2], temp.shape[-1]))
+
+        if len(temp.shape) == 4:
+            temp = np.expand_dims(temp,axis=0)
 
         frames = int(temp.shape[0])
         num_encodes = int(temp.shape[1])

@@ -35,6 +35,8 @@ class MRI_Raw:
     target_image_size = [256, 256, 64]
 
 
+
+
 def pca_coil_compression(kdata=None, axis=0, target_channels=None):
     logger = logging.getLogger('PCA_CoilCompression')
 
@@ -396,6 +398,53 @@ def crop_kspace(mri_rawdata=None, crop_factor=2, crop_type='radius'):
         logger.info(f'New shape = {sp.estimate_shape(mri_rawdata.coords[e])}')
 
 
+def get_gate_bins( gate_signal, gate_type, num_frames, discrete_gates=False):
+    logger = logging.getLogger('Get Gate bins')
+
+    print(gate_signal)
+    print(gate_signal[0].dtype)
+
+    # Loop over all encodes
+    t_min = np.min([np.min(gate) for gate in gate_signal])
+    t_max = np.max([np.max(gate) for gate in gate_signal])
+
+    if gate_type == 'ecg':
+        logger.info('Using median ECG value for tmax')
+        median_rr = np.mean([np.median(gate) for gate in gate_signal])
+        median_rr = 2.0 * (median_rr - t_min) + t_min
+        t_max = median_rr
+        logger.info(f'Median RR = {median_rr}')
+
+        # Check the range
+        sum_within = np.sum([np.sum(gate < t_max) for gate in gate_signal])
+        sum_total = np.sum([gate.size for gate in gate_signal])
+        within_rr = 100.0 * sum_within / sum_total
+        logger.info(f'ECG, {within_rr} percent within RR')
+    elif gate_type == 'resp':
+        # Outlier rejection
+        q05 = np.mean([np.quantile(gate, 0.05) for gate in gate_signal])
+        q95 = np.mean([np.quantile(gate, 0.95) for gate in gate_signal])
+
+        # Linear fit
+        t_max = q95 + (q95 - q05) / 0.9 * 0.05
+        t_min = q05 + (q95 - q05) / 0.9 * -0.05
+
+    if discrete_gates:
+        t_min -= 0.5
+        t_max += 0.5
+    else:
+        # Pad so bins are inclusive
+        t_min -= 1e-6
+        t_max += 1e-6
+
+    logger.info(f'Max time = {t_max}')
+    logger.info(f'Min time = {t_min}')
+
+    delta_time = (t_max - t_min) / num_frames
+    logger.info(f'Delta = {delta_time}')
+
+    return t_min, t_max, delta_time
+
 def gate_kspace(mri_raw=None, num_frames=10, gate_type='time', discrete_gates=False):
     logger = logging.getLogger('Gate k-space')
 
@@ -427,43 +476,7 @@ def gate_kspace(mri_raw=None, num_frames=10, gate_type='time', discrete_gates=Fa
 
     print(f'Gating off of {gate_type}')
 
-    # Loop over all encodes
-    t_min = np.min([np.min(gate_signal[e]) for e in range(mri_raw.Num_Encodings)])
-    t_max = np.max([np.max(gate_signal[e]) for e in range(mri_raw.Num_Encodings)])
-    if gate_type == 'ecg':
-        logger.info('Using median ECG value for tmax')
-        median_rr = np.mean([np.median(gate_signal[e]) for e in range(mri_raw.Num_Encodings)])
-        median_rr = 2.0 * (median_rr - t_min) + t_min
-        t_max = median_rr
-        logger.info(f'Median RR = {median_rr}')
-
-        # Check the range
-        sum_within = np.sum([np.sum(gate_signal[e] < t_max) for e in range(mri_raw.Num_Encodings)])
-        sum_total = np.sum([gate_signal[e].size for e in range(mri_raw.Num_Encodings)])
-        within_rr = 100.0 * sum_within / sum_total
-        logger.info(f'ECG, {within_rr} percent within RR')
-    elif gate_type == 'resp':
-        # Outlier rejection
-        q05 = np.mean([np.quantile(gate_signal[e], 0.05) for e in range(mri_raw.Num_Encodings)])
-        q95 = np.mean([np.quantile(gate_signal[e], 0.95) for e in range(mri_raw.Num_Encodings)])
-
-        # Linear fit
-        t_max = q95 + (q95 - q05) / 0.9 * 0.05
-        t_min = q05 + (q95 - q05) / 0.9 * -0.05
-
-    if discrete_gates:
-        t_min -= 0.5
-        t_max += 0.5
-    else:
-        # Pad so bins are inclusive
-        t_min -= 1e-6
-        t_max += 1e-6
-
-    logger.info(f'Max time = {t_max}')
-    logger.info(f'Min time = {t_min}')
-
-    delta_time = (t_max - t_min) / num_frames
-    logger.info(f'Delta = {delta_time}')
+    t_min, t_max, delta_time = get_gate_bins(gate_signal, gate_type, num_frames, discrete_gates)
 
     points_per_bin = []
     count = 0
@@ -504,9 +517,11 @@ def gate_kspace(mri_raw=None, num_frames=10, gate_type='time', discrete_gates=Fa
         f'Average points per bin = {np.mean(points_per_bin)} [ {np.min(points_per_bin)}  {np.max(points_per_bin)} ]')
     logger.info(f'Standard deviation = {np.std(points_per_bin)}')
 
+    mri_rawG.Num_Frames = num_frames
+
     return (mri_rawG)
 
-def load_MRI_raw(h5_filename=None, max_coils=None, compress_coils=False):
+def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_coils=False):
     with h5py.File(h5_filename, 'r') as hf:
 
         try:
@@ -534,10 +549,14 @@ def load_MRI_raw(h5_filename=None, max_coils=None, compress_coils=False):
         if max_coils is not None:
             Num_Coils = min(max_coils, Num_Coils)
 
+        if max_encodes is not None:
+            Num_Encodings = min(max_encodes, Num_Encodings)
+
         # Get the MRI Raw structure setup
         mri_raw = MRI_Raw()
         mri_raw.Num_Coils = int(Num_Coils)
         mri_raw.Num_Encodings = int(Num_Encodings)
+        mri_raw.Num_Frames = int(Num_Frames)
         mri_raw.dft_needed = tuple(dft_needed)
         mri_raw.trajectory_type = tuple(trajectory_type)
 
@@ -550,7 +569,7 @@ def load_MRI_raw(h5_filename=None, max_coils=None, compress_coils=False):
         mri_raw.ecg = []
         mri_raw.resp = []
 
-        for encode in range(Num_Encodings):
+        for encode in range(Num_Encodings*Num_Frames):
 
             logging.info(f'Loading encode {encode}')
 
@@ -600,23 +619,32 @@ def load_MRI_raw(h5_filename=None, max_coils=None, compress_coils=False):
             except Exception:
                 resp_readout = np.array(hf['Gating'][f'RESP_E{encode}'])
 
-            # This assigns the same time to each point in the readout
-            time_readout = np.expand_dims(time_readout, -1)
-            ecg_readout = np.expand_dims(ecg_readout, -1)
-            resp_readout = np.expand_dims(resp_readout, -1)
-            prep_readout = np.expand_dims(prep_readout, -1)
+            if resp_readout.size != dcf.size:
 
-            time = np.tile(time_readout, (1, 1, dcf.shape[2]))
-            resp = np.tile(resp_readout, (1, 1, dcf.shape[2]))
-            ecg = np.tile(ecg_readout, (1, 1, dcf.shape[2]))
-            prep = np.tile(prep_readout, (1, 1, dcf.shape[2]))
+                # This assigns the same time to each point in the readout
+                time_readout = np.expand_dims(time_readout, -1)
+                ecg_readout = np.expand_dims(ecg_readout, -1)
+                resp_readout = np.expand_dims(resp_readout, -1)
+                prep_readout = np.expand_dims(prep_readout, -1)
 
-            prep = prep.flatten()
-            resp = resp.flatten()
-            ecg = ecg.flatten()
-            dcf = dcf.flatten()
-            time = time.flatten()
-            print(f'Min/max = {np.min(time)} {np.max(time)}')
+                time = np.tile(time_readout, (1, 1, dcf.shape[2]))
+                resp = np.tile(resp_readout, (1, 1, dcf.shape[2]))
+                ecg = np.tile(ecg_readout, (1, 1, dcf.shape[2]))
+                prep = np.tile(prep_readout, (1, 1, dcf.shape[2]))
+
+                prep = prep.flatten()
+                resp = resp.flatten()
+                ecg = ecg.flatten()
+                dcf = dcf.flatten()
+                time = time.flatten()
+                print(f'Min/max = {np.min(time)} {np.max(time)}')
+
+            else:
+                time = time_readout.flatten()
+                resp = resp_readout.flatten()
+                ecg = ecg_readout.flatten()
+                prep = prep_readout.flatten()
+                dcf = dcf.flatten()
 
             # Get k-space
             ksp = []
@@ -624,7 +652,10 @@ def load_MRI_raw(h5_filename=None, max_coils=None, compress_coils=False):
                 logging.info(f'Loading kspace, coil {c + 1} / {Num_Coils}.')
 
                 k = hf['Kdata'][f'KData_E{encode}_C{c}']
-                ksp.append(np.array(k['real'] + 1j * k['imag']).flatten())
+                try:
+                    ksp.append(np.array(k['real'] + 1j * k['imag']).flatten())
+                except:
+                    ksp.append(k)
             ksp = np.stack(ksp, axis=0)
 
             # Append to list
@@ -681,6 +712,55 @@ def load_MRI_raw(h5_filename=None, max_coils=None, compress_coils=False):
         return mri_raw
 
 
+
+def save_MRI_raw(mri_raw, h5_filename=None):
+    import os
+    try:
+        os.remove(h5_filename)
+    except OSError:
+        pass
+
+    with h5py.File(h5_filename, 'w') as hf:
+
+        grp = hf.create_group("Kdata")
+        gate_grp = hf.create_group("Gating")
+
+        grp.attrs['Num_Encodings'] = mri_raw.Num_Encodings
+        grp.attrs['Num_Coils'] = mri_raw.Num_Coils
+        grp.attrs['Num_Frames'] = 1 if mri_raw.Num_Frames is None else mri_raw.Num_Frames
+
+        grp.attrs['trajectory_typeX'] = mri_raw.trajectory_type[2]
+        grp.attrs['trajectory_typeY'] = mri_raw.trajectory_type[1]
+        grp.attrs['trajectory_typeZ'] = mri_raw.trajectory_type[0]
+
+        grp.attrs['dft_neededX'] = mri_raw.dft_needed[2]
+        grp.attrs['dft_neededY'] = mri_raw.dft_needed[1]
+        grp.attrs['dft_neededZ'] = mri_raw.dft_needed[0]
+
+        for encode in range(len(mri_raw.kdata)):
+
+            logging.info(f'Writing encode {encode}')
+
+            # Write the coordinates
+            grp.create_dataset(f'KX_E{encode}',data=mri_raw.coords[encode][...,2])
+            grp.create_dataset(f'KY_E{encode}',data=mri_raw.coords[encode][...,1])
+            grp.create_dataset(f'KZ_E{encode}',data=mri_raw.coords[encode][...,0])
+            grp.create_dataset(f'KW_E{encode}',data=mri_raw.dcf[encode])
+
+            # Write the gating
+            gate_grp.create_dataset(f'TIME_E{encode}', data=mri_raw.time[encode])
+            gate_grp.create_dataset(f'ECG_E{encode}', data=mri_raw.ecg[encode])
+            gate_grp.create_dataset(f'PREP_E{encode}', data=mri_raw.prep[encode])
+            gate_grp.create_dataset(f'RESP_E{encode}', data=mri_raw.resp[encode])
+
+            # Write k-space
+            for c in range(mri_raw.Num_Coils):
+                logging.info(f'Writing kspace, coil {c + 1} / {mri_raw.Num_Coils}.')
+
+                grp.create_dataset(f'KData_E{encode}_C{c}', data=mri_raw.kdata[encode][c])
+
+
+
 def load_MRI_raw_ou(h5_filename=None, max_coils=None, compress_coils=False):
 
 
@@ -718,7 +798,7 @@ def load_MRI_raw_ou(h5_filename=None, max_coils=None, compress_coils=False):
         # Get the MRI Raw structure setup
         mri_raw = MRI_Raw()
         mri_raw.Num_Coils = int(Num_Coils)
-        mri_raw.Num_Encodings = int(Num_Encodings)
+        mri_raw.Num_Encodings = int(Num_Encodings*Num_Frames)
         mri_raw.dft_needed = tuple(dft_needed)
         mri_raw.trajectory_type = tuple(trajectory_type)
 
@@ -880,7 +960,7 @@ def load_MRI_raw_ou(h5_filename=None, max_coils=None, compress_coils=False):
         return mri_raw
 
 def autofov(mri_raw=None, device=None,
-            thresh=0.05, scale=1, oversample=2.0):
+            thresh=0.05, scale=1, oversample=2.0, square=True):
     logger = logging.getLogger('autofov')
 
     # Set to GPU
@@ -964,6 +1044,8 @@ def autofov(mri_raw=None, device=None,
 
     # Scale to new FOV
     target_recon_size = sp.estimate_shape(coord) * target_recon_scale
+    if square:
+        target_recon_size[:] = np.max(target_recon_size)
 
     # Round to 16 for blocks and FFT
     target_recon_size = 16 * np.ceil(target_recon_size / 16)
