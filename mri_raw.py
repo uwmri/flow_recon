@@ -151,6 +151,8 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
 
         elif smap_type == 'walsh':
 
+            logger = logging.getLogger('walsh')
+
             # Get a composite image
             img_shape = sp.estimate_shape(coord)
             image = xp.zeros([mri_rawdata.Num_Coils] + img_shape, dtype=xp.complex64)
@@ -171,12 +173,21 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
             # Need on CPU for reliable SVD
             image = sp.to_device(image)
 
+            logger.info(f'Image size {image.shape}')
+
             # Block operator
-            block_shape = [16, 16]
-            B = sp.linop.ArrayToBlocks(image.shape, block_shape, [1,1])
+            if len(image.shape) == 4:
+                block_shape = [8, 8, 8]
+                block_stride = [8, 8, 8]
+            else:
+                block_shape = [8, 8]
+                block_stride = [8, 8]
+
+            B = sp.linop.ArrayToBlocks(image.shape, block_shape, block_stride)
 
             # Grab blocks
             blocked_image = B*image
+            logger.info(f'Blocked images size {blocked_image.shape}')
 
             # Reshape to blocks x pixels x coils
             blocked_image = np.moveaxis(blocked_image, 0, -1)  # First axis is coil
@@ -200,7 +211,7 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
                 blocked_image[bi] = coil0[:,np.newaxis]*s[np.newaxis,:]
 
             # Reshape back
-            blocked_ksp_calib_widthimage = np.reshape(blocked_image, old_shape)
+            blocked_image = np.reshape(blocked_image, old_shape)
             blocked_image = np.moveaxis(blocked_image, -1, 0)  # First axis is coil
 
             smaps = B.H*blocked_image
@@ -445,7 +456,7 @@ def get_gate_bins( gate_signal, gate_type, num_frames, discrete_gates=False):
 
     return t_min, t_max, delta_time
 
-def gate_kspace(mri_raw=None, num_frames=10, gate_type='time', discrete_gates=False):
+def gate_kspace(mri_raw=None, num_frames=10, gate_type='time', discrete_gates=False, ecg_delay=300e-3):
     logger = logging.getLogger('Gate k-space')
 
     # Assume the input is a list
@@ -473,6 +484,29 @@ def gate_kspace(mri_raw=None, num_frames=10, gate_type='time', discrete_gates=Fa
         'resp': mri_raw.resp
     }
     gate_signal = gate_signals.get(gate_type, f'Cannot interpret gate signal {gate_type}')
+
+    # For ECG, delay the waveform
+    if gate_type == 'ecg':
+        time = mri_raw.time
+
+        for e in range(mri_raw.Num_Encodings):
+            time_encode = time[e]
+            ecg_encode = gate_signal[e]
+
+            # Sort the data by time
+            idx = np.argsort(time_encode)
+            idx_inverse = idx.argsort()
+
+            # Estimate the delay
+            if e == 0:
+                ecg_shift = int(ecg_delay / time_encode.max() * time_encode.size)
+                print(f'Shifting by {ecg_shift}')
+
+            # Using circular shift for now. This should be fixed
+            ecg_sorted = ecg_encode[idx]
+            ecg_shifted = np.roll( ecg_sorted, ecg_shift)
+
+            gate_signal[e] = ecg_shifted
 
     print(f'Gating off of {gate_type}')
 

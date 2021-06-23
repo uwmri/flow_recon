@@ -30,9 +30,16 @@ def load_images( file_nav=None):
     return images
 
 def estimate_mask( images):
+    r"""Estimates a mask with the zprofile of exciation
+
+    Args:
+        images (array): a 4D array [Nt x Nz x Ny x Nz ] to
+    Returns:
+        mask (array): a mask broad castable to the image size for weighted mean square error
+    """
 
     # Create a mask for the zprofile
-    avg = np.mean(images, axis=0)
+    avg = np.mean(images, axis=(0,1))
     avg /= np.max(avg)
     zprofile = np.max( avg, axis=(-2,-1))
     zprofile_idx = np.nonzero(np.squeeze(zprofile > 0.1))
@@ -40,8 +47,7 @@ def estimate_mask( images):
     stop_idx = zprofile_idx[0][-1] - 10
 
     mask = np.zeros_like(avg)
-    mask[:,start_idx:stop_idx,:,:] = 1.0
-
+    mask[start_idx:stop_idx,:,:] = 1.0
     return mask
 
 def register_images( images, mask, logdir=None):
@@ -58,18 +64,6 @@ def register_images( images, mask, logdir=None):
     # Ensure mask is a tensor on gpu
     mask = torch.tensor(mask).to('cuda')
 
-    # Register the images
-    all_tx = []
-    all_ty = []
-    all_tz = []
-
-    all_phi = []
-    all_psi = []
-    all_theta = []
-    all_images = []
-    all_moving = []
-    all_loss = []
-
     # The model is declared once so that we only need to estimate differences from frame to frame
     model = RigidRegistration()
     model.cuda()
@@ -77,6 +71,7 @@ def register_images( images, mask, logdir=None):
     fixed_image = torch.tensor(images[0]).to('cuda')
     fixed_image = fixed_image.view(-1, 1, fixed_image.shape[-3], fixed_image.shape[-2], fixed_image.shape[-1])
     fixed_image /= torch.max(fixed_image)
+    print(f'Fixed image shape {fixed_image.shape}')
 
     # Pad to be square
     max_size = torch.max(torch.tensor(fixed_image.shape))
@@ -88,13 +83,32 @@ def register_images( images, mask, logdir=None):
     pad_f = (pad_amount1, pad_amount1, pad_amount2, pad_amount2, pad_amount3, pad_amount3)
     fixed_image = nn.functional.pad(fixed_image, pad_f)
 
-    for idx in range(0, images.shape[0]):
+    mask = nn.functional.pad(mask, pad_f)
+
+    # Register the images
+    all_tx = []
+    all_ty = []
+    all_tz = []
+    all_phi = []
+    all_psi = []
+    all_theta = []
+    all_images = [fixed_image.detach().cpu().numpy(),]
+    all_moving = [fixed_image.detach().cpu().numpy(),]
+    all_loss = []
+    all_tx.append(model.tx.detach().cpu().numpy())
+    all_ty.append(model.ty.detach().cpu().numpy())
+    all_tz.append(model.tz.detach().cpu().numpy())
+    all_phi.append(model.phi.detach().cpu().numpy())
+    all_psi.append(model.psi.detach().cpu().numpy())
+    all_theta.append(model.theta.detach().cpu().numpy())
+
+    for idx in range(1, images.shape[0]):
 
         print(f'Image {idx} of {images.shape[0]}')
 
         moving_image = torch.tensor( images[idx] ).to('cuda')
         moving_image /= torch.max( moving_image)
-        moving_image = moving_image.view(-1, 1, fixed_image.shape[-3], fixed_image.shape[-2], fixed_image.shape[-1])
+        moving_image = moving_image.view(-1, 1, moving_image.shape[-3], moving_image.shape[-2], moving_image.shape[-1])
 
         moving_image = nn.functional.pad(moving_image, pad_f)
 
@@ -170,6 +184,20 @@ def register_images( images, mask, logdir=None):
     return all_tx, all_ty, all_tz, all_phi, all_psi, all_theta
 
 def correct_MRI_Raw( file_data, tx, ty, tz, phi, psi, theta, out_folder):
+    r"""This perfroms rigid motion correction of k-space data using the
+
+    Args:
+        file_data (str): name of the MRI file to load
+        tx(array): translation in x, in fraction of FOV [-1,1]
+        ty(array): translation in y, in fraction of FOV [-1,1]
+        tz(array): translation in z, in fraction of FOV [-1,1]
+        phi(array): rotation angle [rad]
+        psi(array): rotation angle [rad]
+        theta(array): rotation angle [rad]
+
+    Returns:
+        mri_raw(class): contains to corrected MRI data
+    """
 
     # Get the frame center
     mri_raw = load_MRI_raw(h5_filename=file_data)
@@ -233,6 +261,8 @@ if __name__ == '__main__':
     parser.add_argument('--file_data', type=str, help='filename for data (e.g. FullRecon.h5)', default='MRI_Raw_Corrected.h5')
     parser.add_argument('--logdir', type=str, help='folder to log files to, default is current directory', default=None)
     parser.add_argument('--out_folder', type=str, default=None)
+    parser.add_argument('--out_filename', type=str, default='MRI_Raw_Corrected.h5')
+
     args = parser.parse_args()
 
     if args.out_folder is None:
@@ -254,7 +284,7 @@ if __name__ == '__main__':
     mri_raw = correct_MRI_Raw(args.file_data, tx, ty, tz, phi, psi, theta, args.out_folder)
 
     # Save to corrected version
-    out_name = os.path.join(args.out_folder, 'MRI_Raw_Corrected.h5')
+    out_name = os.path.join(args.out_folder, args.out_filename)
     print(f'Saving corrected data to {out_name}')
     save_MRI_raw(mri_raw, h5_filename=out_name)
 

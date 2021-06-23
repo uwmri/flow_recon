@@ -58,6 +58,7 @@ if __name__ == "__main__":
     parser.add_argument('--filename', type=str, help='filename for data (e.g. MRI_Raw.h5)')
     parser.add_argument('--logdir', type=str, help='folder to log files to, default is current directory')
     parser.add_argument('--out_folder', type=str, default=None)
+    parser.add_argument('--out_filename', type=str, default='FullRecon.h5')
 
     args = parser.parse_args()
 
@@ -86,6 +87,7 @@ if __name__ == "__main__":
         mri_raw = load_MRI_raw(h5_filename=args.filename, compress_coils=args.compress_coils, max_encodes=args.max_encodes)
     print(f'Min/max = {np.max(mri_raw.time[0])} {np.max(mri_raw.time[0])}')
 
+
     num_enc = mri_raw.Num_Encodings
     if args.crop_factor > 1.0:
         crop_kspace(mri_rawdata=mri_raw, crop_factor=args.crop_factor)  # 2.5 (320/128)
@@ -106,7 +108,7 @@ if __name__ == "__main__":
             # MSLR doesn't work with zeros in sensitivity map yet
             smaps = get_smaps(mri_rawdata=mri_raw, args=args, thresh_maps=False, smap_type='jsense', log_dir=args.out_folder)
         else:
-            smaps = get_smaps(mri_rawdata=mri_raw, args=args, thresh_maps=False, smap_type='jsense', log_dir=args.out_folder)
+            smaps = get_smaps(mri_rawdata=mri_raw, args=args, thresh_maps=False, smap_type='lowres', log_dir=args.out_folder)
 
     # Gate k-space
     if args.frames > 1:
@@ -249,8 +251,8 @@ if __name__ == "__main__":
             print(f'DCF device = {sp.get_device(dcf)}')
             print(f'Coord device = {sp.get_device(coord)}')
 
-            #sense = sp.mri.app.SenseRecon(kdata, smaps, lamda=0, weights=dcf, coord=coord, max_iter=10, coil_batch_size=1, device=args.device)
-            sense = sp.mri.app.L1WaveletRecon(kdata, smaps, lamda=1e-1, weights=dcf, coord=coord, max_iter=50, coil_batch_size=1, device=args.device)
+            sense = sp.mri.app.SenseRecon(kdata, smaps, lamda=0, weights=dcf, coord=coord, max_iter=5, coil_batch_size=1, device=args.device)
+            #sense = sp.mri.app.L1WaveletRecon(kdata, smaps, lamda=1e-1, weights=dcf, coord=coord, max_iter=50, coil_batch_size=1, device=args.device)
 
             print('Run Sense')
             img.append(sp.to_device(sense.run()))
@@ -272,22 +274,23 @@ if __name__ == "__main__":
             res = args.krad_cutoff
             lpf = xp.sum(coord ** 2, axis=-1)
             lpf = xp.exp(-lpf / (2.0 * res * res))
-
             dcf = dcf * lpf
+
             E = sp.mri.linop.Sense(mps=smaps, coord=coord, weights=dcf ** 2, coil_batch_size=1)
             Eh = E.H
 
             img.append(sp.to_device(Eh * kdata))
 
+    # Copy to CPU and reshape
     img = np.stack(img,axis=0)
     img = sp.to_device(img, sp.cpu_device)
+    img = np.reshape(img, (args.frames, -1) + img.shape[1:])
 
-    img = sp.to_device(img, sp.cpu_device)
     img_mag = np.abs(img)
     img_phase = np.angle(img)
 
     # Export to file
-    out_name = os.path.join(args.out_folder, 'FullRecon.h5')
+    out_name = os.path.join(args.out_folder, args.out_filename)
     logger.info('Saving images to ' + out_name)
     try:
         os.remove(out_name)

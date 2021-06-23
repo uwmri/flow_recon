@@ -13,6 +13,9 @@ import math
 
 # Laplacian based phase unwrapping
 def unwrap_4d(phase_w):
+
+    logger = logging.getLogger('Laplacian Unwrap')
+
     ts = 2.0  # scales temporal data to spatial dimentions
     # real_flag = 1 # restrict laplacians to real (lowers memory load)
     phase_w = np.moveaxis(phase_w, 0, -1)  # x y z t
@@ -34,8 +37,13 @@ def unwrap_4d(phase_w):
     Z = None
     T = None
 
+    logger.info('Laplacian')
+    print('Forward')
     lap_phase_w = lap4(phase_w, 1, mod)
     lap_phase = np.cos(phase_w) * lap4(np.sin(phase_w), 1, mod) - np.sin(phase_w) * lap4(np.cos(phase_w), 1, mod)
+
+    logger.info('Inverse Laplacian')
+    print('Backwards')
     ilap_phasediff = lap4(lap_phase - lap_phase_w, -1, mod)
     n_u4 = np.int8(np.real(np.ndarray.round(ilap_phasediff / 2 / np.pi)))
 
@@ -149,21 +157,27 @@ class MRI_4DFlow:
         # Unwrap phase for all encodes
         num_enc = phase.shape[4]
 
-        if phase.shape[0] > 1:
-            # Start loop in second encode (first was use to reference)
-            phase_wrap = []
-            phase = np.squeeze(phase)
-            print('Starting Laplacian based phase unwrapping')
-            for i in range(num_enc - 1):
-                phase_wrap = np.copy(phase[:, :, :, :, i + 1])
-                # Find phase wraps
-                n_jumps = unwrap_4d(phase_wrap)
+        unwrap_lap = False
+        if unwrap_lap:
+            if phase.shape[0] > 1:
+                # Start loop in second encode (first was use to reference)
+                phase_wrap = []
+                phase = np.squeeze(phase)
+                print('Starting Laplacian based phase unwrapping')
+                for i in range(num_enc - 1):
+                    print(f'Copy encode {i}')
+                    phase_wrap = np.copy(phase[:, :, :, :, i + 1])
 
-                # Unwrap phase
-                phase[:, :, :, :, i + 1] = phase[:, :, :, :, i + 1] + 2 * np.pi * n_jumps
+                    # Find phase wraps
+                    print(f'Unwrap the encode {i}')
+                    n_jumps = unwrap_4d(phase_wrap)
 
-            phase = np.expand_dims(phase, -1)
-            print('Laplacian based phase unwrapping finished')
+                    # Unwrap phase
+                    print(f'Apply unwrap {i}')
+                    phase[:, :, :, :, i + 1] = phase[:, :, :, :, i + 1] + 2 * np.pi * n_jumps
+
+                phase = np.expand_dims(phase, -1)
+                print('Laplacian based phase unwrapping finished')
 
         #Solve for velocity
         self.velocity_estimate = np.matmul(self.DecodingMatrix*self.Venc,phase)
@@ -200,7 +214,7 @@ class MRI_4DFlow:
         z, y, x = np.meshgrid(np.linspace(-1, 1, self.velocity_estimate.shape[1]),
                               np.linspace(-1, 1, self.velocity_estimate.shape[2]),
                               np.linspace(-1, 1, self.velocity_estimate.shape[3]),
-                              )
+                              indexing='ij')
 
         # Grab array
         vavg = np.squeeze( np.mean( self.velocity_estimate, axis=0))
@@ -287,6 +301,8 @@ if __name__ == "__main__":
     # Input Output
     parser.add_argument('--filename', type=str, help='filename for data (e.g. FullRecon.h5)', default=None)
     parser.add_argument('--logdir', type=str, help='folder to log files to, default is current directory')
+    parser.add_argument('--out_folder', type=str, default=None)
+    parser.add_argument('--out_filename', type=str, default='Flow.h5')
 
     args = parser.parse_args()
 
@@ -298,7 +314,10 @@ if __name__ == "__main__":
         Tk().withdraw()
         args.filename = askopenfilename()
 
-    out_folder = os.path.dirname(args.filename)
+    if args.out_folder is None:
+        out_folder = os.path.dirname(args.filename)
+    else:
+        out_folder = args.out_folder
 
     print(f'Loading {args.filename}')
     with h5py.File(args.filename, 'r') as hf:
@@ -337,12 +356,12 @@ if __name__ == "__main__":
     mri_flow = MRI_4DFlow(encode_type= encoding, venc=args.venc)
     mri_flow.signal = temp
     mri_flow.solve_for_velocity()
-    #mri_flow.update_angiogram()
-    #mri_flow.background_phase_correct()
     mri_flow.update_angiogram()
+    #mri_flow.background_phase_correct()
+    #mri_flow.update_angiogram()
 
     # Export to file
-    out_name = os.path.join(out_folder, 'Flow.h5')
+    out_name = os.path.join(out_folder, args.out_filename)
     try:
         os.remove(out_name)
     except OSError:

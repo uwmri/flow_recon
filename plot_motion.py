@@ -4,7 +4,7 @@ import h5py
 import matplotlib
 #matplotlib.rcParams['text.usetex'] = True
 
-with h5py.File('Q:/BBF/RegisteredImages.h5','r') as hf:
+with h5py.File('Q:/FlowMotion/RegisteredImages.h5','r') as hf:
     all_phi = np.array(hf['phi'])
     all_theta = np.array(hf['theta'])
     all_psi = np.array(hf['psi'])
@@ -19,7 +19,7 @@ with h5py.File('Q:/BBF/RegisteredImages.h5','r') as hf:
 dx = 220/320 * 2
 dy = 220/320 * 2
 dz = 220/320 * 2
-dt = 427.7 / 128
+dt = 427.7 / float(len(all_tx))
 
 tt = np.arange(len(all_tx)) * dt
 
