@@ -38,14 +38,17 @@ def estimate_mask( images):
         mask (array): a mask broad castable to the image size for weighted mean square error
     """
 
-    # Create a mask for the zprofile
-    avg = np.mean(images, axis=(0,1))
+
+    # Average images
+    avg = np.mean(images, axis=tuple(range(len(images.shape)-3)))
     avg /= np.max(avg)
+
+    # Create a mask for the zprofile
     zprofile = np.max( avg, axis=(-2,-1))
     zprofile_idx = np.nonzero(np.squeeze(zprofile > 0.1))
     start_idx = zprofile_idx[0][0] + 10
     stop_idx = zprofile_idx[0][-1] - 10
-
+    print(f'Start idx = {start_idx} , stop idx {stop_idx}')
     mask = np.zeros_like(avg)
     mask[start_idx:stop_idx,:,:] = 1.0
     return mask
@@ -70,6 +73,7 @@ def register_images( images, mask, logdir=None):
 
     fixed_image = torch.tensor(images[0]).to('cuda')
     fixed_image = fixed_image.view(-1, 1, fixed_image.shape[-3], fixed_image.shape[-2], fixed_image.shape[-1])
+    print(f'Fixed image max {torch.max(fixed_image)}')
     fixed_image /= torch.max(fixed_image)
     print(f'Fixed image shape {fixed_image.shape}')
 
@@ -107,6 +111,7 @@ def register_images( images, mask, logdir=None):
         print(f'Image {idx} of {images.shape[0]}')
 
         moving_image = torch.tensor( images[idx] ).to('cuda')
+        print(f'Max moving = {torch.max( moving_image)}')
         moving_image /= torch.max( moving_image)
         moving_image = moving_image.view(-1, 1, moving_image.shape[-3], moving_image.shape[-2], moving_image.shape[-1])
 
@@ -138,7 +143,7 @@ def register_images( images, mask, logdir=None):
 
             if epoch ==0:
                 loss0 = loss.item()
-            loss_monitor.append(loss.item()/loss0)
+            loss_monitor.append(loss.item()/(loss0+1e-9))
             if epoch > loss_window:
                 dloss = loss_monitor[-loss_window] - loss_monitor[-1]
                 if dloss < loss_thresh:

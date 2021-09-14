@@ -740,8 +740,9 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_co
                 mri_raw.Num_Coils = 20
 
             if Num_Coils > 32:
-                mri_raw.kdata = pca_coil_compression(kdata=mri_raw.kdata, axis=0, target_channels=28)
+                mri_raw.kdata = pca_coil_compression(kdata=mri_raw.kdata, axis=0, target_channels=20)
                 mri_raw.Num_Coils = 28
+                mri_raw.Num_Coils = 20
 
         return mri_raw
 
@@ -990,6 +991,8 @@ def load_MRI_raw_ou(h5_filename=None, max_coils=None, compress_coils=False):
             if Num_Coils > 32:
                 mri_raw.kdata = pca_coil_compression(kdata=mri_raw.kdata, axis=0, target_channels=28)
                 mri_raw.Num_Coils = 28
+                mri_raw.Num_Coils = 20
+
 
         return mri_raw
 

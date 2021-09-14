@@ -255,7 +255,7 @@ if __name__ == "__main__":
             #sense = sp.mri.app.L1WaveletRecon(kdata, smaps, lamda=1e-1, weights=dcf, coord=coord, max_iter=50, coil_batch_size=1, device=args.device)
 
             print('Run Sense')
-            img.append(sp.to_device(sense.run()))
+            img.append(sp.to_device(sense.run(), sp.cpu_device))
         img = np.stack(img,axis=0)
 
     else:
