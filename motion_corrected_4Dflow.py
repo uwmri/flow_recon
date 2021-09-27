@@ -50,12 +50,14 @@ if __name__ == '__main__':
 
     if args.motion_correction:
         # Run the recon to get navigators
-        os.system(f'python {recon_script} --gate_type time --frames 256 --filename {filename} '
-                  f'--out_filename {file_nav} --out_folder {base_folder} --max_encodes 1 '
-                  f'--recon_type mslr --lamda 1e-8 --crop_factor 2 --krad_cutoff 32 --compress_coils --epochs 200')
+        #os.system(f'python {recon_script} --gate_type time --frames 256 --filename {filename} '
+        #          f'--out_filename {file_nav} --out_folder {base_folder} --max_encodes 1 '
+        #          f'--recon_type mslr --lamda 1e-8 --crop_factor 2 --krad_cutoff 32 --compress_coils --epochs 200')
 
         # Run the motion corrected
+        print('Motion Correcting Data')
         os.system(f'python {motion_script} --file_nav {file_nav} --file_data {filename} --out_folder {base_folder} --out_filename MRI_Raw_Corrected.h5')
+        exit()
 
         # Now run a simple recon to verify the correction
         os.system(f'python {recon_script} --filename {os.path.join(base_folder, "MRI_Raw_Corrected.h5")}'

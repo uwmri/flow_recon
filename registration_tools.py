@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
-__all__ = ['build_rotation', 'RigidRegistration']
+__all__ = ['build_rotation', 'RigidRegistration', 'Rotation3D']
 
 def build_rotation(theta, phi, psi):
     rot = np.zeros((3,3), dtype=np.float32)
@@ -22,6 +22,31 @@ def build_rotation(theta, phi, psi):
 
     return rot
 
+
+class Rotation3D(nn.Module):
+    def __init__(self, number=None):
+        super(Rotation3D, self).__init__()
+
+        # Number of output of the localization network (Expected image is frames, number of features)
+        self.phi = torch.nn.Parameter(torch.tensor([0.0]).view(1,1))
+        self.theta = torch.nn.Parameter(torch.tensor([0.0]).view(1,1))
+        self.psi = torch.nn.Parameter(torch.tensor([0.0]).view(1,1))
+
+    def forward(self):
+        rot = torch.zeros(3, 3, device=self.phi.device)
+        rot[0, 0] = torch.cos(self.theta) * torch.cos(self.psi)
+        rot[0, 1] = -torch.cos(self.phi) * torch.sin(self.psi) + torch.sin(self.phi) * torch.sin(self.theta) * torch.cos(self.psi)
+        rot[0, 2] =  torch.sin(self.phi) * torch.sin(self.psi) + torch.cos(self.phi) * torch.sin( self.theta) * torch.cos(self.psi)
+
+        rot[1, 0] = torch.cos(self.theta)*torch.sin(self.psi)
+        rot[1, 1] = torch.cos(self.phi) * torch.cos(self.psi) + torch.sin(self.phi) * torch.sin( self.theta) * torch.sin(self.psi)
+        rot[1, 2] = -torch.sin(self.phi) * torch.cos(self.psi) + torch.cos(self.phi) * torch.sin(self.theta) * torch.sin( self.psi)
+
+        rot[2, 0] = -torch.sin(self.theta)
+        rot[2, 1] = torch.sin( self.phi) * torch.cos( self.theta)
+        rot[2, 2] = torch.cos( self.phi ) * torch.cos( self.theta)
+
+        return rot
 
 class RigidRegistration(nn.Module):
     def __init__(self):

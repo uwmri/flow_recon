@@ -53,6 +53,58 @@ def estimate_mask( images):
     mask[start_idx:stop_idx,:,:] = 1.0
     return mask
 
+def average_rotation( r=None):
+    r"""Finds a rotation to a common space
+
+    Args:
+        r (array): a 3D array [Nt x 3 x 3] containing rotation matrices over time
+    Returns:
+        rp (array): a 3D array [Nt x 3 x 3] containing corrected rotation matrices
+    """
+
+    # This just defines a rotation matrix using euler angles
+    RotModel = Rotation3D()
+
+    # Optimize using Adam
+    optimizer = torch.optim.Adam(RotModel.parameters(), lr=1e-4)
+
+    # Need identify to get loss
+    id = torch.eye(3)
+
+    # Get the rotation matrix
+    R = torch.tensor(r)
+
+    for epoch in range(100000):
+
+        optimizer.zero_grad()
+
+        # B is the correction to R
+        B = RotModel()
+
+        # Calculate the corrected matrix
+        y = torch.matmul(B, R)
+
+        # Loss is average difference from identity
+        loss = torch.sum(torch.abs(y - id) ** 2)
+
+        if epoch % 1000 == 0:
+            print(f'Epoch {epoch} Loss = {loss.item()}')
+
+        loss.backward()
+        optimizer.step()
+
+    # Apply rotation to R
+    B = RotModel()
+
+    print(f'Inverse Common Rotation')
+    print(f'  Psi={RotModel.psi[0,0]} ')
+    print(f'  Theta={RotModel.theta[0, 0]} ')
+    print(f'  Phi={RotModel.phi[0, 0]} ')
+    print(f'  B = {B}')
+
+    return(B.detach().cpu().numpy())
+
+
 def register_images( images, mask, logdir=None):
     r"""Registers a series of 3D images collected over time using pytorch affine and masked mean square error
 
@@ -111,7 +163,7 @@ def register_images( images, mask, logdir=None):
         print(f'Image {idx} of {images.shape[0]}')
 
         moving_image = torch.tensor( images[idx] ).to('cuda')
-        print(f'Max moving = {torch.max( moving_image)}')
+        #print(f'Max moving = {torch.max( moving_image)}')
         moving_image /= torch.max( moving_image)
         moving_image = moving_image.view(-1, 1, moving_image.shape[-3], moving_image.shape[-2], moving_image.shape[-1])
 
@@ -125,7 +177,10 @@ def register_images( images, mask, logdir=None):
 
         loss_monitor = []
         loss_thresh = 1e-12
+        #loss_thresh = 1e-1 # Temp
+
         loss_window = 20
+        #loss_window = 2 # temp
 
         # Grab the images
         model.train()
@@ -204,13 +259,24 @@ def correct_MRI_Raw( file_data, tx, ty, tz, phi, psi, theta, out_folder):
         mri_raw(class): contains to corrected MRI data
     """
 
+    num_frames = len(tx)
+
+    # Before doing the correction we will calculate the transform that would average things.
+    R = []
+    for t in range(num_frames):
+        rot = build_rotation(theta=theta[t], phi=phi[t], psi=psi[t])
+        R.append(rot)
+    R = np.stack(R,axis=0)
+
+    # This rotation will move the rotation to be as close to identity as possible
+    inverse_common_rotation = average_rotation(R)
+
     # Get the frame center
     mri_raw = load_MRI_raw(h5_filename=file_data)
 
     gate_signal = mri_raw.time
     gate_type = 'time'
     discrete_gates = False
-    num_frames = len(tx)
 
     # Get the gate positions
     t_min, t_max, delta_time = get_gate_bins(gate_signal, gate_type, num_frames, discrete_gates)
@@ -242,6 +308,7 @@ def correct_MRI_Raw( file_data, tx, ty, tz, phi, psi, theta, out_folder):
 
             # Build Rotation matrix
             rot = build_rotation(theta=theta[t], phi=phi[t], psi=psi[t])
+            rot = inverse_common_rotation @ rot
             rot = sp.to_device(rot, device)
             rot = np.linalg.inv(rot)
             coord_rot = device.xp.flip(coord, axis=-1)  # Swap z/x
