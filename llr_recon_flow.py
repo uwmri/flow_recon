@@ -230,9 +230,9 @@ if __name__ == "__main__":
         logger.info(f'Reconstruct Images ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
         img = BatchedSenseRecon(mri_raw.kdata, mps=smaps, weights=mri_raw.dcf, coord=mri_raw.coords,
                                 device=sp.Device(args.device), lamda=args.lamda, num_enc=num_enc,
-                                coil_batch_size=None, max_iter=args.max_iter, batched_iter=args.max_iter,
+                                coil_batch_size=1, max_iter=args.max_iter, batched_iter=args.max_iter,
                                 gate_type=args.gate_type, fast_maxeig=args.fast_maxeig,
-                                log_folder=args.out_folder,
+                                block_width=args.llr_block_width, log_folder=args.out_folder,
                                 composite_init=False
                                 ).run()
 
@@ -251,14 +251,14 @@ if __name__ == "__main__":
             print(f'DCF device = {sp.get_device(dcf)}')
             print(f'Coord device = {sp.get_device(coord)}')
 
-            sense = sp.mri.app.SenseRecon(kdata, smaps, lamda=0, weights=dcf, coord=coord, max_iter=5, coil_batch_size=1, device=args.device)
+            sense = sp.mri.app.SenseRecon(kdata, smaps, lamda=0, weights=dcf, coord=coord, max_iter=args.max_iter, coil_batch_size=1, device=args.device)
             #sense = sp.mri.app.L1WaveletRecon(kdata, smaps, lamda=1e-1, weights=dcf, coord=coord, max_iter=50, coil_batch_size=1, device=args.device)
 
             print('Run Sense')
             img.append(sp.to_device(sense.run(), sp.cpu_device))
         img = np.stack(img,axis=0)
 
-    else:
+    elif args.recon_type == 'pils':
         logger.info('PILS Recon')
         img = []
 
@@ -280,6 +280,8 @@ if __name__ == "__main__":
             Eh = E.H
 
             img.append(sp.to_device(Eh * kdata))
+    else:
+        print('Please input recon_type (llr, sense, pils, mslr')
 
     # Copy to CPU and reshape
     img = np.stack(img,axis=0)

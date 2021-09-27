@@ -157,9 +157,10 @@ class MRI_4DFlow:
         # Unwrap phase for all encodes
         num_enc = phase.shape[4]
 
-        unwrap_lap = False
+        unwrap_lap = True
         if unwrap_lap:
             if phase.shape[0] > 1:
+                print(f'number of encodes to unwrap {num_enc}')
                 # Start loop in second encode (first was use to reference)
                 phase_wrap = []
                 phase = np.squeeze(phase)
@@ -328,6 +329,8 @@ if __name__ == "__main__":
         #frames = int(temp.shape[0]/4)
         #temp = np.reshape(temp, newshape=(frames,4, temp.shape[1], temp.shape[2], temp.shape[3]))
         # temp = np.reshape(temp, newshape=(10,4, temp.shape[-3], temp.shape[-2], temp.shape[-1]))
+
+        temp = np.squeeze(temp)
 
         if len(temp.shape) == 4:
             temp = np.expand_dims(temp,axis=0)
