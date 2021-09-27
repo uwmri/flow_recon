@@ -107,7 +107,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
             A = sp.mri.linop.Sense(mps, coord[0], weights[0], ishape=None,
                                              coil_batch_size=coil_batch_size, comm=comm)
             AHA = A.H * A
-            max_eig = sp.app.MaxEig(AHA, dtype=y.dtype, device=self.gpu_device,
+            max_eig = sp.app.MaxEig(AHA, dtype=y[0].dtype, device=self.gpu_device,
                              max_iter=self.max_power_iter,
                              show_pbar=self.show_pbar).run()
         else:

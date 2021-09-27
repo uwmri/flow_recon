@@ -486,27 +486,27 @@ def gate_kspace(mri_raw=None, num_frames=10, gate_type='time', discrete_gates=Fa
     gate_signal = gate_signals.get(gate_type, f'Cannot interpret gate signal {gate_type}')
 
     # For ECG, delay the waveform
-    if gate_type == 'ecg':
-        time = mri_raw.time
+    #if gate_type == 'ecg':
+    #    time = mri_raw.time
 
-        for e in range(mri_raw.Num_Encodings):
-            time_encode = time[e]
-            ecg_encode = gate_signal[e]
+    #    for e in range(mri_raw.Num_Encodings):
+    #        time_encode = time[e]
+    #        ecg_encode = gate_signal[e]
 
             # Sort the data by time
-            idx = np.argsort(time_encode)
-            idx_inverse = idx.argsort()
+    #        idx = np.argsort(time_encode)
+    #        idx_inverse = idx.argsort()
 
             # Estimate the delay
-            if e == 0:
-                ecg_shift = int(ecg_delay / time_encode.max() * time_encode.size)
-                print(f'Shifting by {ecg_shift}')
+    #        if e == 0:
+    #            ecg_shift = int(ecg_delay / time_encode.max() * time_encode.size)
+    #            print(f'Shifting by {ecg_shift}')
 
             # Using circular shift for now. This should be fixed
-            ecg_sorted = ecg_encode[idx]
-            ecg_shifted = np.roll( ecg_sorted, ecg_shift)
+    #        ecg_sorted = ecg_encode[idx]
+    #        ecg_shifted = np.roll( ecg_sorted, ecg_shift)
 
-            gate_signal[e] = ecg_shifted
+    #        gate_signal[e] = ecg_shifted
 
     print(f'Gating off of {gate_type}')
 
