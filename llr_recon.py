@@ -106,7 +106,8 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
             print('Fast Maxeig')
             A = sp.mri.linop.Sense(mps, coord[0], weights[0], ishape=None,
                                              coil_batch_size=coil_batch_size, comm=comm)
-            AHA = A.H * A
+            #AHA = A.H * A
+            AHA = A.N
             max_eig = sp.app.MaxEig(AHA, dtype=y[0].dtype, device=self.gpu_device,
                              max_iter=self.max_power_iter,
                              show_pbar=self.show_pbar).run()
@@ -115,7 +116,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
             ops_list = [sp.mri.linop.Sense(mps, coord[e], weights[e], ishape=None,
                         coil_batch_size=coil_batch_size, comm=comm) for e in range(self.num_images)]
 
-            grad_ops_nodev = [ops_list[e].H * ops_list[e] for e in range(len(ops_list))]
+            grad_ops_nodev = [ops_list[e].N for e in range(len(ops_list))]
             # A.h*A
             # wrap to run GPU
             grad_ops = [sp.linop.ToDevice(op.oshape, self.cpu_device, self.gpu_device) * op * sp.linop.ToDevice(op.ishape, self.gpu_device, self.cpu_device) for op in grad_ops_nodev]
@@ -246,7 +247,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
             out_encode = self.num_encodes // 2
             Xiter = xp.copy( temp[out_frame, out_encode])
         else:
-            out_slice = int((self.x.shape[0] / self.frames ) // 2)
+            out_slice = int((self.x.shape[0] / self.frames / self.num_encodes ) // 2)
             Xiter = xp.copy( self.x[out_slice])
 
         Xiter = sp.to_device(Xiter, sp.cpu_device)

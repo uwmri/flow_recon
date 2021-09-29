@@ -31,6 +31,7 @@ if __name__ == '__main__':
 
     # y = os.getcwd()  # get current path
     y = '/home/larivera/projects/mc_flow/impaired/adrc00302' # get data path
+    y = '/home/kmjohnso/Data/Flow5'
     print(y)
     # scan_data = ['P*.7', 'P*.7.bz2', 'ScanArchive*.h5','MRI_Raw.h5']  # files to get paths to
     scan_data = 'MRI_Raw.h5'  # files to get paths to
@@ -67,9 +68,8 @@ if __name__ == '__main__':
         #          f'--recon_type mslr --lamda 1e-8 --crop_factor 2 --krad_cutoff 32 --compress_coils --epochs 200')
 
         # Run the motion corrected
-        print('Motion Correcting Data')
-        os.system(f'python {motion_script} --file_nav {file_nav} --file_data {filename} --out_folder {base_folder} --out_filename MRI_Raw_Corrected.h5')
-        exit()
+        #print('Motion Correcting Data')
+        #os.system(f'python {motion_script} --file_nav {file_nav} --file_data {filename} --out_folder {base_folder} --out_filename MRI_Raw_Corrected.h5')
 
         # Now run a simple recon to verify the correction
         #os.system(f'python {recon_script} --filename {os.path.join(base_folder, "MRI_Raw_Corrected.h5")}'
@@ -81,11 +81,11 @@ if __name__ == '__main__':
         # Just llr
         os.system(f'python {recon_script} --filename {os.path.join(base_folder, "MRI_Raw_Corrected.h5")}'
                   f' --frames 20 --max_iter 100'
-                  f' --gate_type ecg --fast_maxeig'
+                  f' --gate_type ecg '
                   f' --recon_type llr --llr_block_width 4 --lamda 0.00001'
                   f' --compress_coils --thresh 0.15'
                   f' --out_filename Corrected.h5')
-
+        exit()
 
         # Flow processing
         os.system(f'python {flow_script} --filename {os.path.join(base_folder,"Corrected.h5")} '
