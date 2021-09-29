@@ -102,6 +102,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
             coord[i] = sp.to_device(coord[i], sp.Device(self.gpu_device))
             weights[i] = sp.to_device(weights[i], sp.Device(self.gpu_device))
 
+
         if fast_maxeig:
             print('Fast Maxeig')
             A = sp.mri.linop.Sense(mps, coord[0], weights[0], ishape=None,
@@ -129,9 +130,9 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
             with sp.get_device(weights[i]):
                 weights[i] *= 1.0 / max_eig
 
-        # Put on GPU
-        for i in range(len(y)):
-            y[i] = sp.to_device(y[i], self.gpu_device)
+        # Keep y on the cpu
+        #for i in range(len(y)):
+        #    y[i] = sp.to_device(y[i], self.gpu_device)
 
         # Initialize with an average reconstruction
         if composite_init:
@@ -161,7 +162,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
              # Multiply by sqrt(weights)
             if weights is not None:
                 for e in range(self.num_images):
-                    y[e] *= weights[e] ** 0.5
+                    y[e] *= sp.to_device(weights[e] ** 0.5, sp.get_device(y[e]))
 
             # Now scale the images
             sum_yAx = 0.0
@@ -183,22 +184,41 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
             x = np.vstack([composite for i in range(self.num_images)])
         else:
              # Multiply by sqrt(weights)
+            print('Multiple kdata by weights')
             if weights is not None:
                 for e in range(self.num_images):
-                    y[e] *= weights[e] ** 0.5
+                    y[e] *= sp.to_device(weights[e] ** 0.5, sp.get_device(y[e]))
+
 
         # Update ops list with weights
         ops_list = [sp.mri.linop.Sense(mps, coord[e], weights[e], ishape=None,
                                              coil_batch_size=coil_batch_size, comm=comm) for e in range(self.num_images)]
 
-        sub_list = [ SubtractArray(y[e]) for e in range(self.num_images)]
+        # Initialize with an average reconstruction
+        print('AhD Calc')
+        AhD = []
+        for e in range(self.num_images):
+            # Sense operator
+            A = sp.mri.linop.Sense(mps, coord[e], weights[e], ishape=None,
+                                   coil_batch_size=coil_batch_size, comm=comm)
+
+
+            data = sp.to_device(y[e], self.gpu_device)
+            #data *= weights[e]
+
+            AhD.append( sp.to_device(A.H * data, sp.cpu_device))
+
+        self.AhD  = np.vstack(AhD)
+
+        # sub_list = [ SubtractArray(y[e]) for e in range(self.num_images)]
         #grad_ops_nodev = [ ops_list[e].H * sub_list[e] *ops_list[e] for e in range(len(ops_list))]
-        grad_ops_nodev = [ ops_list[e].H * sub_list[e] *ops_list[e] for e in range(len(ops_list))]
-        # A.h*(Ax-y)
+        #grad_ops_nodev = [ ops_list[e].H * sub_list[e] *ops_list[e] for e in range(len(ops_list))]
+
+        # Normal operation (AhA)x
+        grad_ops_nodev = [ops_list[e].N for e in range(len(ops_list))]
 
         # wrap to run GPU
         grad_ops = [sp.linop.ToDevice(op.oshape, self.cpu_device, self.gpu_device)*op*sp.linop.ToDevice(op.ishape,self.gpu_device,self.cpu_device) for op in grad_ops_nodev]
-        # * is a function
 
         # Get AHA opts list
         A = sp.linop.Diag(grad_ops, oaxis=0, iaxis=0)
@@ -269,9 +289,22 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
 
 
     def _get_GradientMethod(self):
+
+        # Define the gradient
+        def gradf(x):
+            with self.cpu_device:
+                gradf_x = self.A(x) - self.AhD
+                if self.lamda != 0:
+                    if self.z is None:
+                        sp.util.axpy(gradf_x, self.lamda, x)
+                    else:
+                        sp.util.axpy(gradf_x, self.lamda, x - self.z)
+
+                return gradf_x
+
         print(f'Using defined alg {self.alpha}')
         self.alg = sp.app.GradientMethod(
-            self.A,
+            gradf,
             self.x,
             self.alpha,
             proxg=self.proxg,
