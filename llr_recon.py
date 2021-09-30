@@ -102,7 +102,6 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
             coord[i] = sp.to_device(coord[i], sp.Device(self.gpu_device))
             weights[i] = sp.to_device(weights[i], sp.Device(self.gpu_device))
 
-
         if fast_maxeig:
             print('Fast Maxeig')
             A = sp.mri.linop.Sense(mps, coord[0], weights[0], ishape=None,
@@ -190,46 +189,22 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
                     y[e] *= sp.to_device(weights[e] ** 0.5, sp.get_device(y[e]))
 
 
-        # Update ops list with weights
-        ops_list = [sp.mri.linop.Sense(mps, coord[e], weights[e], ishape=None,
-                                             coil_batch_size=coil_batch_size, comm=comm) for e in range(self.num_images)]
+        # Store forward operator
+        self.A_list = [sp.mri.linop.Sense(mps, coord[e], weights[e], ishape=None,
+                                       coil_batch_size=coil_batch_size, comm=comm) for e in range(self.num_images)]
 
-        # Initialize with an average reconstruction
-        print('AhD Calc')
-        AhD = []
-        for e in range(self.num_images):
-            # Sense operator
-            A = sp.mri.linop.Sense(mps, coord[e], weights[e], ishape=None,
-                                   coil_batch_size=coil_batch_size, comm=comm)
-
-
-            data = sp.to_device(y[e], self.gpu_device)
-            #data *= weights[e]
-
-            AhD.append( sp.to_device(A.H * data, sp.cpu_device))
-
-        self.AhD  = np.vstack(AhD)
-
-        # sub_list = [ SubtractArray(y[e]) for e in range(self.num_images)]
-        #grad_ops_nodev = [ ops_list[e].H * sub_list[e] *ops_list[e] for e in range(len(ops_list))]
-        #grad_ops_nodev = [ ops_list[e].H * sub_list[e] *ops_list[e] for e in range(len(ops_list))]
-
-        # Normal operation (AhA)x
-        grad_ops_nodev = [ops_list[e].N for e in range(len(ops_list))]
-
-        # wrap to run GPU
-        grad_ops = [sp.linop.ToDevice(op.oshape, self.cpu_device, self.gpu_device)*op*sp.linop.ToDevice(op.ishape,self.gpu_device,self.cpu_device) for op in grad_ops_nodev]
-
-        # Get AHA opts list
-        A = sp.linop.Diag(grad_ops, oaxis=0, iaxis=0)
+        # Define the image size
+        A_ishape = self.A_list[0].ishape.copy()
+        A_ishape[0] *= self.num_images
+        A = None
 
         if composite_init == False:
-            x = self.cpu_device.xp.zeros(A.ishape, dtype=y[0].dtype)
+            x = self.cpu_device.xp.zeros(A_ishape, dtype=y[0].dtype)
 
         # block size and stride should be equal, now testing different stride for block shifting problem
         # cardiac recon expected to be lower rank than temporal recon, thus smaller block size (as in cpp wrapper)
         print('batched iter = ', batched_iter)
-        proxg = SingularValueThresholdingNumba(A.ishape, frames=self.frames, num_encodes=self.num_encodes,
+        proxg = SingularValueThresholdingNumba(A_ishape, frames=self.frames, num_encodes=self.num_encodes,
                                               lamda=lamda, block_size=block_width, block_stride=block_width, batched_iter=batched_iter)
 
 
@@ -290,17 +265,33 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
 
     def _get_GradientMethod(self):
 
+
         # Define the gradient
         def gradf(x):
-            with self.cpu_device:
-                gradf_x = self.A(x) - self.AhD
-                if self.lamda != 0:
-                    if self.z is None:
-                        sp.util.axpy(gradf_x, self.lamda, x)
-                    else:
-                        sp.util.axpy(gradf_x, self.lamda, x - self.z)
 
-                return gradf_x
+            print(f'Xin shape = {x.shape}')
+            # Go through list and update images
+            gradf_x = []
+            x_reshape = np.reshape(x, (self.num_images, -1) + x.shape[1:])
+            print(f'x_reshape shape = {x_reshape.shape}')
+            for i in range(self.num_images):
+                kdata = sp.to_device(self.y[i], self.gpu_device)
+                image = sp.to_device(x_reshape[i], self.gpu_device)
+                Ax = self.A_list[i] * image
+                Ax -= kdata
+                grad_gpu = self.A_list[i].H(Ax)
+
+                grad_cpu = sp.to_device(grad_gpu, self.cpu_device)
+                gradf_x.append(grad_cpu)
+            gradf_x = np.vstack(gradf_x)
+
+            if self.lamda != 0:
+                if self.z is None:
+                    sp.util.axpy(gradf_x, self.lamda, x)
+                else:
+                    sp.util.axpy(gradf_x, self.lamda, x - self.z)
+
+            return gradf_x
 
         print(f'Using defined alg {self.alpha}')
         self.alg = sp.app.GradientMethod(
