@@ -105,7 +105,7 @@ def average_rotation( r=None):
     return(B.detach().cpu().numpy())
 
 
-def register_images( images, mask, logdir=None):
+def register_images( images, mask, logdir=None, out_reg_images=False):
     r"""Registers a series of 3D images collected over time using pytorch affine and masked mean square error
 
     Args:
@@ -224,8 +224,9 @@ def register_images( images, mask, logdir=None):
     except OSError:
         pass
     with h5py.File(out_name, 'w') as hf:
-        hf.create_dataset("REGISTERED", data=np.squeeze(np.stack(all_images)))
-        hf.create_dataset("MOVING", data=np.squeeze(np.stack(all_moving)))
+        if out_reg_images:
+            hf.create_dataset("REGISTERED", data=np.squeeze(np.stack(all_images)))
+            hf.create_dataset("MOVING", data=np.squeeze(np.stack(all_moving)))
         hf.create_dataset("phi", data=180.0/math.pi*np.squeeze(np.array(all_phi)))
         hf.create_dataset("psi", data=180.0 / math.pi * np.squeeze(np.array(all_psi)))
         hf.create_dataset("theta", data=180.0 / math.pi * np.squeeze(np.array(all_theta)))
@@ -334,6 +335,8 @@ if __name__ == '__main__':
     parser.add_argument('--logdir', type=str, help='folder to log files to, default is current directory', default=None)
     parser.add_argument('--out_folder', type=str, default=None)
     parser.add_argument('--out_filename', type=str, default='MRI_Raw_Corrected.h5')
+    parser.add_argument('--out_reg_images', dest='out_reg_images', action='store_true')
+    parser.set_defaults(out_reg_images=True)
 
     args = parser.parse_args()
 
@@ -350,7 +353,7 @@ if __name__ == '__main__':
     mask = estimate_mask(images)
 
     # Register the images
-    tx, ty, tz, phi, psi, theta = register_images(images, mask, logdir=args.logdir)
+    tx, ty, tz, phi, psi, theta = register_images(images, mask, logdir=args.logdir, out_reg_images=args.out_reg_images)
 
     # Now load and correct the data
     mri_raw = correct_MRI_Raw(args.file_data, tx, ty, tz, phi, psi, theta, args.out_folder)

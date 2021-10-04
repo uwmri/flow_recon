@@ -55,7 +55,7 @@ class MultiScaleLowRankRecon(object):
                  blk_widths=[32, 64, 128], alpha=1, beta=0.5, sgw=None,
                  device=sp.cpu_device, comm=None, seed=0,
                  max_epoch=120, decay_epoch=30, max_power_iter=5,
-                 show_pbar=True, num_encodings=1, log_dir=None):
+                 show_pbar=True, num_encodings=1, log_dir=None, out_iter_mon=False):
         self.ksp = ksp
         self.coord = coord
         self.dcf = dcf
@@ -73,6 +73,7 @@ class MultiScaleLowRankRecon(object):
         self.max_power_iter = max_power_iter
         self.show_pbar = show_pbar and (comm is None or comm.rank == 0)
         self.log_dir = log_dir
+        self.out_iter_mon = out_iter_mon
 
         # Initialize random seed so code is reproducible
         np.random.seed(self.seed)
@@ -376,22 +377,22 @@ class MultiScaleLowRankRecon(object):
                     im_y.append(sp.to_device(im_slice, sp.cpu_device))
                 im_y = np.stack(im_y)
 
-
-                out_name = os.path.join(self.log_dir, 'IterMon.h5')
-                if self.epoch == 0:
-                    try:
-                        os.remove(out_name)
-                    except OSError:
-                        pass
-                    with h5py.File(out_name, 'w') as hf:
-                        hf.create_dataset(f'Im{self.epoch:05}', data=np.abs(im))
-                        hf.create_dataset(f'Phase{self.epoch:05}', data=np.angle(im))
-                        hf.create_dataset(f'Y{self.epoch:05}', data=np.abs(im_y))
-                else:
-                    with h5py.File(out_name, 'a') as hf:
-                        hf.create_dataset(f'Im{self.epoch:05}', data=np.abs(im))
-                        hf.create_dataset(f'Phase{self.epoch:05}', data=np.angle(im))
-                        hf.create_dataset(f'Y{self.epoch:05}', data=np.abs(im_y))
+                if self.out_iter_mon:
+                    out_name = os.path.join(self.log_dir, 'IterMon.h5')
+                    if self.epoch == 0:
+                        try:
+                            os.remove(out_name)
+                        except OSError:
+                            pass
+                        with h5py.File(out_name, 'w') as hf:
+                            hf.create_dataset(f'Im{self.epoch:05}', data=np.abs(im))
+                            hf.create_dataset(f'Phase{self.epoch:05}', data=np.angle(im))
+                            hf.create_dataset(f'Y{self.epoch:05}', data=np.abs(im_y))
+                    else:
+                        with h5py.File(out_name, 'a') as hf:
+                            hf.create_dataset(f'Im{self.epoch:05}', data=np.abs(im))
+                            hf.create_dataset(f'Phase{self.epoch:05}', data=np.angle(im))
+                            hf.create_dataset(f'Y{self.epoch:05}', data=np.abs(im_y))
 
     def _update(self, idx):
 
