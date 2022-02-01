@@ -67,6 +67,10 @@ if __name__ == "__main__":
     parser.add_argument('--out_folder', type=str, default=None)
     parser.add_argument('--out_filename', type=str, default='FullRecon.h5')
 
+    # Debugging / mslr mag and example images
+    parser.add_argument('--example_images', dest='example_images', action='store_true')
+    parser.set_defaults(example_images=False)
+
     args = parser.parse_args()
 
     # For tracking memory
@@ -196,28 +200,11 @@ if __name__ == "__main__":
         out_name = os.path.join(args.out_folder,'MSLRObject.h5')
         lrimg.save(out_name)
 
-        # generate some slices
-        logger.info('Generating slices for export')
-        lrimg.use_device(sp.Device(args.device))
-
-        # Export into Mag
-        out_name = os.path.join(args.out_folder, 'MagImages.h5')
-        logger.info('Saving images to ' + out_name)
-        try:
-            os.remove(out_name)
-        except OSError:
-            pass
-
-        with h5py.File(out_name, 'w') as hf:
-            for t in range(lrimg.shape[0]):
-                Im = lrimg[t]
-                hf.create_dataset(f'Frame{t:04}', data=np.squeeze(np.abs(Im)))
-
-        Sz = lrimg[:, lrimg.shape[1]//2, :, :]
-        Sy = lrimg[:, :, lrimg.shape[2]//2, :]
-        Sx = lrimg[:, :, :, lrimg.shape[3]//2]
-        img = lrimg[:, :, :, :]
-        img = np.reshape(img, (args.frames, -1) + img.shape[1:])
+        Sz = lrimg[..., lrimg.shape[-3] // 2, :, :]
+        Sy = lrimg[..., lrimg.shape[-2] // 2, :]
+        Sx = lrimg[..., lrimg.shape[-1] // 2]
+        img = lrimg[:, :, :, :, :]
+        #img = np.reshape(img, (args.frames, -1) + img.shape[1:])
         out_name = os.path.join(args.out_folder, 'FullRecon.h5')
         logger.info('Saving images to ' + out_name)
         try:
@@ -227,21 +214,40 @@ if __name__ == "__main__":
 
         except OSError:
             pass
-        Im0 = lrimg[:, :, :]
 
-        out_name = os.path.join(args.out_folder, 'ExampleSlices.h5')
-        logger.info('Saving images to ' + out_name)
-        try:
-            os.remove(out_name)
-        except OSError:
-            pass
-        with h5py.File(out_name, 'w') as hf:
-            hf.create_dataset('Sz', data=np.abs(Sz))
-            hf.create_dataset('Sy', data=np.abs(Sy))
-            hf.create_dataset('Sx', data=np.abs(Sx))
-            hf.create_dataset('Frame0', data=np.abs(Im0))
-            hf.create_dataset('aFrame0', data=np.angle(Im0))
-            pass
+        if args.example_images:
+            # generate some slices
+            logger.info('Generating slices for export')
+            lrimg.use_device(sp.Device(args.device))
+
+            # Export into Mag
+            out_name = os.path.join(args.out_folder, 'MagImages.h5')
+            logger.info('Saving images to ' + out_name)
+            try:
+                os.remove(out_name)
+            except OSError:
+                pass
+
+            with h5py.File(out_name, 'w') as hf:
+                for t in range(lrimg.shape[0]):
+                    Im = lrimg[t]
+                    hf.create_dataset(f'Frame{t:04}', data=np.squeeze(np.abs(Im)))
+
+            Im0 = lrimg[:, :, :]
+
+            out_name = os.path.join(args.out_folder, 'ExampleSlices.h5')
+            logger.info('Saving images to ' + out_name)
+            try:
+                os.remove(out_name)
+            except OSError:
+                pass
+            with h5py.File(out_name, 'w') as hf:
+                hf.create_dataset('Sz', data=np.abs(Sz))
+                hf.create_dataset('Sy', data=np.abs(Sy))
+                hf.create_dataset('Sx', data=np.abs(Sx))
+                hf.create_dataset('Frame0', data=np.abs(Im0))
+                hf.create_dataset('aFrame0', data=np.angle(Im0))
+                pass
 
     elif args.recon_type == 'llr':
         logger.info(f'Reconstruct Images ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')

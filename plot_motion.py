@@ -10,7 +10,7 @@ import math
 folders = [f'Q:/FlowMotion/Flow{i}/' for i in range(10)]
 
 #folder = 'Q:/FlowMotion/Flow5/'
-folders = ['/home/larivera/projects/mc_flow/impaired/adrc00343',]
+folders = ['D:\\mc_flow\\DATA\\mc_adrc01086',]
 
 SMALL_SIZE = 12
 MEDIUM_SIZE = 16

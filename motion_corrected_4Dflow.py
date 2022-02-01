@@ -30,7 +30,8 @@ def sizeof_fmt(num, suffix='B'):
 if __name__ == '__main__':
 
     # y = os.getcwd()  # get current path
-    y = '/home/larivera/projects/mc_flow/impaired/adrc00302' # get data path
+    y = 'D:\\mc_flow\\DATA\\mc_adrc00574' # get data path
+    #y = '/home/kmjohnso/Data/Flow5'
     print(y)
     # scan_data = ['P*.7', 'P*.7.bz2', 'ScanArchive*.h5','MRI_Raw.h5']  # files to get paths to
     scan_data = 'MRI_Raw.h5'  # files to get paths to
@@ -45,6 +46,9 @@ if __name__ == '__main__':
     parser.add_argument('--motion_correction', dest='motion_correction', action='store_true')
     parser.add_argument('--no-motion_correction', dest='motion_correction', action='store_false')
     parser.set_defaults(motion_correction=True)
+    parser.add_argument('--get_navigators', dest='get_navigators', action='store_true')
+    parser.set_defaults(get_navigators=True)
+
     args = parser.parse_args()
 
     code_folder = os.path.dirname(os.path.realpath(__file__))
@@ -61,10 +65,11 @@ if __name__ == '__main__':
     file_nav = os.path.join( base_folder, 'Dynamic.h5')
 
     if args.motion_correction:
-        # Run the recon to get navigators
-        #os.system(f'python {recon_script} --gate_type time --frames 256 --filename {filename} '
-        #          f'--out_filename {file_nav} --out_folder {base_folder} --max_encodes 1 '
-        #          f'--recon_type mslr --lamda 1e-8 --crop_factor 2 --krad_cutoff 32 --compress_coils --epochs 200')
+        if args.get_navigators:
+            # Run the recon to get navigators
+            os.system(f'python {recon_script} --gate_type time --frames 256 --filename {filename} '
+                      f'--out_filename {file_nav} --out_folder {base_folder} --max_encodes 1 '
+                      f'--recon_type mslr --lamda 1e-8 --crop_factor 2 --krad_cutoff 32 --compress_coils --epochs 200')
 
         # Run the motion corrected
         print('Motion Correcting Data')
@@ -81,11 +86,10 @@ if __name__ == '__main__':
         # Just llr
         os.system(f'python {recon_script} --filename {os.path.join(base_folder, "MRI_Raw_Corrected.h5")}'
                   f' --frames 20 --max_iter 100'
-                  f' --gate_type ecg --fast_maxeig'
+                  f' --gate_type ecg '
                   f' --recon_type llr --llr_block_width 4 --lamda 0.00001'
                   f' --compress_coils --thresh 0.15'
                   f' --out_filename Corrected.h5')
-
 
         # Flow processing
         os.system(f'python {flow_script} --filename {os.path.join(base_folder,"Corrected.h5")} '
