@@ -28,24 +28,31 @@ if __name__ == "__main__":
     parser.add_argument('--thresh', type=float, default=0.1)
     parser.add_argument('--scale', type=float, default=1.0)
     parser.add_argument('--frames',type=int, default=100, help='Number of time frames')
+    parser.add_argument('--frames2', type=int, default=1, help='Number of time frames')
+
     parser.add_argument('--mps_ker_width', type=int, default=16)
     parser.add_argument('--ksp_calib_width', type=int, default=32)
     parser.add_argument('--lamda', type=float, default=0.0001)
     parser.add_argument('--max_iter', type=int, default=200)
     parser.add_argument('--jsense_max_iter', type=int, default=30)
-    parser.add_argument('--jsense_max_inner_iter', type=int, default=40)
+    parser.add_argument('--jsense_max_inner_iter', type=int, default=10)
     parser.add_argument('--jsense_lamda', type=float, default=0.0)
     parser.add_argument('--krad_cutoff', type=float, default=999990)
     parser.add_argument('--max_encodes', type=int, default=None)
 
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--gate_type', type=str, default='time')  # recon type
+    parser.add_argument('--gate_type2', type=str, default='prep')  # recon type
+    parser.add_argument('--prep_disdaqs', type=int, default=0)
     parser.add_argument('--crop_factor', type=float, default=1.0)
     parser.add_argument('--recon_type', type=str, default='llr')
     parser.add_argument('--llr_block_width',type=int, default=32)
 
     parser.set_defaults(discrete_gates=False)
     parser.add_argument('--discrete_gates', dest='discrete_gates', action='store_true')
+
+    parser.set_defaults(discrete_gates2=False)
+    parser.add_argument('--discrete_gates2', dest='discrete_gates2', action='store_true')
 
     parser.add_argument('--fast_maxeig', dest='fast_maxeig', action='store_true')
     parser.set_defaults(fast_maxeig=False)
@@ -87,6 +94,9 @@ if __name__ == "__main__":
         mri_raw = load_MRI_raw(h5_filename=args.filename, compress_coils=args.compress_coils, max_encodes=args.max_encodes)
     print(f'Min/max = {np.max(mri_raw.time[0])} {np.max(mri_raw.time[0])}')
 
+    # Resample
+    # radial3d_regrid(mri_raw)
+
 
     num_enc = mri_raw.Num_Encodings
     if args.crop_factor > 1.0:
@@ -112,10 +122,17 @@ if __name__ == "__main__":
 
     # Gate k-space
     if args.frames > 1:
-        mri_raw = gate_kspace(mri_raw=mri_raw,
-                              num_frames=args.frames,
-                              gate_type=args.gate_type,
-                              discrete_gates=args.discrete_gates)
+        if args.frames2 > 1:
+            mri_raw = gate_kspace2d(mri_raw=mri_raw,
+                                  num_frames=[args.frames, args.frames2],
+                                  gate_type=[args.gate_type, args.gate_type2],
+                                  discrete_gates=[args.discrete_gates, args.discrete_gates2],
+                                  prep_disdaqs=args.prep_disdaqs)
+        else:
+            mri_raw = gate_kspace(mri_raw=mri_raw,
+                                  num_frames=args.frames,
+                                  gate_type=args.gate_type,
+                                  discrete_gates=args.discrete_gates)
 
     # Fake rotations
     if False:
@@ -147,7 +164,7 @@ if __name__ == "__main__":
 
             mri_raw.coords[i] = coord_rot
 
-    if False:
+    if True:
         for i in range(len(mri_raw.kdata)):
             mri_raw.kdata[i] = sp.to_device(mri_raw.kdata[i], sp.Device(args.device))
             mri_raw.coords[i] = sp.to_device(mri_raw.coords[i], sp.Device(args.device))
@@ -256,8 +273,6 @@ if __name__ == "__main__":
 
             print('Run Sense')
             img.append(sp.to_device(sense.run(), sp.cpu_device))
-        img = np.stack(img,axis=0)
-
     elif args.recon_type == 'pils':
         logger.info('PILS Recon')
         img = []
@@ -286,7 +301,8 @@ if __name__ == "__main__":
     # Copy to CPU and reshape
     img = np.stack(img,axis=0)
     img = sp.to_device(img, sp.cpu_device)
-    img = np.reshape(img, (args.frames, -1) + img.shape[1:])
+    img = np.reshape(img, (args.frames*args.frames2, -1) + img.shape[1:])
+    logger.info(f'Image shape {img.shape}')
 
     img_mag = np.abs(img)
     img_phase = np.angle(img)

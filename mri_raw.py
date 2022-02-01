@@ -35,6 +35,80 @@ class MRI_Raw:
     target_image_size = [256, 256, 64]
 
 
+def resample_arc(input, coord, oshape=None, oversamp=2, width=7):
+    """Adjoint non-uniform Fast Fourier Transform.
+
+    Args:
+
+    Returns:
+        array: signal domain array with shape specified by oshape.
+
+    See Also:
+        :func:`sigpy.nufft.nufft`
+
+    """
+
+    # Get the image dimensions
+    ndim = coord.shape[-1]
+    beta = np.pi * (((width / oversamp) * (oversamp - 0.5))**2 - 0.8)**0.5
+    if oshape is None:
+        oshape = list(input.shape[:-coord.ndim + 1]) + estimate_shape(coord)
+    else:
+        oshape = list(oshape)
+
+    os_shape = _get_oversamp_shape(oshape, ndim, oversamp)
+
+    # Gridding
+    coord = _scale_coord(coord, oshape, oversamp)
+    output = interp.gridding(input, coord, os_shape,
+                             kernel='kaiser_bessel', width=width, param=beta)
+    output /= width**ndim
+
+    # IFFT
+    output = ifft(output, axes=range(-ndim, 0), norm=None)
+
+    # Crop
+    output = util.resize(output, oshape)
+    output *= util.prod(os_shape[-ndim:]) / util.prod(oshape[-ndim:])**0.5
+
+    # Apodize
+    _apodize(output, ndim, oversamp, width, beta)
+
+    return output
+
+
+def radial3d_regrid(mri_data: MRI_Raw, new_dk=0.5):
+
+    logger = logging.getLogger('radial3d_regrid')
+
+    # Grab a line in k-space
+    if isinstance(mri_data.coords, list):
+        logger.info('Passed k-space is a list, using encode 0 for resampling')
+        coord_regrid = mri_data.coords[0]
+    else:
+        coord_regrid = mri_data.coords
+    logger.info(f'Coord shape = {coord_regrid.shape}')
+
+    # Estimate the arc length using discrete differences
+    dk = np.diff(coord_regrid, axis=-2)   # Delta kspace
+    im_old_shape = np.array(dk.shape)
+    im_old_shape[-2] = 1
+    dk = np.concatenate((dk,np.zeros(im_old_shape)), axis=-2)
+    print(dk.shape)
+
+    dk_mag = np.sqrt(np.sum(dk**2, axis=-1)) # magnitude
+    arc_length = np.sum(dk_mag, axis=-1) #to get arc length
+
+    max_arc_length = np.max(arc_length)
+    npts = ceil( max_arc_length / new_dk)
+    logger.info(f'Max arc length = {max_arc_length}')
+    logger.info(f'New pts = {npts}, old pts = {coord_regrid.shape[-2]}')
+
+    # Now resample
+    arc_length = np.expand_dims(np.cumsum(dk_mag, axis=-1),-1) #to get arc length
+    logger.info(f'Arc length shape {arc_length.shape}')
+
+
 
 
 def pca_coil_compression(kdata=None, axis=0, target_channels=None):
@@ -409,7 +483,7 @@ def crop_kspace(mri_rawdata=None, crop_factor=2, crop_type='radius'):
         logger.info(f'New shape = {sp.estimate_shape(mri_rawdata.coords[e])}')
 
 
-def get_gate_bins( gate_signal, gate_type, num_frames, discrete_gates=False):
+def get_gate_bins( gate_signal, gate_type, num_frames, discrete_gates=False, prep_disdaqs=0):
     logger = logging.getLogger('Get Gate bins')
 
     print(gate_signal)
@@ -439,6 +513,10 @@ def get_gate_bins( gate_signal, gate_type, num_frames, discrete_gates=False):
         # Linear fit
         t_max = q95 + (q95 - q05) / 0.9 * 0.05
         t_min = q05 + (q95 - q05) / 0.9 * -0.05
+    elif gate_type == 'prep':
+        # Skip a number of projections
+        t_min = np.min([np.min(gate) for gate in gate_signal]) + prep_disdaqs
+
 
     if discrete_gates:
         t_min -= 0.5
@@ -455,6 +533,119 @@ def get_gate_bins( gate_signal, gate_type, num_frames, discrete_gates=False):
     logger.info(f'Delta = {delta_time}')
 
     return t_min, t_max, delta_time
+
+
+def gate_kspace2d(mri_raw=None, num_frames=[10, 10], gate_type=['time', 'prep'],
+                  discrete_gates=[False, False], ecg_delay=300e-3, prep_disdaqs=0):
+    logger = logging.getLogger('Gate k-space 2D')
+
+    # Assume the input is a list
+
+    # Get the MRI Raw structure setup
+    mri_rawG = MRI_Raw()
+    mri_rawG.Num_Coils = mri_raw.Num_Coils
+    mri_rawG.Num_Encodings = mri_raw.Num_Encodings
+    mri_rawG.dft_needed = mri_raw.dft_needed
+    mri_rawG.trajectory_type = mri_raw.trajectory_type
+
+    # List array
+    mri_rawG.coords = []
+    mri_rawG.dcf = []
+    mri_rawG.kdata = []
+    mri_rawG.time = []
+    mri_rawG.ecg = []
+    mri_rawG.prep = []
+    mri_rawG.resp = []
+
+    gate_signals = {
+        'ecg': mri_raw.ecg,
+        'time': mri_raw.time,
+        'prep': mri_raw.prep,
+        'resp': mri_raw.resp
+    }
+    gate_signal0 = gate_signals.get(gate_type[0], f'Cannot interpret gate signal {gate_type}')
+    gate_signal1 = gate_signals.get(gate_type[1], f'Cannot interpret gate signal {gate_type}')
+
+    # For ECG, delay the waveform
+    #if gate_type == 'ecg':
+    #    time = mri_raw.time
+
+    #    for e in range(mri_raw.Num_Encodings):
+    #        time_encode = time[e]
+    #        ecg_encode = gate_signal[e]
+
+            # Sort the data by time
+    #        idx = np.argsort(time_encode)
+    #        idx_inverse = idx.argsort()
+
+            # Estimate the delay
+    #        if e == 0:
+    #            ecg_shift = int(ecg_delay / time_encode.max() * time_encode.size)
+    #            print(f'Shifting by {ecg_shift}')
+
+            # Using circular shift for now. This should be fixed
+    #        ecg_sorted = ecg_encode[idx]
+    #        ecg_shifted = np.roll( ecg_sorted, ecg_shift)
+
+    #        gate_signal[e] = ecg_shifted
+
+    print(f'Gating off of {gate_type}')
+
+    t_min0, t_max0, delta_time0 = get_gate_bins(gate_signal0, gate_type[0], num_frames[0], discrete_gates[0])
+    t_min1, t_max1, delta_time1 = get_gate_bins(gate_signal1, gate_type[1], num_frames[1], discrete_gates[1])
+
+
+    points_per_bin = []
+    count = 0
+    for t0 in range(num_frames[0]):
+
+        t_start0 = t_min0 + delta_time0 * t0
+        t_stop0 = t_start0 + delta_time0
+
+        for t1 in range(num_frames[1]):
+            t_start1 = t_min1 + delta_time1 * t1
+            t_stop1 = t_start1 + delta_time1
+
+            for e in range(mri_raw.Num_Encodings):
+
+
+                # Find index where value is held
+                idx = np.argwhere(np.logical_and.reduce([
+                    np.abs(gate_signal0[e]) >= t_start0,
+                    np.abs(gate_signal0[e]) < t_stop0,
+                    np.abs(gate_signal1[e]) >= t_start1,
+                    np.abs(gate_signal1[e]) < t_stop1]))
+
+                current_points = len(idx)
+
+                # Gate the data
+                points_per_bin.append(current_points)
+
+                logger.info(f'Frame {t0} [{t_start0} to {t_stop0} ] | [{t_start1} to {t_stop1} ]  {e}, Points = {current_points}')
+
+                #print(gate_signal[e].shape)
+                #print(mri_raw.coords[e].shape)
+
+                mri_rawG.coords.append(mri_raw.coords[e][idx[:, 0], :])
+                mri_rawG.dcf.append(mri_raw.dcf[e][idx[:, 0]])
+                mri_rawG.kdata.append(mri_raw.kdata[e][:, idx[:, 0]])
+                mri_rawG.time.append(mri_raw.time[e][idx[:, 0]])
+                mri_rawG.resp.append(mri_raw.resp[e][idx[:, 0]])
+                mri_rawG.prep.append(mri_raw.prep[e][idx[:, 0]])
+                mri_rawG.ecg.append(mri_raw.ecg[e][idx[:, 0]])
+
+                count += 1
+
+    max_points_per_bin = np.max(np.array(points_per_bin))
+    logger.info(f'Max points = {max_points_per_bin}')
+    logger.info(f'Points per bin = {points_per_bin}')
+    logger.info(
+        f'Average points per bin = {np.mean(points_per_bin)} [ {np.min(points_per_bin)}  {np.max(points_per_bin)} ]')
+    logger.info(f'Standard deviation = {np.std(points_per_bin)}')
+
+    mri_rawG.Num_Frames = num_frames
+
+    return (mri_rawG)
 
 def gate_kspace(mri_raw=None, num_frames=10, gate_type='time', discrete_gates=False, ecg_delay=300e-3):
     logger = logging.getLogger('Gate k-space')
@@ -612,7 +803,7 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_co
             for i in ['Z', 'Y', 'X']:
                 logging.info(f'Loading {i} coord.')
 
-                kcoord = np.array(hf['Kdata'][f'K{i}_E{encode}'])
+                kcoord = np.array(hf['Kdata'][f'K{i}_E{encode}']).flatten()
 
                 # Check range to distinguish 2D from 3D
                 if i == 'Z':
@@ -862,7 +1053,7 @@ def load_MRI_raw_ou(h5_filename=None, max_coils=None, compress_coils=False):
                     krange = np.max(kcoord) - np.min(kcoord)
                     if krange < 1e-3:
                         continue
-                coord.append(kcoord.flatten())
+                coord.append(kcoord)
             coord = np.stack(coord, axis=-1)
 
             ##Rotate the image
@@ -920,25 +1111,21 @@ def load_MRI_raw_ou(h5_filename=None, max_coils=None, compress_coils=False):
 
             print(f'Time shape = {time.shape}')
 
-            prep = prep.flatten()
-            resp = resp.flatten()
-            ecg = ecg.flatten()
-            dcf = dcf.flatten()
-            time = time.flatten()
+            prep = prep
+            resp = resp
+            ecg = ecg
+            dcf = dcf
+            time = time
 
             # Get k-space
             ksp = []
             mri_raw.Num_Coils -= 3
 
             for c in range(Num_Coils):
-
-                if c==9 or c==13 or c==14:
-                    continue
-
                 logging.info(f'Loading kspace, coil {c + 1} / {Num_Coils}.')
 
                 k = hf['Kdata'][f'KData_E{encode}_C{c}']
-                ksp.append(np.array(k['real'] + 1j * k['imag'])[:,idx,...].flatten())
+                ksp.append(np.array(k['real'] + 1j * k['imag'])[:,idx,...])
             ksp = np.stack(ksp, axis=0)
 
             # Append to list
