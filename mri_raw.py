@@ -307,15 +307,13 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
                     coords_temp = sp.to_device(mri_rawdata.coords[e], device)
                     image[c] += sp.nufft_adjoint(ksp, coords_temp, img_shape)
 
-            # Need on CPU for reliable SVD
-            image = sp.to_device(image)
-
-            sos = np.sqrt( np.sum( np.abs(image) **2, axis=0))
-            sos = np.expand_dims(sos, axis=0)
-            sos = sos + np.max(sos)*1e-5
+            sos = xp.sqrt( xp.sum( xp.abs(image) **2, axis=0))
+            sos = xp.expand_dims(sos, axis=0)
+            sos = sos + xp.max(sos)*1e-5
 
             smaps = image / sos
 
+            print(f'Smaps Device = {sp.get_device(smaps)}')
         else:
 
             dcf = sp.to_device(dcf, device)
@@ -677,27 +675,32 @@ def gate_kspace(mri_raw=None, num_frames=10, gate_type='time', discrete_gates=Fa
     gate_signal = gate_signals.get(gate_type, f'Cannot interpret gate signal {gate_type}')
 
     # For ECG, delay the waveform
-    #if gate_type == 'ecg':
-    #    time = mri_raw.time
+    if gate_type == 'ecg':
+       time = mri_raw.time
 
-    #    for e in range(mri_raw.Num_Encodings):
-    #        time_encode = time[e]
-    #        ecg_encode = gate_signal[e]
+       for e in range(mri_raw.Num_Encodings):
+           time_encode = time[e]
+           ecg_encode = gate_signal[e]
 
-            # Sort the data by time
-    #        idx = np.argsort(time_encode)
-    #        idx_inverse = idx.argsort()
+            #Sort the data by time
+           idx = np.argsort(time_encode)
+           idx_inverse = idx.argsort()
 
-            # Estimate the delay
-    #        if e == 0:
-    #            ecg_shift = int(ecg_delay / time_encode.max() * time_encode.size)
-    #            print(f'Shifting by {ecg_shift}')
+           # Estimate the delay
+           if e == 0:
+               print(f'Time max {time_encode.max()}')
+               print(f'Time size {time_encode.size}')
+               print(f'Time ecg delay {ecg_delay}')
+               
+               ecg_shift = int(ecg_delay / time_encode.max() * time_encode.size)
+               print(f'Shifting by {ecg_shift}')
 
-            # Using circular shift for now. This should be fixed
-    #        ecg_sorted = ecg_encode[idx]
-    #        ecg_shifted = np.roll( ecg_sorted, ecg_shift)
+           #Using circular shift for now. This should be fixed
+           ecg_sorted = ecg_encode[idx]
+           ecg_shifted = np.roll( ecg_sorted, -ecg_shift)
 
-    #        gate_signal[e] = ecg_shifted
+
+           gate_signal[e] = ecg_shifted[idx_inverse]
 
     print(f'Gating off of {gate_type}')
 
@@ -745,6 +748,126 @@ def gate_kspace(mri_raw=None, num_frames=10, gate_type='time', discrete_gates=Fa
     mri_rawG.Num_Frames = num_frames
 
     return (mri_rawG)
+
+@nb.jit(nopython=True, cache=True, parallel=True)  # pragma: no cover
+def bounded_medfilt(signal, window):
+
+  filtered = np.empty_like(signal)
+  for i in range(len(signal)):
+    start =  max(0, i - window)
+    stop = start + 2*window + 1
+
+    if stop > (len(signal)-1):
+      start = len(signal)-1 - (2*window+1)
+      stop = len(signal)-1
+
+    if i % 10000 == 0:
+        print(start)
+    filtered[i] = np.median(signal[start:stop])
+
+  filtered = signal - filtered
+
+  return filtered 
+
+
+def median_filter_resp(time, resp, window):
+  
+  # Get the sort index
+  idx_sort = np.argsort(time)
+
+  # Sort the data
+  time_sorted = time[idx_sort]
+  resp_sorted = resp[idx_sort]
+
+  # Get an index to unsort the data
+  idx_unsort = np.empty_like(idx_sort)
+  idx_unsort[idx_sort] = np.arange(idx_sort.size)
+
+  # Median filtered
+  from scipy.signal import medfilt
+  resp_filtered = bounded_medfilt(resp_sorted,window // 2)
+
+  # Unsort back into as acquired data
+  resp_unsorted = resp_filtered[idx_unsort] 
+  
+  return resp_unsorted
+
+
+def resp_gate(mri_raw=None, efficiency=0.5, filter_resp=True):
+    logger = logging.getLogger('Resp Gate k-space')
+
+    # Get the MRI Raw structure setup
+    mri_rawG = MRI_Raw()
+    mri_rawG.Num_Coils = mri_raw.Num_Coils
+    mri_rawG.Num_Encodings = mri_raw.Num_Encodings
+    mri_rawG.dft_needed = mri_raw.dft_needed
+    mri_rawG.trajectory_type = mri_raw.trajectory_type
+    mri_rawG.Num_Frames = mri_raw.Num_Frames
+    mri_rawG.Num_Encodings = mri_raw.Num_Encodings
+
+    # List array
+    mri_rawG.coords = []
+    mri_rawG.dcf = []
+    mri_rawG.kdata = []
+    mri_rawG.time = []
+    mri_rawG.ecg = []
+    mri_rawG.prep = []
+    mri_rawG.resp = []
+
+    points_per_bin = []
+    count = 0
+    for e in range(mri_raw.Num_Encodings):
+
+        # Grab the time and respiratory waveforms
+        time = mri_raw.time[e]
+        resp = mri_raw.resp[e]
+
+        # Estimate the TR
+        print(time.shape)
+        dt = np.max(time) / len(time)
+        resp_filter_width = int(10 / dt)
+
+        logger.info(f'Estimated TR = {dt} based on {np.max(time)} s acquisition with {len(time)} points')
+        logger.info(f'Using a filter window of {resp_filter_width}')
+                
+        # Filter the respiratory signal
+        # filter_resp = median_filter_resp(time, resp, resp_filter_width)
+        filter_resp = resp
+
+        # Resp sorted to get threshold value
+        sorted_resp = np.sort(filter_resp)
+        resp_thresh = sorted_resp[int(len(filter_resp)*efficiency)]
+
+        logger.info(f'Resp threshold = {resp_thresh}, based on {efficiency}')
+
+        # Find index where value is held
+        idx = np.argwhere(resp < resp_thresh)
+        current_points = len(idx)
+
+        # Gate the data
+        points_per_bin.append(current_points)
+
+        logger.info(f'Encode {e}, Points = {current_points}')
+
+        mri_rawG.coords.append(mri_raw.coords[e][idx[:, 0], :])
+        mri_rawG.dcf.append(mri_raw.dcf[e][idx[:, 0]])
+        mri_rawG.kdata.append(mri_raw.kdata[e][:, idx[:, 0]])
+        mri_rawG.time.append(mri_raw.time[e][idx[:, 0]])
+        mri_rawG.resp.append(mri_raw.resp[e][idx[:, 0]])
+        mri_rawG.prep.append(mri_raw.prep[e][idx[:, 0]])
+        mri_rawG.ecg.append(mri_raw.ecg[e][idx[:, 0]])
+
+        count += 1
+
+    max_points_per_bin = np.max(np.array(points_per_bin))
+    logger.info(f'Max points = {max_points_per_bin}')
+    logger.info(f'Points per bin = {points_per_bin}')
+    logger.info(f'Average points per bin = {np.mean(points_per_bin)} [ {np.min(points_per_bin)}  {np.max(points_per_bin)} ]')
+    logger.info(f'Standard deviation = {np.std(points_per_bin)}')
+
+    return (mri_rawG)
+
+
 
 def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_coils=False):
     with h5py.File(h5_filename, 'r') as hf:
@@ -1195,7 +1318,7 @@ def autofov(mri_raw=None, device=None,
 
     with device:
         # Put on GPU
-        coord = 2.0 * mri_raw.coords[0]
+        coord = oversample * mri_raw.coords[0]
         dcf = mri_raw.dcf[0]
 
         # Low resolution filter
@@ -1259,15 +1382,20 @@ def autofov(mri_raw=None, device=None,
     boxc = sos > thresh * sos.max()
     boxc_idx = np.nonzero(boxc)
     boxc_center = np.array(img_shape) // 2
-    boxc_shape = np.array([int(2 * max(c - min(boxc_idx[i]), max(boxc_idx[i]) - c) * scale)
+    boxc_shape = np.array([2*int(oversample * max(c - min(boxc_idx[i]), max(boxc_idx[i]) - c) * scale)
                            for i, c in zip(range(3), boxc_center)])
+
+    # Get the Box size
+    logger.info(f'Box center: {boxc_center}')
+    logger.info(f'Box shape: {boxc_shape}')
+    
 
     #  Due to double FOV scale by 2
     target_recon_scale = boxc_shape / img_shape
     logger.info(f'Target recon scale: {target_recon_scale}')
 
     # Scale to new FOV
-    target_recon_size = sp.estimate_shape(coord) * target_recon_scale
+    target_recon_size = sp.estimate_shape(coord) * target_recon_scale  / oversample
     if square:
         target_recon_size[:] = np.max(target_recon_size)
 
@@ -1278,7 +1406,7 @@ def autofov(mri_raw=None, device=None,
     ndim = coord.shape[-1]
 
     with sp.get_device(coord):
-        img_scale = [(2.0 * target_recon_size[i] / (coord[..., i].max() - coord[..., i].min())) for i in range(ndim)]
+        img_scale = [(oversample * target_recon_size[i] / (coord[..., i].max() - coord[..., i].min())) for i in range(ndim)]
 
     # fix precision errors in x dir
     for i in range(ndim):

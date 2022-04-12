@@ -37,6 +37,8 @@ if __name__ == "__main__":
     parser.add_argument('--jsense_max_iter', type=int, default=30)
     parser.add_argument('--jsense_max_inner_iter', type=int, default=10)
     parser.add_argument('--jsense_lamda', type=float, default=0.0)
+    parser.add_argument('--smap_type', type=str, default='jsense', help='Sensitvity type jsense, lowres, walsh, espirit')
+
     parser.add_argument('--krad_cutoff', type=float, default=999990)
     parser.add_argument('--max_encodes', type=int, default=None)
 
@@ -47,12 +49,16 @@ if __name__ == "__main__":
     parser.add_argument('--crop_factor', type=float, default=1.0)
     parser.add_argument('--recon_type', type=str, default='llr')
     parser.add_argument('--llr_block_width',type=int, default=32)
+    parser.add_argument('--data_oversampling',type=float, default=2.0)
 
     parser.set_defaults(discrete_gates=False)
     parser.add_argument('--discrete_gates', dest='discrete_gates', action='store_true')
 
     parser.set_defaults(discrete_gates2=False)
     parser.add_argument('--discrete_gates2', dest='discrete_gates2', action='store_true')
+
+    parser.set_defaults(resp_gate=False)
+    parser.add_argument('--resp_gate', dest='resp_gate', action='store_true')
 
     parser.add_argument('--fast_maxeig', dest='fast_maxeig', action='store_true')
     parser.set_defaults(fast_maxeig=False)
@@ -106,9 +112,13 @@ if __name__ == "__main__":
     if args.crop_factor > 1.0:
         crop_kspace(mri_rawdata=mri_raw, crop_factor=args.crop_factor)  # 2.5 (320/128)
 
+    # Perform respiratory gating 
+    if args.resp_gate:
+        mri_raw = resp_gate(mri_raw)
+
     # Reconstruct an low res image and get the field of view
     logger.info(f'Estimating FOV MRI ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
-    autofov(mri_raw=mri_raw, thresh=args.thresh, scale=args.scale, square=False)
+    autofov(mri_raw=mri_raw, thresh=args.thresh, scale=args.scale, oversample=args.data_oversampling, square=False)
 
     # Get sensitivity maps
     logger.info(f'Reconstruct sensitivity maps ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
@@ -122,7 +132,11 @@ if __name__ == "__main__":
             # MSLR doesn't work with zeros in sensitivity map yet
             smaps = get_smaps(mri_rawdata=mri_raw, args=args, thresh_maps=False, smap_type='jsense', log_dir=args.out_folder)
         else:
-            smaps = get_smaps(mri_rawdata=mri_raw, args=args, thresh_maps=False, smap_type='lowres', log_dir=args.out_folder)
+            smaps = get_smaps(mri_rawdata=mri_raw, args=args, thresh_maps=False, smap_type=args.smap_type, log_dir=args.out_folder)
+
+
+    # Put the maps on the GPU
+    smaps = sp.to_device(smaps, sp.Device(args.device))
 
     # Gate k-space
     if args.frames > 1:
@@ -137,7 +151,7 @@ if __name__ == "__main__":
                                   num_frames=args.frames,
                                   gate_type=args.gate_type,
                                   discrete_gates=args.discrete_gates)
-
+    
     # Fake rotations
     if False:
         for i in range(mri_raw.Num_Frames*mri_raw.Num_Encodings):
@@ -168,14 +182,12 @@ if __name__ == "__main__":
 
             mri_raw.coords[i] = coord_rot
 
-    if True:
+    if False:
         for i in range(len(mri_raw.kdata)):
             mri_raw.kdata[i] = sp.to_device(mri_raw.kdata[i], sp.Device(args.device))
             mri_raw.coords[i] = sp.to_device(mri_raw.coords[i], sp.Device(args.device))
             mri_raw.dcf[i] = sp.to_device(mri_raw.dcf[i], sp.Device(args.device))
 
-    # Put the maps on the GPU
-    smaps = sp.to_device(smaps, sp.Device(args.device))
 
     # Reconstruct the image
     if args.recon_type == 'mslr':
@@ -199,12 +211,9 @@ if __name__ == "__main__":
 
         out_name = os.path.join(args.out_folder,'MSLRObject.h5')
         lrimg.save(out_name)
-
-        Sz = lrimg[..., lrimg.shape[-3] // 2, :, :]
-        Sy = lrimg[..., lrimg.shape[-2] // 2, :]
-        Sx = lrimg[..., lrimg.shape[-1] // 2]
-        img = lrimg[:, :, :, :, :]
-        #img = np.reshape(img, (args.frames, -1) + img.shape[1:])
+        
+        img = lrimg[:,:,:,:]
+        
         out_name = os.path.join(args.out_folder, 'FullRecon.h5')
         logger.info('Saving images to ' + out_name)
         try:
@@ -216,6 +225,11 @@ if __name__ == "__main__":
             pass
 
         if args.example_images:
+        
+            Sz = lrimg[:, :, lrimg.shape[-3] // 2, :, :]
+            Sy = lrimg[:, :, :, lrimg.shape[-2] // 2, :]
+            Sx = lrimg[:, :, :, :, lrimg.shape[-1] // 2]
+        
             # generate some slices
             logger.info('Generating slices for export')
             lrimg.use_device(sp.Device(args.device))
