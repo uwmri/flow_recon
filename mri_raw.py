@@ -16,7 +16,8 @@ import numba as nb
 #import torch as torch
 import os
 import scipy.ndimage as ndimage
-
+import torch
+from gpu_ops import *
 
 class MRI_Raw:
     Num_Encodings = 0
@@ -318,7 +319,8 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
 
             dcf = sp.to_device(dcf, device)
             coord = sp.to_device(coord, device)
-            kdata = sp.to_device(kdata, device)
+            #kdata = sp.to_device(kdata, device)
+            kdata = array_to_gpu(kdata)
 
             smaps = mr.app.JsenseRecon(kdata,
                                        coord=coord,
@@ -1055,7 +1057,6 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_co
 
             if Num_Coils > 32:
                 mri_raw.kdata = pca_coil_compression(kdata=mri_raw.kdata, axis=0, target_channels=20)
-                mri_raw.Num_Coils = 28
                 mri_raw.Num_Coils = 20
 
         return mri_raw
@@ -1307,7 +1308,7 @@ def load_MRI_raw_ou(h5_filename=None, max_coils=None, compress_coils=False):
         return mri_raw
 
 def autofov(mri_raw=None, device=None,
-            thresh=0.05, scale=1, oversample=2.0, square=True):
+            thresh=0.05, scale=1, oversample=2.0, square=True, block_size=8):
     logger = logging.getLogger('autofov')
 
     # Set to GPU
@@ -1399,8 +1400,8 @@ def autofov(mri_raw=None, device=None,
     if square:
         target_recon_size[:] = np.max(target_recon_size)
 
-    # Round to 16 for blocks and FFT
-    target_recon_size = 16 * np.ceil(target_recon_size / 16)
+    # Round for blocks and FFT
+    target_recon_size = block_size * np.ceil(target_recon_size / block_size)
 
     # Get the actual scale without rounding
     ndim = coord.shape[-1]

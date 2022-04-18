@@ -18,6 +18,13 @@ import os
 import scipy.ndimage as ndimage
 from registration_tools import *
 
+def array_to_gpu( a ):
+    a = torch.tensor(a)
+    a = a.cuda()
+    a = sp.from_pytorch(a)
+    return a
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger('main')
@@ -118,7 +125,12 @@ if __name__ == "__main__":
 
     # Reconstruct an low res image and get the field of view
     logger.info(f'Estimating FOV MRI ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
-    autofov(mri_raw=mri_raw, thresh=args.thresh, scale=args.scale, oversample=args.data_oversampling, square=False)
+    if args.recon_type == 'llr':
+        autofov_block_size = args.llr_block_width
+    else:
+        autofov_block_size = 8
+
+    autofov(mri_raw=mri_raw, thresh=args.thresh, scale=args.scale, oversample=args.data_oversampling, square=False, block_size=autofov_block_size)
 
     # Get sensitivity maps
     logger.info(f'Reconstruct sensitivity maps ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
@@ -136,7 +148,8 @@ if __name__ == "__main__":
 
 
     # Put the maps on the GPU
-    smaps = sp.to_device(smaps, sp.Device(args.device))
+    #smaps = sp.to_device(smaps, sp.Device(args.device))
+    smaps = array_to_gpu(smaps) # due to issue on some machines with pciexpress transfer
 
     # Gate k-space
     if args.frames > 1:
