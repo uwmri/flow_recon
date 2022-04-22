@@ -17,12 +17,7 @@ import numba as nb
 import os
 import scipy.ndimage as ndimage
 from registration_tools import *
-
-def array_to_gpu( a ):
-    a = torch.tensor(a)
-    a = a.cuda()
-    a = sp.from_pytorch(a)
-    return a
+from gpu_ops import * 
 
 
 if __name__ == "__main__":
@@ -148,9 +143,8 @@ if __name__ == "__main__":
 
 
     # Put the maps on the GPU
-    #smaps = sp.to_device(smaps, sp.Device(args.device))
-    smaps = array_to_gpu(smaps) # due to issue on some machines with pciexpress transfer
-
+    smaps = array_to_gpu(smaps, sp.Device(args.device))
+    
     # Gate k-space
     if args.frames > 1:
         if args.frames2 > 1:
@@ -170,9 +164,9 @@ if __name__ == "__main__":
         for i in range(mri_raw.Num_Frames*mri_raw.Num_Encodings):
             print(f'Frame {i} ')
             device = sp.get_device(mri_raw.coords[i])
-            kdata = sp.to_device(mri_raw.kdata[i], device)
-            dcf = sp.to_device(mri_raw.dcf[i], device)
-            coord = sp.to_device(mri_raw.coords[i], device)
+            kdata = array_to_gpu(mri_raw.kdata[i], device)
+            dcf = array_to_gpu(mri_raw.dcf[i], device)
+            coord = array_to_gpu(mri_raw.coords[i], device)
 
             psi = -float(i // mri_raw.Num_Encodings)*0.05
             phi = 0
@@ -186,7 +180,7 @@ if __name__ == "__main__":
 
             # Build Rotation matrix
             rot = build_rotation(theta, phi, psi)
-            rot = sp.to_device( rot, device)
+            rot = array_to_gpu( rot, device)
 
             coord_rot = coord
             coord_rot = device.xp.expand_dims( coord_rot, -1)
@@ -197,9 +191,9 @@ if __name__ == "__main__":
 
     if False:
         for i in range(len(mri_raw.kdata)):
-            mri_raw.kdata[i] = sp.to_device(mri_raw.kdata[i], sp.Device(args.device))
-            mri_raw.coords[i] = sp.to_device(mri_raw.coords[i], sp.Device(args.device))
-            mri_raw.dcf[i] = sp.to_device(mri_raw.dcf[i], sp.Device(args.device))
+            mri_raw.kdata[i] = array_to_gpu(mri_raw.kdata[i], sp.Device(args.device))
+            mri_raw.coords[i] = array_to_gpu(mri_raw.coords[i], sp.Device(args.device))
+            mri_raw.dcf[i] = array_to_gpu(mri_raw.dcf[i], sp.Device(args.device))
 
 
     # Reconstruct the image
@@ -292,9 +286,9 @@ if __name__ == "__main__":
         for i in range(len(mri_raw.kdata)):
             logger.info(f'Sense Recon : Frame {i}')
 
-            kdata = sp.to_device(mri_raw.kdata[i], args.device)
-            dcf = sp.to_device(mri_raw.dcf[i], args.device)
-            coord = sp.to_device(mri_raw.coords[i], args.device)
+            kdata = array_to_gpu(mri_raw.kdata[i], args.device)
+            dcf = array_to_gpu(mri_raw.dcf[i], args.device)
+            coord = array_to_gpu(mri_raw.coords[i], args.device)
 
             print(f'Smaps device = {sp.get_device(smaps)}')
             print(f'Kdata = device = {sp.get_device(kdata)}')
@@ -313,9 +307,9 @@ if __name__ == "__main__":
         for i in range(len(mri_raw.kdata)):
             logger.info(f'Frame {i} of {len(mri_raw.kdata)}')
 
-            kdata = sp.to_device(mri_raw.kdata[i], args.device)
-            dcf = sp.to_device(mri_raw.dcf[i], args.device)
-            coord = sp.to_device(mri_raw.coords[i], args.device)
+            kdata = array_to_gpu(mri_raw.kdata[i], args.device)
+            dcf = array_to_gpu(mri_raw.dcf[i], args.device)
+            coord = array_to_gpu(mri_raw.coords[i], args.device)
 
             # Low resolution images
             xp = sp.get_device(coord).xp

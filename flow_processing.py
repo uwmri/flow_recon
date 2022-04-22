@@ -74,7 +74,7 @@ def lap4(phase_w, direction, mod):
 
 class MRI_4DFlow:
 
-    def __init__(self, encode_type,venc):
+    def __init__(self, encode_type,venc, unwrap_lap=False):
 
         'Initialization'
         self.set_encoding_matrix(encode_type)
@@ -83,12 +83,14 @@ class MRI_4DFlow:
         self.spatial_resolution = 0.5 # percent of kmax
         self.time_resolution = 0.5 # percent of nominal
         self.background_magnitude = 0.5 #value of background
-
+        self.unwrap_lap = unwrap_lap
+        
         # Matrices
         self.signal = None
         self.velocity_estimate = None
         self.angiogram = None
         self.magnitude = None
+        
 
     def set_encoding_matrix(self, encode_type='4pt-referenced'):
         encode_dictionary = {
@@ -157,8 +159,7 @@ class MRI_4DFlow:
         # Unwrap phase for all encodes
         num_enc = phase.shape[4]
 
-        unwrap_lap = True
-        if unwrap_lap:
+        if self.unwrap_lap:
             if phase.shape[0] > 1:
                 print(f'number of encodes to unwrap {num_enc}')
                 # Start loop in second encode (first was use to reference)
