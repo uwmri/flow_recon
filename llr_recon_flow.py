@@ -43,6 +43,7 @@ if __name__ == "__main__":
 
     parser.add_argument('--krad_cutoff', type=float, default=999990)
     parser.add_argument('--max_encodes', type=int, default=None)
+    parser.add_argument('--coil_batch_size', type=int, default=1)
 
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--gate_type', type=str, default='time')  # recon type
@@ -274,7 +275,7 @@ if __name__ == "__main__":
         logger.info(f'Reconstruct Images ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
         img = BatchedSenseRecon(mri_raw.kdata, mps=smaps, weights=mri_raw.dcf, coord=mri_raw.coords,
                                 device=sp.Device(args.device), lamda=args.lamda, num_enc=num_enc,
-                                coil_batch_size=1, max_iter=args.max_iter, batched_iter=args.max_iter,
+                                coil_batch_size=args.coil_batch_size, max_iter=args.max_iter, batched_iter=args.max_iter,
                                 gate_type=args.gate_type, fast_maxeig=args.fast_maxeig,
                                 block_width=args.llr_block_width, log_folder=args.out_folder,
                                 composite_init=False
@@ -295,7 +296,7 @@ if __name__ == "__main__":
             print(f'DCF device = {sp.get_device(dcf)}')
             print(f'Coord device = {sp.get_device(coord)}')
 
-            sense = sp.mri.app.SenseRecon(kdata, smaps, lamda=0, weights=dcf, coord=coord, max_iter=args.max_iter, coil_batch_size=1, device=args.device)
+            sense = sp.mri.app.SenseRecon(kdata, smaps, lamda=0, weights=dcf, coord=coord, max_iter=args.max_iter, coil_batch_size=args.coil_batch_size, device=args.device)
             #sense = sp.mri.app.L1WaveletRecon(kdata, smaps, lamda=1e-1, weights=dcf, coord=coord, max_iter=50, coil_batch_size=1, device=args.device)
 
             print('Run Sense')
@@ -318,7 +319,7 @@ if __name__ == "__main__":
             lpf = xp.exp(-lpf / (2.0 * res * res))
             dcf = dcf * lpf
 
-            E = sp.mri.linop.Sense(mps=smaps, coord=coord, weights=dcf ** 2, coil_batch_size=1)
+            E = sp.mri.linop.Sense(mps=smaps, coord=coord, weights=dcf ** 2, coil_batch_size=args.coil_batch_size)
             Eh = E.H
 
             img.append(sp.to_device(Eh * kdata))

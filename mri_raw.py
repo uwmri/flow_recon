@@ -287,199 +287,203 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
     if device is None:
         device = sp.Device(0)
 
-    xp = device.xp
+    op_device = device
+    store_device = sp.cpu_device
 
-    with device:
+    # Reference for shortcut
+    coord = mri_rawdata.coords[0]
+    dcf = mri_rawdata.dcf[0]
+    kdata = mri_rawdata.kdata[0]
 
-        # Reference for shortcut
-        coord = mri_rawdata.coords[0]
-        dcf = mri_rawdata.dcf[0]
-        kdata = mri_rawdata.kdata[0]
+    if smap_type == 'espirit':
 
-        if smap_type == 'espirit':
+        # Low resolution images
+        res = 64
+        lpf = np.sum(coord ** 2, axis=-1)
+        lpf = np.exp(-lpf / (2.0 * res * res))
 
-            # Low resolution images
-            res = 64
-            lpf = np.sum(coord ** 2, axis=-1)
-            lpf = np.exp(-lpf / (2.0 * res * res))
+        img_shape = sp.estimate_shape(coord)
+        ksp = xp.ones([mri_rawdata.Num_Coils] + img_shape, dtype=xp.complex64)
 
-            img_shape = sp.estimate_shape(coord)
-            ksp = xp.ones([mri_rawdata.Num_Coils] + img_shape, dtype=xp.complex64)
+        for c in range(mri_rawdata.Num_Coils):
+            logger.info(f'Reconstructing  coil {c}')
+            kxp = sp.get_device(kdata[c]).xp
+            ksp_t = kxp.copy(kdata[c])
+            ksp_t *= kxp.squeeze(dcf)
+            ksp_t *= kxp.squeeze(lpf)
+            ksp_t = array_to_gpu(ksp_t, device=device)
+            coord_t = array_to_gpu(coord, device=device)
+
+            ksp[c] = sp.nufft_adjoint(ksp_t, coord_t, img_shape)
+
+        # Put onto CPU due to memory issues in ESPiRIT
+        ksp = sp.to_device(ksp, sp.cpu_device)
+
+        # Espirit Cal
+        smaps = sp.mri.app.EspiritCalib(ksp, calib_width=24, thresh=0.02, kernel_width=6, crop=0.0, max_iter=100,
+                                        device=sp.cpu_device, show_pbar=True).run()
+
+    elif smap_type == 'walsh':
+
+        logger = logging.getLogger('walsh')
+
+        # Get a composite image
+        img_shape = sp.estimate_shape(coord)
+        image = xp.zeros([mri_rawdata.Num_Coils] + img_shape, dtype=xp.complex64)
+
+        for e in range(mri_rawdata.Num_Encodings):
+            kr = sp.get_device(mri_rawdata.coords[e]).xp.sum(mri_rawdata.coords[e] ** 2, axis=-1)
+            kr = array_to_gpu(kr, device)
+            lpf = xp.exp(-kr / (2 * (128. ** 2)))
 
             for c in range(mri_rawdata.Num_Coils):
-                logger.info(f'Reconstructing  coil {c}')
-                kxp = sp.get_device(kdata[c]).xp
-                ksp_t = kxp.copy(kdata[c])
-                ksp_t *= kxp.squeeze(dcf)
-                ksp_t *= kxp.squeeze(lpf)
-                ksp_t = array_to_gpu(ksp_t, device=device)
-                coord_t = array_to_gpu(coord, device=device)
+                logger.info(f'Reconstructing encode, coil {e} , {c} ')
+                ksp = array_to_gpu(mri_rawdata.kdata[e][c, ...], device)
+                ksp *= array_to_gpu(mri_rawdata.dcf[e], device)
+                ksp *= lpf
+                coords_temp = sp.to_device(mri_rawdata.coords[e], device)
+                image[c] += sp.nufft_adjoint(ksp, coords_temp, img_shape)
 
-                ksp[c] = sp.nufft_adjoint(ksp_t, coord_t, img_shape)
+        # Need on CPU for reliable SVD
+        image = sp.to_device(image)
 
-            # Put onto CPU due to memory issues in ESPiRIT
-            ksp = sp.to_device(ksp, sp.cpu_device)
+        logger.info(f'Image size {image.shape}')
 
-            # Espirit Cal
-            smaps = sp.mri.app.EspiritCalib(ksp, calib_width=24, thresh=0.02, kernel_width=6, crop=0.0, max_iter=100,
-                                            device=sp.cpu_device, show_pbar=True).run()
-
-        elif smap_type == 'walsh':
-
-            logger = logging.getLogger('walsh')
-
-            # Get a composite image
-            img_shape = sp.estimate_shape(coord)
-            image = xp.zeros([mri_rawdata.Num_Coils] + img_shape, dtype=xp.complex64)
-
-            for e in range(mri_rawdata.Num_Encodings):
-                kr = sp.get_device(mri_rawdata.coords[e]).xp.sum(mri_rawdata.coords[e] ** 2, axis=-1)
-                kr = array_to_gpu(kr, device)
-                lpf = xp.exp(-kr / (2 * (128. ** 2)))
-
-                for c in range(mri_rawdata.Num_Coils):
-                    logger.info(f'Reconstructing encode, coil {e} , {c} ')
-                    ksp = array_to_gpu(mri_rawdata.kdata[e][c, ...], device)
-                    ksp *= array_to_gpu(mri_rawdata.dcf[e], device)
-                    ksp *= lpf
-                    coords_temp = sp.to_device(mri_rawdata.coords[e], device)
-                    image[c] += sp.nufft_adjoint(ksp, coords_temp, img_shape)
-
-            # Need on CPU for reliable SVD
-            image = sp.to_device(image)
-
-            logger.info(f'Image size {image.shape}')
-
-            # Block operator
-            if len(image.shape) == 4:
-                block_shape = [8, 8, 8]
-                block_stride = [8, 8, 8]
-            else:
-                block_shape = [8, 8]
-                block_stride = [8, 8]
-
-            B = sp.linop.ArrayToBlocks(image.shape, block_shape, block_stride)
-
-            # Grab blocks
-            blocked_image = B*image
-            logger.info(f'Blocked images size {blocked_image.shape}')
-
-            # Reshape to blocks x pixels x coils
-            blocked_image = np.moveaxis(blocked_image, 0, -1)  # First axis is coil
-            old_shape = blocked_image.shape
-            new_shape = (-1, np.prod(block_shape), blocked_image.shape[-1])
-            blocked_image = np.reshape(blocked_image, new_shape)
-
-            # Now do svd
-            for bi in range(blocked_image.shape[0]):
-                block = blocked_image[bi]
-
-                [u, s, vh] = np.linalg.svd(block, full_matrices=False)
-                s = (vh[0,:])
-                s*= np.conj(s[0])/np.abs(s[0])
-
-                # set phase to first coil
-                coil0 = np.conj(block[:,0])
-                coil0 /= np.abs(coil0) * np.prod(block_shape)
-
-
-                blocked_image[bi] = coil0[:,np.newaxis]*s[np.newaxis,:]
-
-            # Reshape back
-            blocked_image = np.reshape(blocked_image, old_shape)
-            blocked_image = np.moveaxis(blocked_image, -1, 0)  # First axis is coil
-
-            smaps = B.H*blocked_image
-        elif smap_type == "lowres":
-            # Get a composite image
-            img_shape = sp.estimate_shape(coord)
-            image = xp.zeros([mri_rawdata.Num_Coils] + img_shape, dtype=xp.complex64)
-
-            for e in range(mri_rawdata.Num_Encodings):
-                kr = sp.get_device(mri_rawdata.coords[e]).xp.sum(mri_rawdata.coords[e] ** 2, axis=-1)
-                kr = array_to_gpu(kr, device)
-                lpf = xp.exp(-kr / (2 * (32. ** 2)))
-
-                for c in range(mri_rawdata.Num_Coils):
-                    logger.info(f'Reconstructing encode, coil {e} , {c} ')
-                    ksp = array_to_gpu(mri_rawdata.kdata[e][c, ...], device)
-                    ksp *= array_to_gpu(mri_rawdata.dcf[e], device)
-                    ksp *= lpf
-                    coords_temp = array_to_gpu(mri_rawdata.coords[e], device)
-                    image[c] += sp.nufft_adjoint(ksp, coords_temp, img_shape)
-
-            sos = xp.sqrt( xp.sum( xp.abs(image) **2, axis=0))
-            sos = xp.expand_dims(sos, axis=0)
-            sos = sos + xp.max(sos)*1e-5
-
-            smaps = image / sos
-
-            print(f'Smaps Device = {sp.get_device(smaps)}')
+        # Block operator
+        if len(image.shape) == 4:
+            block_shape = [8, 8, 8]
+            block_stride = [8, 8, 8]
         else:
+            block_shape = [8, 8]
+            block_stride = [8, 8]
 
-            dcf = array_to_gpu(dcf, device)
-            coord = array_to_gpu(coord, device)
-            kdata = array_to_gpu(kdata, device)
-            
-            smaps = mr.app.JsenseRecon(kdata,
-                                       coord=coord,
-                                       weights=dcf,
-                                       mps_ker_width=args.mps_ker_width,
-                                       ksp_calib_width=args.ksp_calib_width,
-                                       lamda=args.jsense_lamda,
-                                       device=device,
-                                       max_iter=args.jsense_max_iter,
-                                       max_inner_iter=args.jsense_max_inner_iter).run()
+        B = sp.linop.ArrayToBlocks(image.shape, block_shape, block_stride)
 
-            # Get a composite image
-            img_shape = sp.estimate_shape(coord)
-            image = 0
-            for e in range(mri_rawdata.Num_Encodings):
-                kr = sp.get_device(mri_rawdata.coords[e]).xp.sum(mri_rawdata.coords[e] ** 2, axis=-1)
-                kr = array_to_gpu(kr, device)
-                lpf = xp.exp(-kr / (2 * (16. ** 2)))
+        # Grab blocks
+        blocked_image = B*image
+        logger.info(f'Blocked images size {blocked_image.shape}')
 
-                for c in range(mri_rawdata.Num_Coils):
-                    logger.info(f'Reconstructing encode, coil {e} , {c} ')
-                    ksp = array_to_gpu(mri_rawdata.kdata[e][c, ...], device)
-                    ksp *= array_to_gpu(mri_rawdata.dcf[e], device)
-                    ksp *= lpf
-                    coords_temp = array_to_gpu(mri_rawdata.coords[e], device)
-                    image += xp.abs(sp.nufft_adjoint(ksp, coords_temp, img_shape)) ** 2
+        # Reshape to blocks x pixels x coils
+        blocked_image = np.moveaxis(blocked_image, 0, -1)  # First axis is coil
+        old_shape = blocked_image.shape
+        new_shape = (-1, np.prod(block_shape), blocked_image.shape[-1])
+        blocked_image = np.reshape(blocked_image, new_shape)
 
-            if thresh_maps:
-                image = xp.sqrt(image)  # sos image
-                image = array_to_gpu(image, sp.get_device(smaps))
+        # Now do svd
+        for bi in range(blocked_image.shape[0]):
+            block = blocked_image[bi]
 
-                xp = sp.get_device(smaps).xp
+            [u, s, vh] = np.linalg.svd(block, full_matrices=False)
+            s = (vh[0,:])
+            s*= np.conj(s[0])/np.abs(s[0])
 
-                # Threshold
-                image = xp.abs(image)
-                image /= xp.max(image)
-                thresh = 0.015
-                # print(thresh)
-                mask = image > thresh
+            # set phase to first coil
+            coil0 = np.conj(block[:,0])
+            coil0 /= np.abs(coil0) * np.prod(block_shape)
 
-                mask = sp.to_device(mask, sp.cpu_device)
-                if len(mask.shape) == 3:
-                    zz, xx, yy = np.meshgrid(np.linspace(-1, 1, 11), np.linspace(-1, 1, 11), np.linspace(-1, 1, 11))
-                    rad = zz ** 2 + xx ** 2 + yy ** 2
-                else:
-                    xx, yy = np.meshgrid(np.linspace(-1, 1, 11), np.linspace(-1, 1, 11))
-                    rad = xx ** 2 + yy ** 2
 
-                smap_mask = rad < 1.0
-                # print(smap_mask)
-                mask = ndimage.morphology.binary_dilation(mask, smap_mask)
-                mask = np.array(mask, dtype=np.float32)
-                mask = sp.to_device(mask, sp.get_device(smaps))
+            blocked_image[bi] = coil0[:,np.newaxis]*s[np.newaxis,:]
 
-                # print(image)
-                # print(image.shape)
-                # print(smaps.shape)
-                smaps = mask * smaps
+        # Reshape back
+        blocked_image = np.reshape(blocked_image, old_shape)
+        blocked_image = np.moveaxis(blocked_image, -1, 0)  # First axis is coil
 
-    smaps_cpu = sp.to_device(smaps, sp.cpu_device)
+        smaps = B.H*blocked_image
+
+    elif smap_type == "lowres":
+        # Get a composite image
+        img_shape = sp.estimate_shape(coord)
+        image = store_device.xp.zeros([mri_rawdata.Num_Coils] + img_shape, dtype=store_device.xp.complex64)
+
+        #for e in range(mri_rawdata.Num_Encodings):
+        for e in range(1):
+            xp = sp.get_device(mri_rawdata.coords[e]).xp
+            kr = xp.sum(mri_rawdata.coords[e] ** 2, axis=-1)
+            lpf = xp.exp(-kr / (2 * (32. ** 2)))
+            lpf *= mri_rawdata.dcf[e]
+            lpf = array_to_gpu(lpf, device)
+
+            for c in range(mri_rawdata.Num_Coils):
+                logger.info(f'Reconstructing encode, coil {e} , {c} ')
+                ksp = array_to_gpu(mri_rawdata.kdata[e][c, ...], op_device)
+                ksp *= lpf
+                coords_temp = array_to_gpu(mri_rawdata.coords[e], op_device)
+                image_temp = sp.nufft_adjoint(ksp, coords_temp, img_shape)
+                image[c] += sp.to_device(image_temp, store_device)
+
+        xp = store_device.xp
+        sos = xp.sqrt(xp.sum(xp.abs(image) **2, axis=0))
+        sos = xp.expand_dims(sos, axis=0)
+        sos = sos + xp.max(sos)*1e-5
+
+        smaps = image / sos
+
+        print(f'Smaps Device = {sp.get_device(smaps)}')
+    else:
+
+        dcf = array_to_gpu(dcf, device)
+        coord = array_to_gpu(coord, device)
+        kdata = array_to_gpu(kdata, device)
+
+        smaps = mr.app.JsenseRecon(kdata,
+                                   coord=coord,
+                                   weights=dcf,
+                                   mps_ker_width=args.mps_ker_width,
+                                   ksp_calib_width=args.ksp_calib_width,
+                                   lamda=args.jsense_lamda,
+                                   device=device,
+                                   max_iter=args.jsense_max_iter,
+                                   max_inner_iter=args.jsense_max_inner_iter).run()
+
+        # Get a composite image
+        img_shape = sp.estimate_shape(coord)
+        image = 0
+        for e in range(mri_rawdata.Num_Encodings):
+            kr = sp.get_device(mri_rawdata.coords[e]).xp.sum(mri_rawdata.coords[e] ** 2, axis=-1)
+            kr = array_to_gpu(kr, device)
+            lpf = xp.exp(-kr / (2 * (16. ** 2)))
+
+            for c in range(mri_rawdata.Num_Coils):
+                logger.info(f'Reconstructing encode, coil {e} , {c} ')
+                ksp = array_to_gpu(mri_rawdata.kdata[e][c, ...], device)
+                ksp *= array_to_gpu(mri_rawdata.dcf[e], device)
+                ksp *= lpf
+                coords_temp = array_to_gpu(mri_rawdata.coords[e], device)
+                image += xp.abs(sp.nufft_adjoint(ksp, coords_temp, img_shape)) ** 2
+
+        if thresh_maps:
+            image = xp.sqrt(image)  # sos image
+            image = array_to_gpu(image, sp.get_device(smaps))
+
+            xp = sp.get_device(smaps).xp
+
+            # Threshold
+            image = xp.abs(image)
+            image /= xp.max(image)
+            thresh = 0.015
+            # print(thresh)
+            mask = image > thresh
+
+            mask = sp.to_device(mask, sp.cpu_device)
+            if len(mask.shape) == 3:
+                zz, xx, yy = np.meshgrid(np.linspace(-1, 1, 11), np.linspace(-1, 1, 11), np.linspace(-1, 1, 11))
+                rad = zz ** 2 + xx ** 2 + yy ** 2
+            else:
+                xx, yy = np.meshgrid(np.linspace(-1, 1, 11), np.linspace(-1, 1, 11))
+                rad = xx ** 2 + yy ** 2
+
+            smap_mask = rad < 1.0
+            # print(smap_mask)
+            mask = ndimage.morphology.binary_dilation(mask, smap_mask)
+            mask = np.array(mask, dtype=np.float32)
+            mask = sp.to_device(mask, sp.get_device(smaps))
+
+            # print(image)
+            # print(image.shape)
+            # print(smaps.shape)
+            smaps = mask * smaps
+
+    smaps_cpu = sp.to_device(smaps, store_device)
     # if thresh_maps:
     #     mask_cpu = sp.to_device(mask, sp.cpu_device)
 
