@@ -1,7 +1,7 @@
 import numpy as np
 import h5py
 import cupy
-import cupy.cudnn
+#import cupy.cudnn
 import sigpy as sp
 import sigpy.mri as mr
 import logging
@@ -61,7 +61,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
     """
 
     def __init__(self, y, mps, lamda=0, weights=None, num_enc=0, gate_type='time',
-                 coord=None, device=sp.cpu_device, coil_batch_size=None,
+                 coord=None, device=None, store_device=sp.cpu_device, coil_batch_size=None,
                  comm=None, show_pbar=True, max_power_iter=40, batched_iter=50, fast_maxeig=False,
                  composite_init=True, block_width=16, log_folder=None, **kwargs):
 
@@ -69,11 +69,11 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
         self.num_encodes = num_enc
         self.frames = len( y )  // self.num_encodes
         self.num_images = self.frames*self.num_encodes
-        self.cpu_device = sp.cpu_device
+        self.store_device = store_device
         if device is None:
-            self.gpu_device = sp.Device(0)
+            self.op_device = sp.Device(0)
         else:
-            self.gpu_device = device
+            self.op_device = device
 
         self.max_power_iter = max_power_iter
         self.show_pbar = True
@@ -96,11 +96,11 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
                 pass
 
         # put coord and mps to gpu
-        mps = sp.to_device(mps, self.gpu_device)
+        mps = sp.to_device(mps, self.op_device)
 
         for i in range(len(coord)):
-            coord[i] = sp.to_device(coord[i], sp.Device(self.gpu_device))
-            weights[i] = sp.to_device(weights[i], sp.Device(self.gpu_device))
+            coord[i] = sp.to_device(coord[i], sp.Device(self.op_device))
+            weights[i] = sp.to_device(weights[i], sp.Device(self.op_device))
 
         if fast_maxeig:
             print('Fast Maxeig')
@@ -108,9 +108,19 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
                                              coil_batch_size=coil_batch_size, comm=comm)
             #AHA = A.H * A
             AHA = A.N
-            max_eig = sp.app.MaxEig(AHA, dtype=y[0].dtype, device=self.gpu_device,
+            max_eig = sp.app.MaxEig(AHA, dtype=y[0].dtype, device=self.op_device,
                              max_iter=self.max_power_iter,
                              show_pbar=self.show_pbar).run()
+        elif True:
+
+            for e in range(self.num_images):
+                A = sp.mri.linop.Sense(mps, coord[e], weights[e], ishape=None,
+                                                 coil_batch_size=None, comm=comm)
+                AHA = A.N
+                max_eig = sp.app.MaxEig(AHA, dtype=y[0].dtype, device=self.op_device,
+                                 max_iter=self.max_power_iter,
+                                 show_pbar=self.show_pbar).run()
+
         else:
             #global max eigen
             ops_list = [sp.mri.linop.Sense(mps, coord[e], weights[e], ishape=None,
@@ -119,10 +129,10 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
             grad_ops_nodev = [ops_list[e].N for e in range(len(ops_list))]
             # A.h*A
             # wrap to run GPU
-            grad_ops = [sp.linop.ToDevice(op.oshape, self.cpu_device, self.gpu_device) * op * sp.linop.ToDevice(op.ishape, self.gpu_device, self.cpu_device) for op in grad_ops_nodev]
+            grad_ops = [sp.linop.ToDevice(op.oshape, self.store_device, self.op_device) * op * sp.linop.ToDevice(op.ishape, self.op_device, self.store_device) for op in grad_ops_nodev]
             # Get AHA opts list
             AHA = sp.linop.Diag(grad_ops, oaxis=0, iaxis=0)
-            max_eig = sp.app.MaxEig(AHA, dtype=y[0].dtype, device=self.cpu_device, max_iter=self.max_power_iter, show_pbar=self.show_pbar).run()
+            max_eig = sp.app.MaxEig(AHA, dtype=y[0].dtype, device=self.store_device, max_iter=self.max_power_iter, show_pbar=self.show_pbar).run()
 
         # Scale the weights
         for i in range(len(weights)):
@@ -199,7 +209,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
         A = None
 
         if composite_init == False:
-            x = self.cpu_device.xp.zeros(A_ishape, dtype=y[0].dtype)
+            x = self.store_device.xp.zeros(A_ishape, dtype=y[0].dtype)
 
         # block size and stride should be equal, now testing different stride for block shifting problem
         # cardiac recon expected to be lower rank than temporal recon, thus smaller block size (as in cpp wrapper)
@@ -275,13 +285,13 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
             x_reshape = np.reshape(x, (self.num_images, -1) + x.shape[1:])
             print(f'x_reshape shape = {x_reshape.shape}')
             for i in range(self.num_images):
-                kdata = sp.to_device(self.y[i], self.gpu_device)
-                image = sp.to_device(x_reshape[i], self.gpu_device)
+                kdata = sp.to_device(self.y[i], self.op_device)
+                image = sp.to_device(x_reshape[i], self.op_device)
                 Ax = self.A_list[i] * image
                 Ax -= kdata
                 grad_gpu = self.A_list[i].H(Ax)
 
-                grad_cpu = sp.to_device(grad_gpu, self.cpu_device)
+                grad_cpu = sp.to_device(grad_gpu, self.store_device)
                 gradf_x.append(grad_cpu)
             gradf_x = np.vstack(gradf_x)
 

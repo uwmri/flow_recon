@@ -126,7 +126,8 @@ if __name__ == "__main__":
     else:
         autofov_block_size = 8
 
-    autofov(mri_raw=mri_raw, thresh=args.thresh, scale=args.scale, oversample=args.data_oversampling, square=False, block_size=autofov_block_size)
+    autofov(mri_raw=mri_raw, thresh=args.thresh, scale=args.scale, oversample=args.data_oversampling,
+            square=False, block_size=autofov_block_size, logdir=args.out_folder)
 
     # Get sensitivity maps
     logger.info(f'Reconstruct sensitivity maps ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
@@ -135,17 +136,12 @@ if __name__ == "__main__":
         xp = sp.Device(args.device).xp
         smaps = xp.ones([mri_raw.Num_Coils] + img_shape, dtype=xp.complex64)
     else:
-
-        if args.recon_type == 'mslr':
-            # MSLR doesn't work with zeros in sensitivity map yet
-            smaps = get_smaps(mri_rawdata=mri_raw, args=args, thresh_maps=False, smap_type='jsense', log_dir=args.out_folder)
-        else:
-            smaps = get_smaps(mri_rawdata=mri_raw, args=args, thresh_maps=False, smap_type=args.smap_type, log_dir=args.out_folder)
+        smaps = get_smaps(mri_rawdata=mri_raw, args=args, thresh_maps=False, smap_type=args.smap_type, log_dir=args.out_folder)
 
 
     # Put the maps on the GPU
     smaps = array_to_gpu(smaps, sp.Device(args.device))
-    
+
     # Gate k-space
     if args.frames > 1:
         if args.frames2 > 1:
@@ -181,7 +177,7 @@ if __name__ == "__main__":
 
             # Build Rotation matrix
             rot = build_rotation(theta, phi, psi)
-            rot = array_to_gpu( rot, device)
+            rot = array_to_gpu(rot, device)
 
             coord_rot = coord
             coord_rot = device.xp.expand_dims( coord_rot, -1)
@@ -201,13 +197,19 @@ if __name__ == "__main__":
     if args.recon_type == 'mslr':
         comm = sp.Communicator()
         #blk_widths = (128, 64, 48, 32, 24, 16)
-        blk_widths = (128, 96, 64, 48)
+        #blk_widths = (128, 96, 64, 48)
+        #blk_widths = (512, 64)
+
+        num_scales = 4
+        blk_widths = []
+        for scale in range(num_scales):
+            blk_widths.append([im_size// (2**scale) for im_size in smaps.shape[1:]])
 
         kdata = mri_raw.kdata
         coord = mri_raw.coords
         dcf = mri_raw.dcf
 
-        lrimg = MultiScaleLowRankRecon(kdata, coord=coord, dcf=dcf, mps=smaps,
+        mslr_recon = MultiScaleLowRankRecon(kdata, coord=coord, dcf=dcf, mps=smaps,
                            sgw=None,
                            blk_widths=blk_widths,
                            lamda=args.lamda,
@@ -215,8 +217,9 @@ if __name__ == "__main__":
                            device=sp.Device(args.device),
                            comm=comm,
                            log_dir=args.out_folder,
-                           num_encodings=mri_raw.Num_Encodings).run()
+                           num_encodings=mri_raw.Num_Encodings)
 
+        lrimg = mslr_recon.run()
         out_name = os.path.join(args.out_folder,'MSLRObject.h5')
         lrimg.save(out_name)
         
@@ -305,7 +308,10 @@ if __name__ == "__main__":
         logger.info('PILS Recon')
         img = []
 
+        import time
+
         for i in range(len(mri_raw.kdata)):
+            t = time.time()
             logger.info(f'Frame {i} of {len(mri_raw.kdata)}')
 
             kdata = array_to_gpu(mri_raw.kdata[i], args.device)
@@ -323,6 +329,8 @@ if __name__ == "__main__":
             Eh = E.H
 
             img.append(sp.to_device(Eh * kdata))
+            logger.info(f'Frame {i} took {time.time()-t}')
+
     else:
         print('Please input recon_type (llr, sense, pils, mslr')
 

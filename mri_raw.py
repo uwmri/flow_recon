@@ -80,21 +80,32 @@ def resample_arc(input, coord, oshape=None, oversamp=2, width=7):
 
 
 def radial3d_regrid(coord_regrid, dcf, kdata, new_dk=0.5):
+    """Data resampling operator to deal with variable density oversampling
 
-    
-    width = 5
-    oversamp = 1.0
-    beta = np.pi * (((width / oversamp) * (oversamp - 0.5))**2 - 0.8)**0.5
-    print(f'Using Beta {beta}')
+    Args:
+        coord_regrid (array): Coordinates to regrid [..., npts, ndim]
+        dcf (array): Density compensation [..., npts]
+        kdata(array): Input k-space data [batch_size, ..., npts]
+        new_dk(float):
 
-    dcf_input_shape = list(dcf.shape)
-    coord_input_shape = list(coord_regrid.shape)
-    kdata_input_shape = list(kdata.shape)
+    Returns:
+        output (tuple): Tuple of coord, dcf, kdata resampled to the new dy.
 
+    """
     logger = logging.getLogger('radial3d_regrid')
     logger.info(f'Coord shape = {coord_regrid.shape}')
     logger.info(f'Kdata shape = {kdata.shape}')
     logger.info(f'DCF shape = {dcf.shape}')
+
+    width = 11
+    oversamp = 1.0
+    beta = np.pi * (((width / oversamp) * (oversamp - 0.5))**2 - 0.8)**0.5
+    logger.info(f'Using Beta {beta} {oversamp} {width}')
+
+    # Get input shape
+    dcf_input_shape = list(dcf.shape)
+    coord_input_shape = list(coord_regrid.shape)
+    kdata_input_shape = list(kdata.shape)
 
     # Reshape to be flat (readout x xres )
     ndim = coord_regrid.shape[-1]
@@ -102,20 +113,19 @@ def radial3d_regrid(coord_regrid, dcf, kdata, new_dk=0.5):
     xres = base_shape[-1]
     num_coils = kdata.shape[0]
 
-    coord_regrid = np.reshape(coord_regrid,[-1,xres,ndim])
-    dcf = np.reshape(dcf,[-1,xres])
-    kdata = np.reshape(kdata,[-1, ] + list(dcf.shape))
+    coord_regrid = np.reshape(coord_regrid,[-1, xres, ndim])
+    dcf = np.reshape(dcf, [-1, xres])
+    kdata = np.reshape(kdata, [-1, ] + list(dcf.shape))
 
     logger.info(f'New Coord shape = {coord_regrid.shape}')
     logger.info(f'New Kdata shape = {kdata.shape}')
     logger.info(f'New DCF shape = {dcf.shape}')
 
-
     # Estimate the arc length using discrete differences
     dk = np.diff(coord_regrid, axis=-2)   # Delta kspace along readout axis
     im_old_shape = np.array(dk.shape)
     im_old_shape[-2] = 1
-    dk = np.concatenate((dk,np.zeros(im_old_shape)), axis=-2)
+    dk = np.concatenate((dk, np.zeros(im_old_shape)), axis=-2)
 
     dk_mag = np.sqrt(np.sum(dk**2, axis=-1)) # magnitude
     arc_length = np.sum(dk_mag, axis=-1) #to get arc length
@@ -125,7 +135,7 @@ def radial3d_regrid(coord_regrid, dcf, kdata, new_dk=0.5):
     logger.info(f'Max arc length = {max_arc_length}')
     logger.info(f'New pts = {npts}, old pts = {coord_regrid.shape[-2]}')
 
-    # Now setupresample
+    # Now setup resample
     arc_length =np.cumsum(dk_mag, axis=-1) #to get arc length
     target_shape = np.array(arc_length.shape)
     target_shape[:] = 1
@@ -139,31 +149,43 @@ def radial3d_regrid(coord_regrid, dcf, kdata, new_dk=0.5):
     logger.info(f'Max arc sample = {np.max(arc_sample)}')
     logger.info(f'Min arc sample = {np.max(arc_sample)}')
 
+    # Get the DCF for resampling
+    est_grad = np.diff(arc_sample, axis=-1)
+    arc_density = 1./(est_grad + 1e-3*np.max(est_grad))
+    end_line = np.expand_dims(arc_density[...,-1], axis=-1)
+    arc_density = np.concatenate([arc_density, end_line], axis=-1)
+    arc_density /= np.max(arc_density)
 
-    import matplotlib.pyplot as plt
+    logger.info(f'Arc density shape {arc_density.shape}')
+
     plt_verbose = False
-    # if plt_verbose:
-    #     plt.figure()
-    #     plt.plot(arc_sample[0])
-    #     plt.show()
+    if plt_verbose:
+        import matplotlib.pyplot as plt
+        plt.figure()
+        plt.plot(arc_sample[0])
+        plt.show()
 
-    # Grid to Cartesian Using 
-    resampled_kdata = []
-    resample_dcf = []
+        plt.figure()
+        plt.plot(arc_density[0])
+        plt.show()
 
-    resampling_dcf = readout_gridding(np.ones_like(dcf), arc_sample, (npts,), kernel="kaiser_bessel", width=width, param=beta)
-    
-    resampled_dcf = readout_gridding(dcf, arc_sample, (npts,), kernel="kaiser_bessel", width=width, param=beta)
+    # This is a gridding of ones to estimate the density
+    resampling_dcf = readout_gridding(np.ones_like(dcf), arc_sample, arc_density, (npts,), kernel="kaiser_bessel", width=width, param=beta)
+
+    # Estimate the average DCF
+    resampled_dcf = readout_gridding(dcf, arc_sample, arc_density, (npts,), kernel="kaiser_bessel", width=width, param=beta)
     resampled_dcf /= resampling_dcf
 
+    # Resample for each coord dimension
     resampled_coord = []
     for dim in range(coord_regrid.shape[-1]):
-        coord_t = coord_regrid[...,dim]
-                
-        output = readout_gridding(coord_t, arc_sample, (npts,), kernel="kaiser_bessel", width=width, param=beta)
+        coord_t = coord_regrid[..., dim]
+
+        # Regrid the data
+        output = readout_gridding(coord_t, arc_sample, arc_density, (npts,), kernel="kaiser_bessel", width=width, param=beta)
         output /= resampling_dcf
         resampled_coord.append(output) 
-    resampled_coord = np.stack( resampled_coord, axis=-1)
+    resampled_coord = np.stack(resampled_coord, axis=-1)
 
     if plt_verbose:
         plt.figure()
@@ -178,37 +200,36 @@ def radial3d_regrid(coord_regrid, dcf, kdata, new_dk=0.5):
         plt.plot((coord_t[0,:]))
         plt.show()
       
-
+    # Grid to Cartesian Using
+    resampled_kdata = []
     for coil in range(kdata.shape[0]):
         logger.info(f'Resample coil {coil}')
 
         kdata_t = kdata[coil]
         
-        #print(f'kdata_t.shape {kdata_t.shape}')
-        #print(f'target_shape {target_shape}')
-
-        output = readout_gridding(kdata_t, arc_sample, (npts,), kernel="kaiser_bessel", width=width, param=beta)
+        output = readout_gridding(kdata_t, arc_sample, arc_density, (npts,), kernel="kaiser_bessel", width=width, param=beta)
         output /= resampling_dcf
         
-        #print(f'output.shape = {output.shape}')
         resampled_kdata.append(output)
     resampled_kdata = np.stack(resampled_kdata, axis=0)
 
     dcf_output_shape = dcf_input_shape
     kdata_output_shape = kdata_input_shape
     coord_output_shape = coord_input_shape
-    
+
     dcf_output_shape[-1] = npts
     kdata_output_shape[-1] = npts
-    coord_output_shape[-2] = npts 
-    
+    coord_output_shape[-2] = npts
+
     resampled_kdata = np.reshape(resampled_kdata, kdata_output_shape)
     resampled_dcf = np.reshape(resampled_dcf, dcf_output_shape)
     resampled_coord = np.reshape(resampled_coord, coord_output_shape)
-  
-    #print(f'resampled_coord.shape {resampled_coord.shape}')
-    #print(f'resampled_kdata.shape {resampled_kdata.shape}')
-    #print(f'resampled_dcf.shape {resampled_dcf.shape}')
+
+    resampled_dcf = np.sum(resampled_coord**2, axis=-1)
+
+    logger.info(f'resampled_coord.shape {resampled_coord.shape}')
+    logger.info(f'resampled_kdata.shape {resampled_kdata.shape}')
+    logger.info(f'resampled_dcf.shape {resampled_dcf.shape}')
     
     return resampled_coord, resampled_dcf, resampled_kdata 
 
@@ -439,7 +460,8 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
         img_shape = sp.estimate_shape(coord)
         image = 0
         for e in range(mri_rawdata.Num_Encodings):
-            kr = sp.get_device(mri_rawdata.coords[e]).xp.sum(mri_rawdata.coords[e] ** 2, axis=-1)
+            xp = sp.get_device(mri_rawdata.coords[e]).xp
+            kr = xp.sum(mri_rawdata.coords[e] ** 2, axis=-1)
             kr = array_to_gpu(kr, device)
             lpf = xp.exp(-kr / (2 * (16. ** 2)))
 
@@ -838,26 +860,26 @@ def gate_kspace(mri_raw=None, num_frames=10, gate_type='time', discrete_gates=Fa
             current_points = np.sum(idx)
 
             post_gate = gate_signal[e][idx]
-            print(f'Post gate min = {np.min(post_gate)}')
-            print(f'Post gate max = {np.max(post_gate)}')
-            print(f'Size of gate = {gate_signal[e].shape}')
+            #print(f'Post gate min = {np.min(post_gate)}')
+            #print(f'Post gate max = {np.max(post_gate)}')
+            #print(f'Size of gate = {gate_signal[e].shape}')
 
             ecg = mri_raw.ecg[e][idx]
-            print(f'Post ecg min = {np.min(ecg)}')
-            print(f'Post ecg max = {np.max(ecg)}')
-            print(f'Size of ecg = {mri_raw.ecg[e].shape}')
+            #print(f'Post ecg min = {np.min(ecg)}')
+            #print(f'Post ecg max = {np.max(ecg)}')
+            #print(f'Size of ecg = {mri_raw.ecg[e].shape}')
 
 
             # Gate the data
             points_per_bin.append(current_points)
 
-            print('(t_start,t_stop) = (', t_start, ',', t_stop, ')')
+            #print('(t_start,t_stop) = (', t_start, ',', t_stop, ')')
             logger.info(f'Frame {t} [{t_start} to {t_stop} ] | {e}, Points = {current_points}')
 
-            print(gate_signal[e].shape)
-            print(mri_raw.coords[e].shape)
-            print(mri_raw.coords[e].shape)
-            print(idx.shape)
+            #print(gate_signal[e].shape)
+            #print(mri_raw.coords[e].shape)
+            #print(mri_raw.coords[e].shape)
+            #print(idx.shape)
 
             # mri_rawG.coords.append(mri_raw.coords[e][idx[:, 0], :])
             # mri_rawG.dcf.append(mri_raw.dcf[e][idx[:, 0]])
@@ -885,13 +907,13 @@ def gate_kspace(mri_raw=None, num_frames=10, gate_type='time', discrete_gates=Fa
             mri_rawG.prep.append(mri_raw.prep[e][idx])
             mri_rawG.ecg.append(mri_raw.ecg[e][idx])
 
-            print(f'ECG Time before = {np.min(mri_raw.ecg[e])} {np.max(mri_raw.ecg[e])}')
-            print(f'ECG Time after = {np.min(mri_rawG.ecg[-1])} {np.max(mri_rawG.ecg[-1])}')
+            #print(f'ECG Time before = {np.min(mri_raw.ecg[e])} {np.max(mri_raw.ecg[e])}')
+            #print(f'ECG Time after = {np.min(mri_rawG.ecg[-1])} {np.max(mri_rawG.ecg[-1])}')
 
             ecg = mri_raw.ecg[e][idx]
-            print(f'Post ecg min = {np.min(ecg)}')
-            print(f'Post ecg max = {np.max(ecg)}')
-            print(f'Size of ecg = {mri_raw.ecg[e].shape}')
+            #print(f'Post ecg min = {np.min(ecg)}')
+            #print(f'Post ecg max = {np.max(ecg)}')
+            #print(f'Size of ecg = {mri_raw.ecg[e].shape}')
 
 
             #mri_rawG.kdata.append(mri_raw.kdata[e][idx_kdata])
@@ -1038,7 +1060,6 @@ def resp_gate(mri_raw=None, efficiency=0.5, filter_resp=True):
     return (mri_rawG)
 
 
-
 def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_coils=False):
     with h5py.File(h5_filename, 'r') as hf:
 
@@ -1120,8 +1141,9 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_co
                     ksp.append(k)
             ksp = np.stack(ksp, axis=0)
 
+
             # Regrid the readout to reduce oversampling
-            coord, dcf, ksp = radial3d_regrid( coord, dcf, ksp)
+            # coord, dcf, ksp = radial3d_regrid(coord, dcf, ksp)
 
             # Load time data
             try:
@@ -1179,14 +1201,26 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_co
                 #prep = prep_readout.flatten()
                 #dcf = dcf.flatten()
 
-            # Append to list
-            mri_raw.coords.append(coord)
-            mri_raw.dcf.append(dcf)
-            mri_raw.kdata.append(ksp)
-            mri_raw.time.append(time)
-            mri_raw.prep.append(prep)
-            mri_raw.ecg.append(ecg)
-            mri_raw.resp.append(resp)
+            # Append to list and flatten
+            mri_raw.dcf.append(dcf.flatten())
+
+            ksp2 = []
+            for e in range(Num_Coils):
+                ksp2.append(ksp[e].flatten())
+            ksp2 = np.stack(ksp2, axis=0)
+
+            coords2 = []
+            for dim in range(coord.shape[-1]):
+                coords2.append(coord[...,dim].flatten())
+            coords2 = np.stack(coords2, axis=-1)
+
+            mri_raw.coords.append(coords2)
+
+            mri_raw.kdata.append(ksp2)
+            mri_raw.time.append(time.flatten())
+            mri_raw.prep.append(prep.flatten())
+            mri_raw.ecg.append(ecg.flatten())
+            mri_raw.resp.append(resp.flatten())
 
             # Log the data
             logging.info(f'MRI coords {mri_raw.coords[encode].shape}')
@@ -1284,7 +1318,7 @@ def save_MRI_raw(mri_raw, h5_filename=None):
 
 
 def autofov(mri_raw=None, device=None,
-            thresh=0.05, scale=1, oversample=2.0, square=True, block_size=8):
+            thresh=0.05, scale=1, oversample=2.0, square=True, block_size=8, logdir=None):
     logger = logging.getLogger('autofov')
 
     # Set to GPU
@@ -1347,7 +1381,7 @@ def autofov(mri_raw=None, device=None,
     sos[idx] = 0.0
 
     # Export to file
-    out_name = 'AutoFOV.h5'
+    out_name = os.path.join(logdir, 'AutoFOV.h5')
     logger.info('Saving autofov to ' + out_name)
     try:
         os.remove(out_name)

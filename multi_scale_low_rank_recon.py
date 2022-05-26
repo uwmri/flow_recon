@@ -7,13 +7,13 @@ from tqdm.auto import tqdm
 from multi_scale_low_rank_image import MultiScaleLowRankImage
 import os
 import h5py
+import time
 
 try:
     import mkl
     mkl.set_num_threads(1)
 except:
     pass
-
 
 class MultiScaleLowRankRecon(object):
     r"""Multi-scale low rank reconstruction.
@@ -55,7 +55,7 @@ class MultiScaleLowRankRecon(object):
                  blk_widths=[32, 64, 128], alpha=1, beta=0.5, sgw=None,
                  device=sp.cpu_device, comm=None, seed=0,
                  max_epoch=120, decay_epoch=30, max_power_iter=5,
-                 show_pbar=True, num_encodings=1, log_dir=None, out_iter_mon=False):
+                 show_pbar=True, num_encodings=1, log_dir=None, out_iter_mon=True, hanning_window=False):
         self.ksp = ksp
         self.coord = coord
         self.dcf = dcf
@@ -74,6 +74,7 @@ class MultiScaleLowRankRecon(object):
         self.show_pbar = show_pbar and (comm is None or comm.rank == 0)
         self.log_dir = log_dir
         self.out_iter_mon = out_iter_mon
+        self.hanning_window = hanning_window
 
         # Initialize random seed so code is reproducible
         np.random.seed(self.seed)
@@ -108,10 +109,10 @@ class MultiScaleLowRankRecon(object):
         self._normalize()
 
     def _get_B(self, j):
-        # Block widths with width set smalled that the image
-        b_j = [min(i, self.blk_widths[j]) for i in self.img_shape]
+        # Block widths have to be smaller or equal to the image
+        b_j = [min(im_size, self.blk_widths[j][i]) for i, im_size in enumerate(self.img_shape)]
 
-        # Block stride
+        # Block stride is width of block divided by 2 (rounded up)
         s_j = [(b + 1) // 2 for b in b_j]
 
         # Shifts for blocks for tiling/overlap
@@ -125,15 +126,21 @@ class MultiScaleLowRankRecon(object):
         # Block to array operator with overlapping blocks
         B_j = sp.linop.BlocksToArray(i_j, b_j, s_j)
 
-        # Hanning window to reduce block artifacts
-        with self.device:
-            w_j = sp.hanning(b_j, dtype=self.dtype, device=self.device)**0.5
-        W_j = sp.linop.Multiply(B_j.ishape, w_j)
-        return C_j * B_j * W_j
+        print(f'Initialize block: Input = {i_j}, Block Size = {b_j}, Block Stride = {s_j}')
+
+        if self.hanning_window:
+            # Hanning window to reduce block artifacts
+            with self.device:
+                w_j = sp.hanning(b_j, dtype=self.dtype, device=self.device)**0.5
+            W_j = sp.linop.Multiply(B_j.ishape, w_j)
+
+            return C_j * B_j * W_j
+
+        return C_j * B_j
 
     def _get_G(self, j):
         # Block widths with width set smalled that the image
-        b_j = [min(i, self.blk_widths[j]) for i in self.img_shape]
+        b_j = [min(im_size, self.blk_widths[j][i]) for i, im_size in enumerate(self.img_shape)]
 
         # Block stride
         s_j = [(b + 1) // 2 for b in b_j]
@@ -166,16 +173,37 @@ class MultiScaleLowRankRecon(object):
                 d /= max_eig
 
             # Estimate scaling by gridding all the frames
+            print(f'Calculating scaling')
             img_adj = 0
             for c in range(self.num_coils):
                 mps_c = sp.to_device(self.mps[c], self.device)
                 for frame in range(self.total_images):
+                    #t =time.time()
+                    #print(f'Frame = {frame}, coil = {c}')
+
+                    #t1 = time.time()
                     dcf_t = sp.to_device(self.dcf[frame], self.device)
+                    #print(f'   DCF transfer took {time.time() - t1}')
+
+                    #t1 = time.time()
                     ksp_c = sp.to_device(self.ksp[frame][c], self.device)
+                    #print(f'   KSP transfer took {time.time() - t1}')
+
+                    #t1 = time.time()
                     coord_t = sp.to_device(self.coord[frame], self.device)
+                    #print(f'   Coord transfer took {time.time() - t1}')
+
+                    #t1 = time.time()
+                    #print(f'dcf_t: {dcf_t.shape} {sp.get_device(dcf_t)}')
+                    #print(f'ksp_c: {ksp_c.shape} {sp.get_device(ksp_c)}')
+                    #print(f'image shape: {self.img_shape}')
+
                     img_adj_c = sp.nufft_adjoint(ksp_c * dcf_t, coord_t, self.img_shape)
+                    #print(f'   NUFFT took {time.time() - t1}')
+
                     img_adj_c *= self.xp.conj(mps_c)
                     img_adj += img_adj_c
+                    #print(f'Took {time.time()-t}')
 
             if self.comm is not None:
                 self.comm.allreduce(img_adj)
@@ -196,6 +224,7 @@ class MultiScaleLowRankRecon(object):
 
             # L shape is the in input size to the block dimension
             L_j_shape = (self.num_encodings,) + tuple(self.B[j].ishape)
+            print(f'Init scale with L {L_j_shape}')
 
             # Initialize with Gaussian random numbers, normalized to be unit vectors
             L_j = sp.randn(L_j_shape, dtype=self.dtype, device=self.device)
@@ -204,12 +233,14 @@ class MultiScaleLowRankRecon(object):
             L_j /= L_j_norm
 
             # R shape is the number of time frames x number of scales
-            R_j_shape = (self.T, ) + L_j_norm.shape[1:]
+            R_j_shape = (self.T,) + L_j_norm.shape[1:]
+            print(f'Init scale with R {R_j_shape}')
+
             R_j = self.xp.zeros(R_j_shape, dtype=self.dtype)
             self.L.append(L_j)
             self.R.append(R_j)
 
-            print(f'Init scale with L {L_j_shape} , R {R_j_shape}')
+
 
     def _power_method(self):
         for it in range(self.max_power_iter):

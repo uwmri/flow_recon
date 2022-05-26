@@ -21,7 +21,7 @@ class MultiScaleLowRankImage(object):
         res (None of tuple of floats): resolution.
 
     """
-    def __init__(self, shape, L, R, res=None):
+    def __init__(self, shape, L, R, res=None, hanning_window=False):
         self.shape = tuple(shape)
         self.img_shape = self.shape[2:]
         self.T = self.shape[0]
@@ -32,10 +32,11 @@ class MultiScaleLowRankImage(object):
         self.dtype = L[0].dtype
         self.J = len(L)
         self.D = self.ndim - 2
-        self.blk_widths = [max(L[j][0].shape[-self.D:]) for j in range(self.J)]
+        self.blk_widths = [L[j][0].shape[-self.D:] for j in range(self.J)]
         self.L = L
         self.R = R
         self.device = sp.cpu_device
+        self.hanning_window = hanning_window
         self.t_map = [t // self.num_encodings for t in range(self.total_images)]
         self.e_map = [t % self.num_encodings for t in range(self.total_images)]
 
@@ -48,18 +49,32 @@ class MultiScaleLowRankImage(object):
         self.R = [sp.to_device(R_j, self.device) for R_j in self.R]
 
     def _get_B(self, j):
-        b_j = [min(i, self.blk_widths[j]) for i in self.img_shape]
+        # Block widths have to be smaller or equal to the image
+        b_j = [min(im_size, self.blk_widths[j][i]) for i, im_size in enumerate(self.img_shape)]
+
+        # Block stride is width of block divided by 2 (rounded up)
         s_j = [(b + 1) // 2 for b in b_j]
 
+        # Shifts for blocks for tiling/overlap
         i_j = [ceil((i - b + s) / s) * s + b - s
                for i, b, s in zip(self.img_shape, b_j, s_j)]
 
+        # Reshape operation, will crop the LR images when its large
         C_j = sp.linop.Resize(self.img_shape, i_j,
-                              ishift=[0] * self.D, oshift=[0] * self.D)
+                              ishift=[0] * self.ndim, oshift=[0] * self.ndim)
+
+        # Block to array operator with overlapping blocks
         B_j = sp.linop.BlocksToArray(i_j, b_j, s_j)
-        w_j = sp.hanning(b_j, dtype=self.dtype, device=self.device)**0.5
-        W_j = sp.linop.Multiply(B_j.ishape, w_j)
-        return C_j * B_j * W_j
+
+        if self.hanning_window:
+            # Hanning window to reduce block artifacts
+            with self.device:
+                w_j = sp.hanning(b_j, dtype=self.dtype, device=self.device)**0.5
+            W_j = sp.linop.Multiply(B_j.ishape, w_j)
+
+            return C_j * B_j * W_j
+
+        return C_j * B_j
 
     def __len__(self):
         return self.T

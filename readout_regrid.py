@@ -19,7 +19,7 @@ os.environ["CUPY_CACHE_SAVE_CUDA_SOURCE"] = "1"
 
 
 
-def readout_gridding(input, coord, npts, kernel="spline", width=2, param=1):
+def readout_gridding(input, coord, dcf, npts, kernel="spline", width=2, param=1):
     r"""Gridding of points specified by coordinates to array.
 
     Let :math:`y` be the input, :math:`x` be the output,
@@ -55,8 +55,9 @@ def readout_gridding(input, coord, npts, kernel="spline", width=2, param=1):
     using the power series, following the reference.
 
     Args:
-        input (array): Input array 
-        coord (array): Coordinate array of shape [..., ndim]
+        input (array): Input array  (same size as input)
+        coord (array): 1D array coordinates  (same size as input)
+        dcf (array): Density compensation (same size as input)
         width (float or tuple of floats): Interpolation kernel full-width.
         kernel (str): Interpolation kernel, {"spline", "kaiser_bessel"}.
         param (float or tuple of floats): Kernel parameter.
@@ -72,21 +73,17 @@ def readout_gridding(input, coord, npts, kernel="spline", width=2, param=1):
     # Copy to GPU
     input = array_to_gpu(input)
     coord = array_to_gpu(coord)
+    dcf = array_to_gpu(dcf)
 
-    #print(f'input.shape {input.shape}')
-    #print(f'coord.shape {coord.shape}')
-    #print(f'npts {npts}')
     # Coords is [batch size, xres]
     ndim = 1
-    xres = coord.shape[-1]
 
     # Get the number of batches (this i)
     readouts_shape = coord.shape[:-1]
     readouts_size = util.prod(readouts_shape)
 
     output_shape = list(readouts_shape) + list(npts)
-    output_shape_flat = [readouts_size,] + list(npts)
-    #print(f'Output shape {output_shape}')
+    output_shape_flat = [readouts_size, ] + list(npts)
 
     xp = backend.get_array_module(input)
     isreal = np.issubdtype(input.dtype, np.floating)
@@ -94,11 +91,9 @@ def readout_gridding(input, coord, npts, kernel="spline", width=2, param=1):
     # Reshape to the input 
     input = input.reshape([readouts_size, -1])
     coord = coord.reshape([readouts_size, -1])
-    # print(f'input shape = {input.shape}')
-    # print(f'coord shape = {coord.shape}')
-        
+    dcf = dcf.reshape([readouts_size, -1])
+
     output = xp.zeros(output_shape_flat, dtype=input.dtype)
-    #print(f'Target output shape = {output.shape}')
 
     if np.isscalar(param):
         param = xp.array([param] * ndim, coord.dtype)
@@ -110,25 +105,19 @@ def readout_gridding(input, coord, npts, kernel="spline", width=2, param=1):
     else:
         width = xp.array(width, coord.dtype)
 
-    #print('Inputs to gridding:')
-    #print(f'   output: {output.shape} {np.min(output)} {np.max(output)}')
-    #print(f'   input: {input.shape} {np.min(input)} {np.max(input)}')
-    #print(f'   coord: {coord.shape} {np.min(coord)} {np.max(coord)}')
-    #print(f'   width {width}')
-    #print(f'   param {param}')
-
     if xp == np:
-        _gridding[kernel](output, input, coord, width, param)
+        _gridding[kernel](output, input, coord, dcf, width, param)
     else:  # pragma: no cover
         if isreal:
             _gridding_cuda[kernel](
-                input, coord, width, param, output, size=input.shape[0])
+                input, coord, dcf, width, param, output, size=input.shape[0])
         else:
             _gridding_cuda_complex[kernel](
-                input, coord, width, param, output, size=input.shape[0])
+                input, coord, dcf, width, param, output, size=input.shape[0])
 
     output = backend.to_device(output)
     coord = backend.to_device(coord)
+    dcf = backend.to_device(dcf)
 
     return output.reshape(output_shape)
 
@@ -176,18 +165,18 @@ def _get_gridding(kernel):
         kernel = _kaiser_bessel_kernel
 
     @nb.jit(nopython=True)  # pragma: no cover
-    def _gridding1(output, input, coord, width, param):
+    def _gridding1(output, input, coord, dcf, width, param):
         readouts, nx = input.shape
         readouts, nx_out = output.shape 
 
         for readout in range(readouts):
             for i in range(nx):
-                kx = coord[readout,i]
-
+                kx = coord[readout, i]
+                dcf_t = dcf[readout, i]
                 x0 = max(int(np.ceil(kx - width[-1] / 2)),0)
                 x1 = min(int(np.floor(kx + width[-1] / 2)),nx_out-1)
                 for x in range(x0, x1 + 1):
-                    w = kernel((x - kx) / (width[-1] / 2), param[-1])
+                    w = dcf_t * kernel((x - kx) / (width[-1] / 2), param[-1])
                     output[readout, x] += w * input[readout, i]
 
         return output
@@ -263,7 +252,7 @@ if config.cupy_enabled:  # pragma: no cover
             kernel = _kaiser_bessel_kernel_cuda
 
         _gridding1_cuda = cp.ElementwiseKernel(
-            'raw T input, raw S coord, raw S width, raw S param',
+            'raw T input, raw S coord, raw S dcf, raw S width, raw S param',
             'raw T output',
             """
             
@@ -271,11 +260,12 @@ if config.cupy_enabled:  # pragma: no cover
             for (int j=0; j < xres; j++){
                 const int coord_idx[] = {i, j};
                 const S kx = coord[coord_idx];
+                const S dcf_t = dcf[coord_idx];
                 const int x0 = max( (int)ceil(kx - width[0] / 2.0), (int)0);
                 const int x1 = min( (int)floor(kx + width[0] / 2.0), (int)(xres-1));
 
                 for (int x = x0; x < x1 + 1; x++) {
-                    const S w = kernel(((S) x - kx) / (width[0] / 2.0), param[0]);
+                    const S w = dcf_t * kernel(((S) x - kx) / (width[0] / 2.0), param[0]);
                     const T v = (T) w * input[coord_idx];
                     const int output_idx[] = {i, x};
                     atomicAdd(&output[output_idx], v);   
@@ -298,7 +288,7 @@ if config.cupy_enabled:  # pragma: no cover
             kernel = _kaiser_bessel_kernel_cuda
 
         _gridding1_cuda_complex = cp.ElementwiseKernel(
-            'raw T input, raw S coord, raw S width, raw S param',
+            'raw T input, raw S coord, raw S dcf, raw S width, raw S param',
             'raw T output',
             """
 
@@ -309,12 +299,12 @@ if config.cupy_enabled:  # pragma: no cover
             for (int j=0; j < xres; j++){
                 const int coord_idx[] = {i, j};
                 const S kx = coord[coord_idx];
-
+                const S dcf_t = dcf[coord_idx];
                 const int x0 = max( (int)ceil(kx - width[ndim - 1] / 2.0), (int)0);
                 const int x1 = min( (int)floor(kx + width[ndim - 1] / 2.0), (int)(xres-1));
 
                 for (int x = x0; x < x1 + 1; x++) {
-                    const S w = kernel(
+                    const S w = dcf_t * kernel(
                         ((S) x - kx) / (width[ndim - 1] / 2.0), param[ndim - 1]);
                     
                     if( (x > 0) && ( x < xres) ){
