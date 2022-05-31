@@ -21,19 +21,25 @@ class MultiScaleLowRankImage(object):
         res (None of tuple of floats): resolution.
 
     """
-    def __init__(self, shape, L, R, res=None):
+    def __init__(self, shape, L, R, res=None, hanning_window=False):
         self.shape = tuple(shape)
-        self.img_shape = self.shape[1:]
+        self.img_shape = self.shape[2:]
         self.T = self.shape[0]
+        self.num_encodings = self.shape[1]
+        self.total_images = self.num_encodings*self.T
         self.size = sp.prod(self.shape)
         self.ndim = len(self.shape)
         self.dtype = L[0].dtype
         self.J = len(L)
-        self.D = self.ndim - 1
-        self.blk_widths = [max(L[j].shape[-self.D:]) for j in range(self.J)]
+        self.D = self.ndim - 2
+        self.blk_widths = [L[j][0].shape[-self.D:] for j in range(self.J)]
         self.L = L
         self.R = R
         self.device = sp.cpu_device
+        self.hanning_window = hanning_window
+        self.t_map = [t // self.num_encodings for t in range(self.total_images)]
+        self.e_map = [t % self.num_encodings for t in range(self.total_images)]
+
         if res is None:
             self.res = (1, ) * self.D
 
@@ -43,40 +49,59 @@ class MultiScaleLowRankImage(object):
         self.R = [sp.to_device(R_j, self.device) for R_j in self.R]
 
     def _get_B(self, j):
-        b_j = [min(i, self.blk_widths[j]) for i in self.img_shape]
+        # Block widths have to be smaller or equal to the image
+        b_j = [min(im_size, self.blk_widths[j][i]) for i, im_size in enumerate(self.img_shape)]
+
+        # Block stride is width of block divided by 2 (rounded up)
         s_j = [(b + 1) // 2 for b in b_j]
 
+        # Shifts for blocks for tiling/overlap
         i_j = [ceil((i - b + s) / s) * s + b - s
                for i, b, s in zip(self.img_shape, b_j, s_j)]
 
+        # Reshape operation, will crop the LR images when its large
         C_j = sp.linop.Resize(self.img_shape, i_j,
-                              ishift=[0] * self.D, oshift=[0] * self.D)
+                              ishift=[0] * self.ndim, oshift=[0] * self.ndim)
+
+        # Block to array operator with overlapping blocks
         B_j = sp.linop.BlocksToArray(i_j, b_j, s_j)
-        w_j = sp.hanning(b_j, dtype=self.dtype, device=self.device)**0.5
-        W_j = sp.linop.Multiply(B_j.ishape, w_j)
-        return C_j * B_j * W_j
+
+        if self.hanning_window:
+            # Hanning window to reduce block artifacts
+            with self.device:
+                w_j = sp.hanning(b_j, dtype=self.dtype, device=self.device)**0.5
+            W_j = sp.linop.Multiply(B_j.ishape, w_j)
+
+            return C_j * B_j * W_j
+
+        return C_j * B_j
 
     def __len__(self):
         return self.T
 
-    def _get_img(self, t, idx=None):
+    def _get_img(self, tidx, idx=None):
         with self.device:
             img_t = 0
+
+            # Get the time index
+            t = self.t_map[tidx]
+            e = self.e_map[tidx]
+
             for j in range(self.J):
                 B_j = self._get_B(j)
-                img_t += B_j(self.L[j] * self.R[j][t])[idx]
+                img_t += B_j(self.L[j][e] * self.R[j][t])[idx]
 
         img_t = sp.to_device(img_t, sp.cpu_device)
         return img_t
 
     def __getitem__(self, index):
         if isinstance(index, slice):
-            return np.stack([self._get_img(t) for t in range(self.T)[index]])
+            return np.stack([self._get_img(t) for t in range(self.total_images)[index]])
         elif isinstance(index, tuple):
             tslc = index[0]
             if isinstance(tslc, slice):
                 return np.stack([self._get_img(t, index[1:])
-                                 for t in range(self.T)[tslc]])
+                                 for t in range(self.total_images)[tslc]])
             else:
                 return self._get_img(tslc, index[1:])
         else:
