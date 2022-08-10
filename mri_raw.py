@@ -237,7 +237,7 @@ def pca_coil_compression(kdata=None, axis=0, target_channels=None):
     logger = logging.getLogger('PCA_CoilCompression')
 
     if isinstance(kdata, list):
-        logger.info('Passed k-space is a list, using encode 0 for compression')
+        logger.info('Passed k-space is a lists, using encode 0 for compression')
         kdata_cc = kdata[0]
     else:
         kdata_cc = kdata
@@ -270,7 +270,7 @@ def pca_coil_compression(kdata=None, axis=0, target_channels=None):
     logger.info(f'S = {s}')
 
     if isinstance(kdata, list):
-        logger.info('Passed k-space is a list, using encode 0 for compression')
+        logger.info('Passed k-space is a lists, using encode 0 for compression')
 
         for e in range(len(kdata)):
             kdata[e] = np.moveaxis(kdata[e], axis, -1)
@@ -664,7 +664,7 @@ def gate_kspace2d(mri_raw=None, num_frames=[10, 10], gate_type=['time', 'prep'],
                   discrete_gates=[False, False], ecg_delay=300e-3, prep_disdaqs=0):
     logger = logging.getLogger('Gate k-space 2D')
 
-    # Assume the input is a list
+    # Assume the input is a lists
 
     # Get the MRI Raw structure setup
     mri_rawG = MRI_Raw()
@@ -786,7 +786,7 @@ def gate_kspace2d(mri_raw=None, num_frames=[10, 10], gate_type=['time', 'prep'],
 def gate_kspace(mri_raw=None, num_frames=10, gate_type='time', discrete_gates=False, ecg_delay=300e-3):
     logger = logging.getLogger('Gate k-space')
 
-    # Assume the input is a list
+    # Assume the input is a lists
 
     # Get the MRI Raw structure setup
     mri_rawG = MRI_Raw()
@@ -1060,7 +1060,7 @@ def resp_gate(mri_raw=None, efficiency=0.5, filter_resp=True):
     return (mri_rawG)
 
 
-def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_coils=False):
+def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_coils=False, sms_factor=None):
     with h5py.File(h5_filename, 'r') as hf:
 
         try:
@@ -1141,6 +1141,14 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_co
                     ksp.append(k)
             ksp = np.stack(ksp, axis=0)
 
+            if sms_factor > 1:
+                coils = ksp.shape[0]
+                projs = ksp.shape[2]
+                phase = (2 * math.pi) / sms_factor  # phase blip (2pi/acceleration)
+                for c in range(coils):
+                    for p in range(projs):
+                        euler = np.complex(math.cos(p*phase), math.sin(p*phase))  # e^(i*n*theta) phase ramp
+                        ksp[c, 0, p, :] = np.conjugate(euler) * ksp[c, 0, p, :]  # multiply by conjugate phase pattern
 
             # Regrid the readout to reduce oversampling
             # coord, dcf, ksp = radial3d_regrid(coord, dcf, ksp)
@@ -1201,7 +1209,7 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_co
                 #prep = prep_readout.flatten()
                 #dcf = dcf.flatten()
 
-            # Append to list and flatten
+            # Append to lists and flatten
             mri_raw.dcf.append(dcf.flatten())
 
             ksp2 = []

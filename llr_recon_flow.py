@@ -1,3 +1,4 @@
+#! /usr/bin/env python
 
 import numpy as np
 import h5py
@@ -29,7 +30,7 @@ if __name__ == "__main__":
     parser.add_argument('--device', type=int, default=0)
     parser.add_argument('--thresh', type=float, default=0.1)
     parser.add_argument('--scale', type=float, default=1.0)
-    parser.add_argument('--frames',type=int, default=100, help='Number of time frames')
+    parser.add_argument('--frames', type=int, default=100, help='Number of time frames')
     parser.add_argument('--frames2', type=int, default=1, help='Number of time frames')
 
     parser.add_argument('--mps_ker_width', type=int, default=16)
@@ -51,8 +52,8 @@ if __name__ == "__main__":
     parser.add_argument('--prep_disdaqs', type=int, default=0)
     parser.add_argument('--crop_factor', type=float, default=1.0)
     parser.add_argument('--recon_type', type=str, default='llr')
-    parser.add_argument('--llr_block_width',type=int, default=32)
-    parser.add_argument('--data_oversampling',type=float, default=2.0)
+    parser.add_argument('--llr_block_width', type=int, default=32)
+    parser.add_argument('--data_oversampling', type=float, default=2.0)
 
     parser.set_defaults(discrete_gates=False)
     parser.add_argument('--discrete_gates', dest='discrete_gates', action='store_true')
@@ -80,6 +81,9 @@ if __name__ == "__main__":
     parser.add_argument('--example_images', dest='example_images', action='store_true')
     parser.set_defaults(example_images=False)
 
+    # SMS reconstruction
+    parser.add_argument('--sms_factor', type=int, default=1)  # number of slices simultaneously acquired
+
     args = parser.parse_args()
 
     # For tracking memory
@@ -102,10 +106,14 @@ if __name__ == "__main__":
     # Load Data
     logger.info(f'Load MRI from {args.filename}')
     if args.test_run:
-        mri_raw = load_MRI_raw(h5_filename=args.filename, max_coils=2, max_encodes=args.max_encodes)
+        mri_raw = load_MRI_raw(h5_filename=args.filename, max_coils=2, max_encodes=args.max_encodes, sms_factor=args.sms_factor)
+    elif args.sms_factor > 1:
+        mri_raw = load_MRI_raw(h5_filename=args.filename, max_coils=2, max_encodes=args.max_encodes, sms_factor=args.sms_factor)
     else:
-        mri_raw = load_MRI_raw(h5_filename=args.filename, compress_coils=args.compress_coils, max_encodes=args.max_encodes)
+        mri_raw = load_MRI_raw(h5_filename=args.filename, compress_coils=args.compress_coils, max_encodes=args.max_encodes, sms_factor=args.sms_factor)
     print(f'Min/max = {np.max(mri_raw.time[0])} {np.max(mri_raw.time[0])}')
+
+
 
     # Resample
     # radial3d_regrid(mri_raw)

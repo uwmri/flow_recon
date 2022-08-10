@@ -130,7 +130,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
             # A.h*A
             # wrap to run GPU
             grad_ops = [sp.linop.ToDevice(op.oshape, self.store_device, self.op_device) * op * sp.linop.ToDevice(op.ishape, self.op_device, self.store_device) for op in grad_ops_nodev]
-            # Get AHA opts list
+            # Get AHA opts lists
             AHA = sp.linop.Diag(grad_ops, oaxis=0, iaxis=0)
             max_eig = sp.app.MaxEig(AHA, dtype=y[0].dtype, device=self.store_device, max_iter=self.max_power_iter, show_pbar=self.show_pbar).run()
 
@@ -280,7 +280,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
         def gradf(x):
 
             print(f'Xin shape = {x.shape}')
-            # Go through list and update images
+            # Go through lists and update images
             gradf_x = []
             x_reshape = np.reshape(x, (self.num_images, -1) + x.shape[1:])
             print(f'x_reshape shape = {x_reshape.shape}')

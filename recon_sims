@@ -1,0 +1,23 @@
+#! /bin/sh
+
+cd /data/data_mrcv/45_DATA_HUMANS/CHEST/STUDIES/2019_LIFE_PWV/patients/life_life00045_12154_2021-10-21-h08/sms_simulation/
+
+llr_recon_flow.py --filename MRI_Raw_S1.h5 --frames 40 --smap_type lowres --recon_type pils --sms_factor 1
+mv FullRecon.h5 FullRecon_S1.h5
+
+llr_recon_flow.py --filename MRI_Raw_S2.h5 --frames 40 --smap_type lowres --recon_type pils --sms_factor 1
+mv FullRecon.h5 FullRecon_S2.h5
+
+llr_recon_flow.py --filename MRI_Raw_S2Blip.h5 --frames 40 --smap_type lowres --recon_type pils --sms_factor 1
+mv FullRecon.h5 FullRecon_S2Blip.h5
+
+llr_recon_flow.py --filename MRI_Raw_SMS.h5 --frames 40 --smap_type lowres --recon_type pils --sms_factor 1
+mv FullRecon.h5 FullRecon_SMS.h5
+
+llr_recon_flow.py --filename MRI_Raw_SMSin.h5 --frames 40 --smap_type lowres --recon_type pils --sms_factor 1
+mv FullRecon.h5 FullRecon_SMSin.h5
+
+llr_recon_flow.py --filename MRI_Raw_SMSin.h5 --frames 40 --smap_type lowres --recon_type pils --sms_factor 2
+mv FullRecon.h5 FullRecon_SMSout.h5
+
+cd /export/home/groberts/CODE/PRECON/flow_recon/

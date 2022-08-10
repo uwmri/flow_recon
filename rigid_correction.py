@@ -234,7 +234,7 @@ def register_images( images, mask, logdir=None, out_reg_images=False):
         hf.create_dataset("ty", data=np.squeeze(np.array(all_ty)) * images.shape[-2]/2.0)
         hf.create_dataset("tz", data=np.squeeze(np.array(all_tz)) * images.shape[-3]/2.0)
 
-    # Cast to np array instead of list
+    # Cast to np array instead of lists
     all_tx = np.squeeze(np.array(all_tx))
     all_ty = np.squeeze(np.array(all_ty))
     all_tz = np.squeeze(np.array(all_tz))
