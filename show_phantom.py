@@ -3,6 +3,8 @@ import matplotlib.pyplot as plt
 import os
 import h5py
 import math
+from tkinter import Tk
+from tkinter.filedialog import askopenfilename
 
 # Load raw k-space data (MRI_Raw.h5)
 # NOTE: Raw k-space is output from C++ pcvipr_recon_binary with "-export_kdata" flag
@@ -40,39 +42,50 @@ def load_mri_raw(directory, file):
         ksp = np.squeeze(ksp)
         return kcoord, ksp
 
+#Tk().withdraw()
+#sms_dir = askopenfilename()
 
-sms_dir = '/data/users/groberts/SMS_Testing/Exam5450/SMS_MB2/'
+#sms_dir = "/data/data_mrcv2/99_GSR/SMS_Testing/RobertsPhantom_06024_2022-11-03/06024_00004_b1_p1_ff0p50_ga/SMS_2DPC/"
+# sms_dir = "/data/data_mrcv2/99_GSR/SMS_Testing/RobertsPhantom_06024_2022-11-03/06024_00009_b1_p0_ff0p46_seq/SMS_2DPC/"
+# sms_dir = "/data/data_mrcv2/99_GSR/SMS_Testing/RobertsPhantom_06024_2022-11-03/06024_00013_b1_p0_ff0p50_ga/SMS_2DPC/"
+# sms_dir = "/data/data_mrcv2/99_GSR/SMS_Testing/RobertsPhantom_06024_2022-11-03/06024_00010_b1_p0_ff0p50_seq/SMS_2DPC/"
+sms_dir = "/data/data_mrcv2/99_GSR/SMS_Testing/LIFEVOLUNTEER_06041_2022-11-04/06041_00007_pwv-radial_SMS/SMS_2DPC/"
 
 # Show image space and k-space for all imagesets
 lists = ['InPhase.h5', 'OutPhase.h5']
 titles = ['SLICE1 (IN PHASE)', 'SLICE2 (OUT OF PHASE)']
+
+
+numPhases = len(lists)
+encode = 1
 frame = 0
-for i in range(len(lists)):
+
+fig, axs = plt.subplots(nrows=numPhases, ncols=2, figsize=(12, 8))
+fig.suptitle('Encode' + str(encode))
+cols = ['Magnitude', 'Phase']
+for ax, col in zip(axs[0], cols):
+    ax.set_title(col)
+for ax, row in zip(axs[:,0], lists):
+    ax.set_ylabel(row, rotation=90, size="large")
+
+for i in range(numPhases):
     filename = os.path.join(sms_dir, lists[i])
     f = h5py.File(filename, 'r')
     mags = f['IMAGE_MAG']
-    mag1 = mags[:, 0, :, :]
-    mag2 = mags[:, 1, :, :]
     phases = f['IMAGE_PHASE']
-    phase1 = phases[:, 0, :, :]
-    phase2 = phases[:, 1, :, :]
+    encodes = mags.shape[1]
 
-    fig, axs = plt.subplots(ncols=2, nrows=2)
-    fig.suptitle(titles[i])
-    axs[0, 0].imshow(mag1[frame, :, :], cmap='gray')
-    axs[0, 0].axis('off')
+    mag = mags[frame, encode, :, :]
+    phase = phases[frame, encode, :, :]
+    axs[i, 0].imshow(mag, cmap='gray', aspect="auto")
+    axs[i, 0].tick_params(left=False, right=False, labelleft=False,
+                          labelbottom=False, bottom=False)
+    axs[i, 1].imshow(phase, cmap='gray', aspect="auto")
+    axs[i, 1].tick_params(left=False, right=False, labelleft=False,
+                    labelbottom=False, bottom=False)
 
-    axs[0, 1].imshow(mag2[frame, :, :], cmap='gray')
-    axs[0, 1].axis('off')
-
-    axs[1, 0].imshow(phase1[frame, :, :], cmap='gray')
-    axs[1, 0].axis('off')
-
-    axs[1, 1].imshow(phase2[frame, :, :], cmap='gray')
-    axs[1, 1].axis('off')
-
-    fig.tight_layout()
-    plt.show()
+fig.tight_layout()
+plt.show()
 
 
 # kcoord, ksp = load_mri_raw(sms_dir, 'MRI_Raw.h5')

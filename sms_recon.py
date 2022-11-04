@@ -55,21 +55,12 @@ if __name__ == "__main__":
     parser.add_argument('--llr_block_width', type=int, default=32)
     parser.add_argument('--data_oversampling', type=float, default=2.0)
 
-    parser.set_defaults(discrete_gates=False)
-    parser.add_argument('--discrete_gates', dest='discrete_gates', action='store_true')
-
-    parser.set_defaults(discrete_gates2=False)
-    parser.add_argument('--discrete_gates2', dest='discrete_gates2', action='store_true')
-
-    parser.set_defaults(resp_gate=False)
-    parser.add_argument('--resp_gate', dest='resp_gate', action='store_true')
-
-    parser.add_argument('--fast_maxeig', dest='fast_maxeig', action='store_true')
-    parser.set_defaults(fast_maxeig=False)
-    parser.add_argument('--test_run', dest='test_run', action='store_true')
-    parser.set_defaults(test_run=False)
-    parser.add_argument('--compress_coils', dest='compress_coils', action='store_true')
-    parser.set_defaults(compress_coils=False)
+    parser.add_argument('--discrete_gates', default=False, dest='discrete_gates', action='store_true')
+    parser.add_argument('--discrete_gates2', default=False, dest='discrete_gates2', action='store_true')
+    parser.add_argument('--resp_gate', default=False, dest='resp_gate', action='store_true')
+    parser.add_argument('--fast_maxeig', default=False, dest='fast_maxeig', action='store_true')
+    parser.add_argument('--test_run', default=False, dest='test_run', action='store_true')
+    parser.add_argument('--compress_coils', default=False, dest='compress_coils', action='store_true')
 
     # Input Output
     parser.add_argument('--filename', type=str, help='filename for data (e.g. MRI_Raw.h5)')
@@ -78,8 +69,7 @@ if __name__ == "__main__":
     parser.add_argument('--out_filename', type=str, default='FullRecon.h5')
 
     # Debugging / mslr mag and example images
-    parser.add_argument('--example_images', dest='example_images', action='store_true')
-    parser.set_defaults(example_images=False)
+    parser.add_argument('--example_images', default=False, dest='example_images', action='store_true')
 
     # SMS reconstruction
     parser.add_argument('--sms_factor', type=int, default=1)  # number of slices simultaneously acquired
