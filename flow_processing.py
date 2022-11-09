@@ -94,10 +94,10 @@ class MRI_4DFlow:
 
     def set_encoding_matrix(self, encode_type='4pt-referenced'):
         encode_dictionary = {
-            '4pt-referenced' : np.pi/2.0*np.array([[-1.0, -1.0, -1.0],
-                               [ 1.0, -1.0, -1.0],
+            '4pt-referenced': np.pi/2.0*np.array([[-1.0, -1.0, -1.0],
+                               [1.0, -1.0, -1.0],
                                [-1.0,  1.0, -1.0],
-                               [-1.0, -1.0,  1.0]],dtype=np.float32),
+                               [-1.0, -1.0,  1.0]], dtype=np.float32),
             '3pt': np.pi / 2.0 * np.array([[-1.0, -1.0, -1.0],
                                                       [1.0, -1.0, -1.0],
                                                       [-1.0, 1.0, -1.0]], dtype=np.float32),
@@ -109,7 +109,9 @@ class MRI_4DFlow:
                                                       [-1.0, -1.0, -1.0],
                                                       [ 1.0,  1.0, -1.0],
                                                       [ 1.0, -1.0,  1.0],
-                                                      [-1.0,  1.0, 1.0]], dtype=np.float32)
+                                                      [-1.0,  1.0, 1.0]], dtype=np.float32),
+            '2pt': np.pi / 2.0 * np.array([[0.0, 0.0, -1.0],
+                                                    [0.0, 0.0, 1.0]], dtype=np.float32)
         }
         self.EncodingMatrix = encode_dictionary[encode_type]
         self.DecodingMatrix = np.linalg.pinv(self.EncodingMatrix)
@@ -119,10 +121,10 @@ class MRI_4DFlow:
     :param pd: a Nt x Nz x Ny x Nx mask of the vessel locations
     :return: Nt x Nz x Ny x Nx x Nencode x 1
     """
-    def generate_complex_signal(self,velocity,pd):
+    def generate_complex_signal(self, velocity, pd):
 
         # Get last dimension to (3 x 1)
-        velocity = np.expand_dims( velocity,-1)
+        velocity = np.expand_dims(velocity, -1)
 
         # Multiple to get phase
         print(self.EncodingMatrix.shape)

@@ -44,12 +44,7 @@ def load_mri_raw(directory, file):
 
 #Tk().withdraw()
 #sms_dir = askopenfilename()
-
-#sms_dir = "/data/data_mrcv2/99_GSR/SMS_Testing/RobertsPhantom_06024_2022-11-03/06024_00004_b1_p1_ff0p50_ga/SMS_2DPC/"
-# sms_dir = "/data/data_mrcv2/99_GSR/SMS_Testing/RobertsPhantom_06024_2022-11-03/06024_00009_b1_p0_ff0p46_seq/SMS_2DPC/"
-# sms_dir = "/data/data_mrcv2/99_GSR/SMS_Testing/RobertsPhantom_06024_2022-11-03/06024_00013_b1_p0_ff0p50_ga/SMS_2DPC/"
-# sms_dir = "/data/data_mrcv2/99_GSR/SMS_Testing/RobertsPhantom_06024_2022-11-03/06024_00010_b1_p0_ff0p50_seq/SMS_2DPC/"
-sms_dir = "/data/data_mrcv2/99_GSR/SMS_Testing/LIFEVOLUNTEER_06041_2022-11-04/06041_00007_pwv-radial_SMS/SMS_2DPC/"
+sms_dir = "/data/data_mrcv/45_DATA_HUMANS/CHEST/STUDIES/2019_LIFE_PWV/volunteers/LIFEVOLUNTEER_06041_2022-11-04/06041_00007_pwv-radial_SMS/SMS_2DPC/"
 
 # Show image space and k-space for all imagesets
 lists = ['InPhase.h5', 'OutPhase.h5']

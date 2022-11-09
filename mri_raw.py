@@ -1144,35 +1144,31 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_co
                     ksp.append(k)
             ksp = np.stack(ksp, axis=0)
 
-            coil = 12
-            encode = 0
-            projs = ksp.shape[2]
-            centerK = round(ksp.shape[3]//2)
-            inds = np.zeros(projs, dtype='int16')
-            angles = np.zeros(projs)
-            for p in range(projs):
-                projection = ksp[coil,encode,p,:]
-                center = projection[centerK-20:centerK+20]
-                inds[p] = np.argmax(abs(center)) - 20 + centerK
-                angles[p] = np.angle(projection[inds[p]])
-            #plt.plot(ksp[coil,encode,p,inds])
-            angles = np.rad2deg(np.unwrap(angles))
-            #plt.plot(angles)
-            #plt.show()
+            # coil = 12
+            # encode = 0
+            # projs = ksp.shape[2]
+            # centerK = round(ksp.shape[3]//2)
+            # inds = np.zeros(projs, dtype='int16')
+            # angles = np.zeros(projs)
+            # for p in range(projs):
+            #     projection = ksp[coil,encode,p,:]
+            #     center = projection[centerK-20:centerK+20]
+            #     inds[p] = np.argmax(abs(center)) - 20 + centerK
+            #     angles[p] = np.angle(projection[inds[p]])
+            # #plt.plot(ksp[coil,encode,p,inds])
+            # angles = np.rad2deg(np.unwrap(angles))
+            # plt.plot(angles)
+            # plt.show()
+            # plt.plot(abs(np.diff(angles)))
+            # plt.show()
 
-            #plt.plot(abs(np.diff(angles)))
-            #plt.show()
-
-            #plt.plot(ksp[coil, encode, 0, :])
-            #plt.plot(ksp[coil, encode, 1, :])
-            #plt.show()
             if sms_phase != 0:
                 coils = ksp.shape[0]
                 projs = ksp.shape[2]
                 angle = math.pi / 2  # phase blip (works for sms_factor=2)
                 for c in range(coils):
                     for p in range(projs):
-                        blip = (p%2) * sms_phase * angle  # alternate -pi/2 and 0 or pi/2 and 0
+                        blip = (p % 2) * sms_phase * angle  # alternate -pi/2 and 0 or pi/2 and 0
                         euler = np.complex(math.cos(blip), math.sin(blip))  # e^(i*theta) phase blip
                         ksp[c, 0, p, :] = np.conjugate(euler) * ksp[c, 0, p, :]  # multiply by conjugate phase pattern
 

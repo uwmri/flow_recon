@@ -12,6 +12,7 @@ import math
 from mri_raw import *
 from multi_scale_low_rank_recon import *
 from llr_recon import *
+from flow_processing import *
 from svt import *
 import numba as nb
 #import torch as torch
@@ -71,6 +72,10 @@ if __name__ == "__main__":
     parser.add_argument('--compress_coils', dest='compress_coils', action='store_true')
     parser.set_defaults(compress_coils=False)
 
+    # SMS reconstruction
+    parser.add_argument('--sms_phase', type=int, default=0)  # phase flip (-1=-pi/2, 0=0, 1=pi/2)
+    parser.add_argument('--flow_processing', dest='flow_processing', action='store_true', default=False)
+
     # Input Output
     parser.add_argument('--filename', type=str, help='filename for data (e.g. MRI_Raw.h5)')
     parser.add_argument('--logdir', type=str, help='folder to log files to, default is current directory')
@@ -81,20 +86,18 @@ if __name__ == "__main__":
     parser.add_argument('--example_images', dest='example_images', action='store_true')
     parser.set_defaults(example_images=False)
 
-    # SMS reconstruction
-    parser.add_argument('--sms_factor', type=int, default=1)  # number of slices simultaneously acquired
-
     args = parser.parse_args()
 
     # For tracking memory
     mempool = cupy.get_default_memory_pool()
 
     # Put up a file selector if the file is not specified
-    if args.filename is None:
-        from tkinter import Tk
-        from tkinter.filedialog import askopenfilename
-        Tk().withdraw()
-        args.filename = askopenfilename()
+    # if args.filename is None:
+    #     from tkinter import Tk
+    #     from tkinter.filedialog import askopenfilename
+    #     Tk().withdraw()
+    #     args.filename = askopenfilename()
+    # args.filename = "/data/data_mrcv/45_DATA_HUMANS/CHEST/STUDIES/2019_LIFE_PWV/volunteers/ALB_06052_2022-11-07/06052_00006_pwv-radial_SMS/SMS_2DPC/MRI_Raw.h5"
 
     # Save to input raw data folder
     if args.out_folder is None:
@@ -106,18 +109,13 @@ if __name__ == "__main__":
     # Load Data
     logger.info(f'Load MRI from {args.filename}')
     if args.test_run:
-        mri_raw = load_MRI_raw(h5_filename=args.filename, max_coils=2, max_encodes=args.max_encodes, sms_factor=args.sms_factor)
-    elif args.sms_factor > 1:
-        mri_raw = load_MRI_raw(h5_filename=args.filename, compress_coils=args.compress_coils, max_encodes=args.max_encodes, sms_factor=args.sms_factor)
+        mri_raw = load_MRI_raw(h5_filename=args.filename, max_coils=2, max_encodes=args.max_encodes, sms_phase=args.sms_phase)
     else:
-        mri_raw = load_MRI_raw(h5_filename=args.filename, compress_coils=args.compress_coils, max_encodes=args.max_encodes, sms_factor=args.sms_factor)
+        mri_raw = load_MRI_raw(h5_filename=args.filename, compress_coils=args.compress_coils, max_encodes=args.max_encodes, sms_phase=args.sms_phase)
     print(f'Min/max = {np.max(mri_raw.time[0])} {np.max(mri_raw.time[0])}')
-
-
 
     # Resample
     # radial3d_regrid(mri_raw)
-
 
     num_enc = mri_raw.Num_Encodings
     if args.crop_factor > 1.0:
@@ -163,43 +161,6 @@ if __name__ == "__main__":
                                   num_frames=args.frames,
                                   gate_type=args.gate_type,
                                   discrete_gates=args.discrete_gates)
-    
-    # Fake rotations
-    if False:
-        for i in range(mri_raw.Num_Frames*mri_raw.Num_Encodings):
-            print(f'Frame {i} ')
-            device = sp.get_device(mri_raw.coords[i])
-            kdata = array_to_gpu(mri_raw.kdata[i], device)
-            dcf = array_to_gpu(mri_raw.dcf[i], device)
-            coord = array_to_gpu(mri_raw.coords[i], device)
-
-            psi = -float(i // mri_raw.Num_Encodings)*0.05
-            phi = 0
-            theta = float(i // mri_raw.Num_Encodings)*0.1
-            print(f'Rotation = {theta} {phi} {psi}')
-
-            tx = -float(i // mri_raw.Num_Encodings) * 0.01
-            ty =  float(i // mri_raw.Num_Encodings) * 0.02
-            tz = -float(i // mri_raw.Num_Encodings) * 0.005
-            mri_raw.kdata[i] *= device.xp.exp(1j*2.0*math.pi*tx*mri_raw.coords[i][...,0])
-
-            # Build Rotation matrix
-            rot = build_rotation(theta, phi, psi)
-            rot = array_to_gpu(rot, device)
-
-            coord_rot = coord
-            coord_rot = device.xp.expand_dims( coord_rot, -1)
-            coord_rot = device.xp.matmul(rot, coord_rot)
-            coord_rot = device.xp.squeeze( coord_rot)
-
-            mri_raw.coords[i] = coord_rot
-
-    if False:
-        for i in range(len(mri_raw.kdata)):
-            mri_raw.kdata[i] = array_to_gpu(mri_raw.kdata[i], sp.Device(args.device))
-            mri_raw.coords[i] = array_to_gpu(mri_raw.coords[i], sp.Device(args.device))
-            mri_raw.dcf[i] = array_to_gpu(mri_raw.dcf[i], sp.Device(args.device))
-
 
     # Reconstruct the image
     if args.recon_type == 'mslr':
@@ -340,7 +301,7 @@ if __name__ == "__main__":
             logger.info(f'Frame {i} took {time.time()-t}')
 
     else:
-        print('Please input recon_type (llr, sense, pils, mslr')
+        print('Please input recon_type: llr, sense, pils, mslr')
 
     # Copy to CPU and reshape
     img = np.stack(img,axis=0)
@@ -348,20 +309,47 @@ if __name__ == "__main__":
     img = np.reshape(img, (args.frames*args.frames2, -1) + img.shape[1:])
     logger.info(f'Image shape {img.shape}')
 
-    img_mag = np.abs(img)
-    img_phase = np.angle(img)
+    smaps = sp.to_device(smaps, sp.cpu_device)
+    smaps_mag = np.abs(smaps)
 
-    # Export to file
-    out_name = os.path.join(args.out_folder, args.out_filename)
-    logger.info('Saving images to ' + out_name)
-    try:
-        os.remove(out_name)
-    except OSError:
-        pass
-    with h5py.File(out_name, 'w') as hf:
-        hf.create_dataset("IMAGE", data=img)
-        hf.create_dataset("IMAGE_MAG", data=img_mag)
-        hf.create_dataset("IMAGE_PHASE", data=img_phase)
+    if args.flow_processing:
+        if num_enc == 5:
+            encoding = "5pt"
+        elif num_enc == 4:
+            encoding = "4pt-referenced"
+        elif num_enc == 3:
+            encoding = "3pt"
+        elif num_enc == 2:
+            encoding = "2pt"
+
+        print(f' encoding type is {encoding}')
+
+        # Solve for Velocity
+        mri_flow = MRI_4DFlow(encode_type=encoding, venc=1500)
+        mri_flow.signal = np.moveaxis(img, 1, -1)
+        mri_flow.solve_for_velocity()
+        # mri_flow.update_angiogram()
+        # mri_flow.background_phase_correct()
+        mri_flow.update_angiogram()
+
+        # Export to file
+        out_name = os.path.join(args.out_folder, args.out_filename)
+        logger.info('Saving images to ' + out_name)
+        try:
+            os.remove(out_name)
+        except OSError:
+            pass
+        with h5py.File(out_name, 'w') as hf:
+            hf.create_dataset("IMAGE_REAL", data=np.real(img))
+            hf.create_dataset("IMAGE_IMAG", data=np.imag(img))
+            hf.create_dataset("SMAPS", data=smaps_mag)
+            if args.flow_processing:
+                hf.create_dataset("VX", data=mri_flow.velocity_estimate[..., 0])
+                hf.create_dataset("VY", data=mri_flow.velocity_estimate[..., 1])
+                hf.create_dataset("VZ", data=mri_flow.velocity_estimate[..., 2])
+                hf.create_dataset("CD", data=mri_flow.angiogram)
+                hf.create_dataset("MAG", data=mri_flow.magnitude)
+
 
 
 
