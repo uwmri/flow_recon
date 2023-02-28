@@ -72,9 +72,64 @@ def lap4(phase_w, direction, mod):
     return out
 
 
+# Laplacian based phase unwrapping
+def unwrap_3d(phase_w):
+
+    logger = logging.getLogger('Laplacian Unwrap')
+
+    ts = 8.0  # scales temporal data to spatial dimentions
+    # real_flag = 1 # restrict laplacians to real (lowers memory load)
+    phase_w = np.moveaxis(phase_w, 0, -1)  # x y t
+
+    ndim = phase_w.shape
+
+    # create grid
+    X, Y, T = np.mgrid[-ndim[0] // 2:ndim[0] // 2:,
+                 -ndim[1] // 2:ndim[1] // 2:,
+                 -ndim[2] // 2:ndim[2] // 2:]
+
+    # get mod
+    mod = 2*np.cos(np.pi*X / ndim[0]) + 2*np.cos(np.pi*Y / ndim[1]) + ts*np.cos(np.pi*T / ndim[2]) - 6.0 - ts
+    X = None
+    Y = None
+    T = None
+
+    logger.info('Laplacian')
+    print('Forward')
+    lap_phase_w = lap3(phase_w, 1, mod)
+    lap_phase = np.cos(phase_w) * lap3(np.sin(phase_w), 1, mod) - np.sin(phase_w) * lap3(np.cos(phase_w), 1, mod)
+
+    logger.info('Inverse Laplacian')
+    print('Backwards')
+    ilap_phasediff = lap3(lap_phase - lap_phase_w, -1, mod)
+    n_u4 = np.int8(np.real(np.ndarray.round(ilap_phasediff / 2 / np.pi)))
+    n_u4 = np.moveaxis(n_u4, -1, 0) # t x y
+
+    return n_u4
+
+
+def lap3(phase_w, direction, mod):
+    ndim = phase_w.shape
+    K = np.fft.fftshift(np.fft.fftn(np.fft.ifftshift(phase_w)))
+
+    if direction == 1:
+        K *= mod
+
+    elif direction == -1:
+        mod[ndim[0] // 2, ndim[1] // 2, ndim[2] // 2] = 1
+        K /= mod
+
+    else:
+        print("ERROR")
+
+    out = np.fft.fftshift(np.fft.ifftn(np.fft.ifftshift(K)))
+
+    return out
+
+
 class MRI_4DFlow:
 
-    def __init__(self, encode_type,venc, unwrap_lap=False):
+    def __init__(self, encode_type, venc, unwrap_lap=False):
 
         'Initialization'
         self.set_encoding_matrix(encode_type)
@@ -110,7 +165,7 @@ class MRI_4DFlow:
                                                       [ 1.0,  1.0, -1.0],
                                                       [ 1.0, -1.0,  1.0],
                                                       [-1.0,  1.0, 1.0]], dtype=np.float32),
-            '2pt': np.pi / 2.0 * np.array([[0.0, 0.0, -1.0],
+            '2pt': np.pi * np.array([[0.0, 0.0, 0.0],
                                                     [0.0, 0.0, 1.0]], dtype=np.float32)
         }
         self.EncodingMatrix = encode_dictionary[encode_type]
@@ -159,7 +214,7 @@ class MRI_4DFlow:
         phase = np.angle(signal2)
 
         # Unwrap phase for all encodes
-        num_enc = phase.shape[4]
+        num_enc = phase.shape[3]
 
         if self.unwrap_lap:
             if phase.shape[0] > 1:
@@ -170,15 +225,16 @@ class MRI_4DFlow:
                 print('Starting Laplacian based phase unwrapping')
                 for i in range(num_enc - 1):
                     print(f'Copy encode {i}')
-                    phase_wrap = np.copy(phase[:, :, :, :, i + 1])
+                    phase_wrap = np.copy(phase[:, :, :, i + 1])
 
                     # Find phase wraps
                     print(f'Unwrap the encode {i}')
-                    n_jumps = unwrap_4d(phase_wrap)
+                    #n_jumps = unwrap_4d(phase_wrap)
+                    n_jumps = unwrap_3d(phase_wrap)
 
                     # Unwrap phase
                     print(f'Apply unwrap {i}')
-                    phase[:, :, :, :, i + 1] = phase[:, :, :, :, i + 1] + 2 * np.pi * n_jumps
+                    phase[:, :, :, i + 1] = phase[:, :, :, i + 1] + 2 * np.pi * n_jumps
 
                 phase = np.expand_dims(phase, -1)
                 print('Laplacian based phase unwrapping finished')

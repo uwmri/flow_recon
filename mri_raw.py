@@ -664,7 +664,7 @@ def get_gate_bins( gate_signal, gate_type, num_frames, discrete_gates=False, pre
 
 
 def gate_kspace2d(mri_raw=None, num_frames=[10, 10], gate_type=['time', 'prep'],
-                  discrete_gates=[False, False], ecg_delay=300e-3, prep_disdaqs=0):
+                  discrete_gates=[False, False], ecg_delay=0, prep_disdaqs=0):
     logger = logging.getLogger('Gate k-space 2D')
 
     # Assume the input is a lists
@@ -786,7 +786,7 @@ def gate_kspace2d(mri_raw=None, num_frames=[10, 10], gate_type=['time', 'prep'],
 
     return (mri_rawG)
 
-def gate_kspace(mri_raw=None, num_frames=10, gate_type='time', discrete_gates=False, ecg_delay=300e-3):
+def gate_kspace(mri_raw=None, num_frames=10, gate_type='time', discrete_gates=False, ecg_delay=0):
     logger = logging.getLogger('Gate k-space')
 
     # Assume the input is a lists

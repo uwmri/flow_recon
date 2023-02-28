@@ -31,7 +31,7 @@ import fnmatch
 
 # root = Tk()
 # dirname = filedialog.askdirectory(parent=root, title='Please select a directory')
-dirname = '/data/data_mrcv2/99_GSR/SMS_Testing/RobertsPhantom_05771_2022-10-04/wave2'
+dirname = '/data/data_mrcv2/99_GSR/SMS_Testing/RobertsPhantom_05771_2022-10-04/blip1_pc1'
 
 # Get Pulse sequence structure
 ps = PulseSequence()

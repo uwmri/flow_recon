@@ -116,7 +116,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
             for e in range(self.num_images):
                 A = sp.mri.linop.Sense(mps, coord[e], weights[e], ishape=None,
                                                  coil_batch_size=None, comm=comm)
-                AHA = A.N
+                AHA = A.H
                 max_eig = sp.app.MaxEig(AHA, dtype=y[0].dtype, device=self.op_device,
                                  max_iter=self.max_power_iter,
                                  show_pbar=self.show_pbar).run()

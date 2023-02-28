@@ -41,7 +41,7 @@ if __name__ == "__main__":
     parser.add_argument('--jsense_max_iter', type=int, default=30)
     parser.add_argument('--jsense_max_inner_iter', type=int, default=10)
     parser.add_argument('--jsense_lamda', type=float, default=0.0)
-    parser.add_argument('--smap_type', type=str, default='jsense', help='Sensitvity type jsense, lowres, walsh, espirit')
+    parser.add_argument('--smap_type', type=str, default='jsense', help='Sensitivity type jsense, lowres, walsh, espirit')
 
     parser.add_argument('--krad_cutoff', type=float, default=999990)
     parser.add_argument('--max_encodes', type=int, default=None)
@@ -72,8 +72,10 @@ if __name__ == "__main__":
     parser.add_argument('--compress_coils', dest='compress_coils', action='store_true')
     parser.set_defaults(compress_coils=False)
 
-    # SMS reconstruction
-    parser.add_argument('--sms_phase', type=int, default=0)  # phase flip (-1=-pi/2, 0=0, 1=pi/2)
+    # SMS Reconstruction
+    parser.add_argument('--sms_phase', type=int, default=0)  # phase demodulation (-1=-pi/2, 0=0, 1=pi/2)
+
+    # Flow Processing
     parser.add_argument('--flow_processing', dest='flow_processing', action='store_true', default=False)
 
     # Input Output
@@ -92,19 +94,17 @@ if __name__ == "__main__":
     mempool = cupy.get_default_memory_pool()
 
     # Put up a file selector if the file is not specified
-    # if args.filename is None:
-    #     from tkinter import Tk
-    #     from tkinter.filedialog import askopenfilename
-    #     Tk().withdraw()
-    #     args.filename = askopenfilename()
-    # args.filename = "/data/data_mrcv/45_DATA_HUMANS/CHEST/STUDIES/2019_LIFE_PWV/volunteers/ALB_06052_2022-11-07/06052_00006_pwv-radial_SMS/SMS_2DPC/MRI_Raw.h5"
+    if args.filename is None:
+        from tkinter import Tk
+        from tkinter.filedialog import askopenfilename
+        Tk().withdraw()
+        args.filename = askopenfilename()
 
     # Save to input raw data folder
     if args.out_folder is None:
         args.out_folder = os.path.dirname(args.filename)
 
-    # Save to Folder
-    logger.info(f'Saving to {args.out_folder}')
+    # Save to Folder    logger.info(f'Saving to {args.out_folder}')
 
     # Load Data
     logger.info(f'Load MRI from {args.filename}')
@@ -132,8 +132,8 @@ if __name__ == "__main__":
     else:
         autofov_block_size = 8
 
-    # autofov(mri_raw=mri_raw, thresh=args.thresh, scale=args.scale, oversample=args.data_oversampling,
-    #         square=False, block_size=autofov_block_size, logdir=args.out_folder)
+    autofov(mri_raw=mri_raw, thresh=args.thresh, scale=args.scale, oversample=args.data_oversampling,
+            square=False, block_size=autofov_block_size, logdir=args.out_folder)
 
     # Get sensitivity maps
     logger.info(f'Reconstruct sensitivity maps ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
@@ -325,7 +325,7 @@ if __name__ == "__main__":
         print(f' encoding type is {encoding}')
 
         # Solve for Velocity
-        mri_flow = MRI_4DFlow(encode_type=encoding, venc=1500)
+        mri_flow = MRI_4DFlow(encode_type=encoding, venc=1500, unwrap_lap=True)
         mri_flow.signal = np.moveaxis(img, 1, -1)
         mri_flow.solve_for_velocity()
         # mri_flow.update_angiogram()
