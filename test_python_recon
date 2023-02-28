@@ -1,5 +1,0 @@
-#! /bin/sh
-
-basedir='/data/data_mrcv/45_DATA_HUMANS/CHEST/STUDIES/2019_LIFE_PWV/patients/life-2_life00039_06422_2023-01-23/06422_00006_pwv-radial_AAo/test_python_recon'
-cd ${basedir}
-llr_recon_flow.py --filename MRI_Raw.h5 --recon_type pils --gate_type ecg --frames 40 --resp_gate --smap_type lowres --sms_phase 1 --flow_processing --out_filename AAo_test.h5
