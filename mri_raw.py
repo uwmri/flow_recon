@@ -486,8 +486,8 @@ def crop_kspace(mri_rawdata=None, crop_factor=2, crop_type='radius'):
 def get_gate_bins( gate_signal, gate_type, num_frames, discrete_gates=False, prep_disdaqs=0):
     logger = logging.getLogger('Get Gate bins')
 
-    print(gate_signal)
-    print(gate_signal[0].dtype)
+    #print(gate_signal)
+    #print(gate_signal[0].dtype)
 
     # Loop over all encodes
     t_min = np.min([np.min(gate) for gate in gate_signal])
@@ -610,29 +610,39 @@ def gate_kspace2d(mri_raw=None, num_frames=[10, 10], gate_type=['time', 'prep'],
 
 
                 # Find index where value is held
-                idx = np.argwhere(np.logical_and.reduce([
+                idx = np.logical_and.reduce([
                     np.abs(gate_signal0[e]) >= t_start0,
                     np.abs(gate_signal0[e]) < t_stop0,
                     np.abs(gate_signal1[e]) >= t_start1,
-                    np.abs(gate_signal1[e]) < t_stop1]))
+                    np.abs(gate_signal1[e]) < t_stop1])
 
-                current_points = len(idx)
+                current_points = np.sum(idx)
 
                 # Gate the data
                 points_per_bin.append(current_points)
 
                 logger.info(f'Frame {t0} [{t_start0} to {t_stop0} ] | [{t_start1} to {t_stop1} ]  {e}, Points = {current_points}')
 
-                #print(gate_signal[e].shape)
-                #print(mri_raw.coords[e].shape)
+                # Coords and K-space have extra dimensions (coils, directions)
+                mri_rawG.dcf.append(mri_raw.dcf[e][idx])
+                mri_rawG.time.append(mri_raw.time[e][idx])
+                mri_rawG.resp.append(mri_raw.resp[e][idx])
+                mri_rawG.prep.append(mri_raw.prep[e][idx])
+                mri_rawG.ecg.append(mri_raw.ecg[e][idx])
 
-                mri_rawG.coords.append(mri_raw.coords[e][idx[:, 0], :])
-                mri_rawG.dcf.append(mri_raw.dcf[e][idx[:, 0]])
-                mri_rawG.kdata.append(mri_raw.kdata[e][:, idx[:, 0]])
-                mri_rawG.time.append(mri_raw.time[e][idx[:, 0]])
-                mri_rawG.resp.append(mri_raw.resp[e][idx[:, 0]])
-                mri_rawG.prep.append(mri_raw.prep[e][idx[:, 0]])
-                mri_rawG.ecg.append(mri_raw.ecg[e][idx[:, 0]])
+                coords_gated = []
+                for dim in range(mri_raw.coords[e].shape[-1]):
+                    coords_t = mri_raw.coords[e][..., dim]
+                    coords_gated.append(coords_t[idx])
+                coords_gated = np.stack( coords_gated, axis=-1)
+                mri_rawG.coords.append(coords_gated)
+                
+                kdata_gated = []
+                for coil in range(mri_raw.kdata[e].shape[0]):
+                    kdata_t = mri_raw.kdata[e][coil]
+                    kdata_gated.append(kdata_t[idx])
+                kdata_gated = np.stack( kdata_gated, axis=0)
+                mri_rawG.kdata.append(kdata_gated)
 
                 count += 1
 
@@ -659,7 +669,7 @@ def gate_kspace(mri_raw=None, num_frames=10, gate_type='time', discrete_gates=Fa
     mri_rawG.dft_needed = mri_raw.dft_needed
     mri_rawG.trajectory_type = mri_raw.trajectory_type
 
-    # List array
+    # List array for the gated k-space
     mri_rawG.coords = []
     mri_rawG.dcf = []
     mri_rawG.kdata = []
@@ -676,29 +686,6 @@ def gate_kspace(mri_raw=None, num_frames=10, gate_type='time', discrete_gates=Fa
     }
     gate_signal = gate_signals.get(gate_type, f'Cannot interpret gate signal {gate_type}')
 
-    # For ECG, delay the waveform
-    #if gate_type == 'ecg':
-    #    time = mri_raw.time
-
-    #    for e in range(mri_raw.Num_Encodings):
-    #        time_encode = time[e]
-    #        ecg_encode = gate_signal[e]
-
-            # Sort the data by time
-    #        idx = np.argsort(time_encode)
-    #        idx_inverse = idx.argsort()
-
-            # Estimate the delay
-    #        if e == 0:
-    #            ecg_shift = int(ecg_delay / time_encode.max() * time_encode.size)
-    #            print(f'Shifting by {ecg_shift}')
-
-            # Using circular shift for now. This should be fixed
-    #        ecg_sorted = ecg_encode[idx]
-    #        ecg_shifted = np.roll( ecg_sorted, ecg_shift)
-
-    #        gate_signal[e] = ecg_shifted
-
     print(f'Gating off of {gate_type}')
 
     t_min, t_max, delta_time = get_gate_bins(gate_signal, gate_type, num_frames, discrete_gates)
@@ -711,27 +698,37 @@ def gate_kspace(mri_raw=None, num_frames=10, gate_type='time', discrete_gates=Fa
             t_stop = t_start + delta_time
 
             # Find index where value is held
-            idx = np.argwhere(np.logical_and.reduce([
+            idx = np.logical_and.reduce([
                 np.abs(gate_signal[e]) >= t_start,
-                np.abs(gate_signal[e]) < t_stop]))
-            current_points = len(idx)
+                np.abs(gate_signal[e]) < t_stop])
+            current_points = np.sum(idx)
 
             # Gate the data
             points_per_bin.append(current_points)
 
-            print('(t_start,t_stop) = (', t_start, ',', t_stop, ')')
+            #print('(t_start,t_stop) = (', t_start, ',', t_stop, ')')
             logger.info(f'Frame {t} [{t_start} to {t_stop} ] | {e}, Points = {current_points}')
 
-            print(gate_signal[e].shape)
-            print(mri_raw.coords[e].shape)
+            # Coords and K-space have extra dimensions (coils, directions)
+            mri_rawG.dcf.append(mri_raw.dcf[e][idx])
+            mri_rawG.time.append(mri_raw.time[e][idx])
+            mri_rawG.resp.append(mri_raw.resp[e][idx])
+            mri_rawG.prep.append(mri_raw.prep[e][idx])
+            mri_rawG.ecg.append(mri_raw.ecg[e][idx])
 
-            mri_rawG.coords.append(mri_raw.coords[e][idx[:, 0], :])
-            mri_rawG.dcf.append(mri_raw.dcf[e][idx[:, 0]])
-            mri_rawG.kdata.append(mri_raw.kdata[e][:, idx[:, 0]])
-            mri_rawG.time.append(mri_raw.time[e][idx[:, 0]])
-            mri_rawG.resp.append(mri_raw.resp[e][idx[:, 0]])
-            mri_rawG.prep.append(mri_raw.prep[e][idx[:, 0]])
-            mri_rawG.ecg.append(mri_raw.ecg[e][idx[:, 0]])
+            coords_gated = []
+            for dim in range(mri_raw.coords[e].shape[-1]):
+                coords_t = mri_raw.coords[e][..., dim]
+                coords_gated.append(coords_t[idx])
+            coords_gated = np.stack( coords_gated, axis=-1)
+            mri_rawG.coords.append(coords_gated)
+            
+            kdata_gated = []
+            for coil in range(mri_raw.kdata[e].shape[0]):
+                kdata_t = mri_raw.kdata[e][coil]
+                kdata_gated.append(kdata_t[idx])
+            kdata_gated = np.stack( kdata_gated, axis=0)
+            mri_rawG.kdata.append(kdata_gated)
 
             count += 1
 
@@ -745,6 +742,42 @@ def gate_kspace(mri_raw=None, num_frames=10, gate_type='time', discrete_gates=Fa
     mri_rawG.Num_Frames = num_frames
 
     return (mri_rawG)
+
+
+def strided_encoding(mri_raw=None, stride=7):
+    logger = logging.getLogger('Strided encoding')
+
+    # Get the MRI Raw structure setup
+    mri_rawG = MRI_Raw()
+    mri_rawG.Num_Coils = mri_raw.Num_Coils
+    mri_rawG.Num_Encodings = mri_raw.Num_Encodings*stride
+    mri_rawG.dft_needed = mri_raw.dft_needed
+    mri_rawG.trajectory_type = mri_raw.trajectory_type
+
+    # List array for the gated k-space
+    mri_rawG.coords = []
+    mri_rawG.dcf = []
+    mri_rawG.kdata = []
+    mri_rawG.time = []
+    mri_rawG.ecg = []
+    mri_rawG.prep = []
+    mri_rawG.resp = []
+
+    for s in range(stride):
+        for e in range(mri_raw.Num_Encodings):
+
+            # Coords and K-space have extra dimensions (coils, directions)
+            mri_rawG.dcf.append(mri_raw.dcf[e][...,s::stride,:])
+            mri_rawG.time.append(mri_raw.time[e][...,s::stride,:])
+            mri_rawG.resp.append(mri_raw.resp[e][...,s::stride,:])
+            mri_rawG.prep.append(mri_raw.prep[e][...,s::stride,:])
+            mri_rawG.ecg.append(mri_raw.ecg[e][...,s::stride,:])
+            mri_rawG.kdata.append(mri_raw.kdata[e][...,s::stride,:])
+            mri_rawG.coords.append(mri_raw.coords[e][...,s::stride,:,:])
+ 
+    return (mri_rawG)
+
+
 
 def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_coils=False):
     with h5py.File(h5_filename, 'r') as hf:
@@ -803,14 +836,14 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_co
             for i in ['Z', 'Y', 'X']:
                 logging.info(f'Loading {i} coord.')
 
-                kcoord = np.array(hf['Kdata'][f'K{i}_E{encode}']).flatten()
+                kcoord = np.array(hf['Kdata'][f'K{i}_E{encode}']) #.flatten()
 
                 # Check range to distinguish 2D from 3D
                 if i == 'Z':
                     krange = np.max(kcoord) - np.min(kcoord)
                     if krange < 1e-3:
                         continue
-                coord.append(np.array(hf['Kdata'][f'K{i}_E{encode}']).flatten())
+                coord.append(np.array(hf['Kdata'][f'K{i}_E{encode}'])) #.flatten())
             coord = np.stack(coord, axis=-1)
             print(coord.shape)
 
@@ -857,19 +890,19 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_co
                 ecg = np.tile(ecg_readout, (1, 1, dcf.shape[2]))
                 prep = np.tile(prep_readout, (1, 1, dcf.shape[2]))
 
-                prep = prep.flatten()
-                resp = resp.flatten()
-                ecg = ecg.flatten()
-                dcf = dcf.flatten()
-                time = time.flatten()
+                #prep = prep.flatten()
+                #resp = resp.flatten()
+                #ecg = ecg.flatten()
+                #dcf = dcf.flatten()
+                #time = time.flatten()
                 print(f'Min/max = {np.min(time)} {np.max(time)}')
 
-            else:
-                time = time_readout.flatten()
-                resp = resp_readout.flatten()
-                ecg = ecg_readout.flatten()
-                prep = prep_readout.flatten()
-                dcf = dcf.flatten()
+            #else:
+            #    time = time_readout.flatten()
+            #    resp = resp_readout.flatten()
+            #    ecg = ecg_readout.flatten()
+            #    prep = prep_readout.flatten()
+            #    #dcf = dcf.flatten()
 
             # Get k-space
             ksp = []
@@ -878,7 +911,7 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_co
 
                 k = hf['Kdata'][f'KData_E{encode}_C{c}']
                 try:
-                    ksp.append(np.array(k['real'] + 1j * k['imag']).flatten())
+                    ksp.append(np.array(k['real'] + 1j * k['imag'])) #.flatten())
                 except:
                     ksp.append(k)
             ksp = np.stack(ksp, axis=0)

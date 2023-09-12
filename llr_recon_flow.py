@@ -30,6 +30,10 @@ if __name__ == "__main__":
     parser.add_argument('--frames',type=int, default=100, help='Number of time frames')
     parser.add_argument('--frames2', type=int, default=1, help='Number of time frames')
 
+
+    parser.add_argument('--reset_dens', dest='reset_dens', action='store_true')
+    parser.set_defaults(reset_dens=False)
+
     parser.add_argument('--mps_ker_width', type=int, default=16)
     parser.add_argument('--ksp_calib_width', type=int, default=32)
     parser.add_argument('--lamda', type=float, default=0.0001)
@@ -96,11 +100,12 @@ if __name__ == "__main__":
         mri_raw = load_MRI_raw(h5_filename=args.filename, max_coils=2, max_encodes=args.max_encodes)
     else:
         mri_raw = load_MRI_raw(h5_filename=args.filename, compress_coils=args.compress_coils, max_encodes=args.max_encodes)
-    print(f'Min/max = {np.max(mri_raw.time[0])} {np.max(mri_raw.time[0])}')
+    
+    # For the spiral flow
+    mri_raw = strided_encoding( mri_raw, 7)
 
     # Resample
     # radial3d_regrid(mri_raw)
-
 
     num_enc = mri_raw.Num_Encodings
     if args.crop_factor > 1.0:
@@ -137,7 +142,7 @@ if __name__ == "__main__":
                                   num_frames=args.frames,
                                   gate_type=args.gate_type,
                                   discrete_gates=args.discrete_gates)
-
+    
     # Fake rotations
     if False:
         for i in range(mri_raw.Num_Frames*mri_raw.Num_Encodings):
@@ -167,6 +172,11 @@ if __name__ == "__main__":
             coord_rot = device.xp.squeeze( coord_rot)
 
             mri_raw.coords[i] = coord_rot
+
+    if args.reset_dens:
+        for i in range(len(mri_raw.kdata)):
+            mri_raw.dcf[i][:] = 1.0
+
 
     if True:
         for i in range(len(mri_raw.kdata)):
@@ -200,6 +210,7 @@ if __name__ == "__main__":
         out_name = os.path.join(args.out_folder,'MSLRObject.h5')
         lrimg.save(out_name)
 
+        print(lrimg.shape)
         Sz = lrimg[..., lrimg.shape[-3] // 2, :, :]
         Sy = lrimg[..., lrimg.shape[-2] // 2, :]
         Sx = lrimg[..., lrimg.shape[-1] // 2]
@@ -253,7 +264,7 @@ if __name__ == "__main__":
         logger.info(f'Reconstruct Images ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
         img = BatchedSenseRecon(mri_raw.kdata, mps=smaps, weights=mri_raw.dcf, coord=mri_raw.coords,
                                 device=sp.Device(args.device), lamda=args.lamda, num_enc=num_enc,
-                                coil_batch_size=1, max_iter=args.max_iter, batched_iter=args.max_iter,
+                                coil_batch_size=None, max_iter=args.max_iter, batched_iter=args.max_iter,
                                 gate_type=args.gate_type, fast_maxeig=args.fast_maxeig,
                                 block_width=args.llr_block_width, log_folder=args.out_folder,
                                 composite_init=False
@@ -266,7 +277,10 @@ if __name__ == "__main__":
             logger.info(f'Sense Recon : Frame {i}')
 
             kdata = sp.to_device(mri_raw.kdata[i], args.device)
+            
             dcf = sp.to_device(mri_raw.dcf[i], args.device)
+            #dcf = sp.to_device(np.ones_like(mri_raw.dcf[i]), args.device)
+
             coord = sp.to_device(mri_raw.coords[i], args.device)
 
             print(f'Smaps device = {sp.get_device(smaps)}')
@@ -307,11 +321,13 @@ if __name__ == "__main__":
     # Copy to CPU and reshape
     img = np.stack(img,axis=0)
     img = sp.to_device(img, sp.cpu_device)
-    img = np.reshape(img, (args.frames*args.frames2, -1) + img.shape[1:])
+    img = np.reshape(img, (args.frames*args.frames2, -1) + smaps.shape[1:])
     logger.info(f'Image shape {img.shape}')
 
     img_mag = np.abs(img)
     img_phase = np.angle(img)
+
+    img_phase_difference = np.angle( img * np.conj(np.expand_dims(img[:, 0, ...], axis=1)))
 
     # Export to file
     out_name = os.path.join(args.out_folder, args.out_filename)
@@ -324,6 +340,8 @@ if __name__ == "__main__":
         hf.create_dataset("IMAGE", data=img)
         hf.create_dataset("IMAGE_MAG", data=img_mag)
         hf.create_dataset("IMAGE_PHASE", data=img_phase)
+        hf.create_dataset("IMAGE_PHASE_DIFFERENCE", data=img_phase_difference)
+        
 
 
 
