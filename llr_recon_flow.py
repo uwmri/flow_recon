@@ -27,7 +27,7 @@ if __name__ == "__main__":
     parser.add_argument('--device', type=int, default=0)
     parser.add_argument('--thresh', type=float, default=0.1)
     parser.add_argument('--scale', type=float, default=1.0)
-    parser.add_argument('--frames',type=int, default=100, help='Number of time frames')
+    parser.add_argument('--frames',type=int, default=1, help='Number of time frames')
     parser.add_argument('--frames2', type=int, default=1, help='Number of time frames')
 
 
@@ -62,8 +62,7 @@ if __name__ == "__main__":
     parser.set_defaults(fast_maxeig=False)
     parser.add_argument('--test_run', dest='test_run', action='store_true')
     parser.set_defaults(test_run=False)
-    parser.add_argument('--compress_coils', dest='compress_coils', action='store_true')
-    parser.set_defaults(compress_coils=False)
+    parser.add_argument('--compress_coils', type=int, dest='compress_coils', default=-1, help='Number of coils to compress to')
 
     # Input Output
     parser.add_argument('--filename', type=str, help='filename for data (e.g. MRI_Raw.h5)')
@@ -100,20 +99,16 @@ if __name__ == "__main__":
         mri_raw = load_MRI_raw(h5_filename=args.filename, max_coils=2, max_encodes=args.max_encodes)
     else:
         mri_raw = load_MRI_raw(h5_filename=args.filename, compress_coils=args.compress_coils, max_encodes=args.max_encodes)
-    
-    # For the spiral flow
-    mri_raw = strided_encoding( mri_raw, 7)
 
     # Resample
     # radial3d_regrid(mri_raw)
-
-    num_enc = mri_raw.Num_Encodings
+    
     if args.crop_factor > 1.0:
         crop_kspace(mri_rawdata=mri_raw, crop_factor=args.crop_factor)  # 2.5 (320/128)
 
     # Reconstruct an low res image and get the field of view
-    logger.info(f'Estimating FOV MRI ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
-    autofov(mri_raw=mri_raw, thresh=args.thresh, scale=args.scale, square=False)
+    #logger.info(f'Estimating FOV MRI ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
+    #autofov(mri_raw=mri_raw, thresh=args.thresh, scale=args.scale, square=False)
 
     # Get sensitivity maps
     logger.info(f'Reconstruct sensitivity maps ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
@@ -122,12 +117,8 @@ if __name__ == "__main__":
         xp = sp.Device(args.device).xp
         smaps = xp.ones([mri_raw.Num_Coils] + img_shape, dtype=xp.complex64)
     else:
+        smaps = get_smaps(mri_rawdata=mri_raw, args=args, thresh_maps=True, smap_type='jsense', log_dir=args.out_folder)
 
-        if args.recon_type == 'mslr':
-            # MSLR doesn't work with zeros in sensitivity map yet
-            smaps = get_smaps(mri_rawdata=mri_raw, args=args, thresh_maps=False, smap_type='jsense', log_dir=args.out_folder)
-        else:
-            smaps = get_smaps(mri_rawdata=mri_raw, args=args, thresh_maps=False, smap_type='lowres', log_dir=args.out_folder)
 
     # Gate k-space
     if args.frames > 1:
@@ -143,6 +134,10 @@ if __name__ == "__main__":
                                   gate_type=args.gate_type,
                                   discrete_gates=args.discrete_gates)
     
+    # For the spiral flow situation with interleaved encodings
+    mri_raw = strided_encoding( mri_raw, stride=1, shots_per_frame=64)
+    args.frames = mri_raw.Num_Frames
+
     # Fake rotations
     if False:
         for i in range(mri_raw.Num_Frames*mri_raw.Num_Encodings):
@@ -211,11 +206,18 @@ if __name__ == "__main__":
         lrimg.save(out_name)
 
         print(lrimg.shape)
-        Sz = lrimg[..., lrimg.shape[-3] // 2, :, :]
-        Sy = lrimg[..., lrimg.shape[-2] // 2, :]
-        Sx = lrimg[..., lrimg.shape[-1] // 2]
-        img = lrimg[:, :, :, :, :]
-        #img = np.reshape(img, (args.frames, -1) + img.shape[1:])
+        #Sz = lrimg[..., lrimg.shape[-3] // 2, :, :]
+        #Sy = lrimg[..., lrimg.shape[-2] // 2, :]
+        #Sx = lrimg[..., lrimg.shape[-1] // 2]
+        
+        #img = lrimg[:, :, :, :, :]
+        img = []
+        for t in range(lrimg.total_images):
+            img.append(sp.to_device(lrimg[t]))
+        img = np.stack( img, axis=0)
+
+        
+        img = np.reshape(img, (args.frames, -1) + img.shape[1:])
         out_name = os.path.join(args.out_folder, 'FullRecon.h5')
         logger.info('Saving images to ' + out_name)
         try:
@@ -263,7 +265,7 @@ if __name__ == "__main__":
     elif args.recon_type == 'llr':
         logger.info(f'Reconstruct Images ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
         img = BatchedSenseRecon(mri_raw.kdata, mps=smaps, weights=mri_raw.dcf, coord=mri_raw.coords,
-                                device=sp.Device(args.device), lamda=args.lamda, num_enc=num_enc,
+                                device=sp.Device(args.device), lamda=args.lamda, num_enc=mri_raw.Num_Encodings,
                                 coil_batch_size=None, max_iter=args.max_iter, batched_iter=args.max_iter,
                                 gate_type=args.gate_type, fast_maxeig=args.fast_maxeig,
                                 block_width=args.llr_block_width, log_folder=args.out_folder,

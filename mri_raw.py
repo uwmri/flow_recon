@@ -8,7 +8,6 @@ import cupy
 import time
 import math
 
-from mri_raw import *
 from multi_scale_low_rank_recon import *
 from llr_recon import *
 from svt import *
@@ -321,6 +320,10 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
             dcf = sp.to_device(dcf, device)
             coord = sp.to_device(coord, device)
             kdata = sp.to_device(kdata, device)
+
+            print(dcf.shape)
+            print(coord.shape)
+            print(kdata.shape)            
 
             smaps = mr.app.JsenseRecon(kdata,
                                        coord=coord,
@@ -744,7 +747,7 @@ def gate_kspace(mri_raw=None, num_frames=10, gate_type='time', discrete_gates=Fa
     return (mri_rawG)
 
 
-def strided_encoding(mri_raw=None, stride=7):
+def strided_encoding(mri_raw=None, stride=7, shots_per_frame=1):
     logger = logging.getLogger('Strided encoding')
 
     # Get the MRI Raw structure setup
@@ -763,23 +766,39 @@ def strided_encoding(mri_raw=None, stride=7):
     mri_rawG.prep = []
     mri_rawG.resp = []
 
-    for s in range(stride):
-        for e in range(mri_raw.Num_Encodings):
 
-            # Coords and K-space have extra dimensions (coils, directions)
-            mri_rawG.dcf.append(mri_raw.dcf[e][...,s::stride,:])
-            mri_rawG.time.append(mri_raw.time[e][...,s::stride,:])
-            mri_rawG.resp.append(mri_raw.resp[e][...,s::stride,:])
-            mri_rawG.prep.append(mri_raw.prep[e][...,s::stride,:])
-            mri_rawG.ecg.append(mri_raw.ecg[e][...,s::stride,:])
-            mri_rawG.kdata.append(mri_raw.kdata[e][...,s::stride,:])
-            mri_rawG.coords.append(mri_raw.coords[e][...,s::stride,:,:])
- 
+    # Get the number of frames
+    frames = math.floor( mri_raw.dcf[0].shape[-2] / stride / shots_per_frame)
+
+    # Each stride is an encoding
+    for frame in range(frames):
+        for s in range(stride):
+            for e in range(mri_raw.Num_Encodings):
+            
+                start = s + frame*stride
+                stop = start + shots_per_frame*stride  
+        
+                # Coords and K-space have extra dimensions (coils, directions)
+                mri_rawG.dcf.append(mri_raw.dcf[e][...,start:stop:stride,:])
+                mri_rawG.time.append(mri_raw.time[e][...,start:stop:stride,:])
+                mri_rawG.resp.append(mri_raw.resp[e][...,start:stop:stride,:])
+                mri_rawG.prep.append(mri_raw.prep[e][...,start:stop:stride,:])
+                mri_rawG.ecg.append(mri_raw.ecg[e][...,start:stop:stride,:])
+
+                mri_rawG.kdata.append(mri_raw.kdata[e][...,start:stop:stride,:])
+                mri_rawG.coords.append(mri_raw.coords[e][...,start:stop:stride,:,:])
+    
+                print(f'Strided {e} {frame} with {mri_rawG.kdata[-1].shape}')
+
+    mri_rawG.Num_Frames = frames
+
     return (mri_rawG)
 
 
 
-def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_coils=False):
+def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, 
+                compress_coils=-1, scale_kdata=True):
+
     with h5py.File(h5_filename, 'r') as hf:
 
         try:
@@ -860,13 +879,6 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_co
             except Exception:
                 ecg_readout = np.array(hf['Gating'][f'ECG_E{encode}'])
 
-            '''
-            import matplotlib.pyplot as plt
-            plt.figure()
-            plt.hist( ecg_readout.flatten(), bins=100)
-            plt.show()
-            '''
-
             try:
                 prep_readout = np.array(hf['Gating']['prep'])
             except Exception:
@@ -890,19 +902,7 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_co
                 ecg = np.tile(ecg_readout, (1, 1, dcf.shape[2]))
                 prep = np.tile(prep_readout, (1, 1, dcf.shape[2]))
 
-                #prep = prep.flatten()
-                #resp = resp.flatten()
-                #ecg = ecg.flatten()
-                #dcf = dcf.flatten()
-                #time = time.flatten()
                 print(f'Min/max = {np.min(time)} {np.max(time)}')
-
-            #else:
-            #    time = time_readout.flatten()
-            #    resp = resp_readout.flatten()
-            #    ecg = ecg_readout.flatten()
-            #    prep = prep_readout.flatten()
-            #    #dcf = dcf.flatten()
 
             # Get k-space
             ksp = []
@@ -947,26 +947,17 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_co
             pass
         '''
 
-        # Scale k-space to max 1
-        kdata_max = [np.abs(ksp).max() for ksp in mri_raw.kdata]
-        print(f'Max kdata {kdata_max}')
-        kdata_max = np.max(np.array(kdata_max))
-        for ksp in mri_raw.kdata:
-            ksp /= kdata_max
+        if scale_kdata:
+            # Scale k-space to max 1
+            kdata_max = [np.abs(ksp).max() for ksp in mri_raw.kdata]
+            kdata_max = np.max(np.array(kdata_max))
+            for ksp in mri_raw.kdata:
+                ksp /= kdata_max
 
-        kdata_max = [np.abs(ksp).max() for ksp in mri_raw.kdata]
-        print(f'Max kdata {kdata_max}')
-
-        if compress_coils:
+        if compress_coils > 0:
             # Compress Coils
-            if 18 < Num_Coils <= 32:
-                mri_raw.kdata = pca_coil_compression(kdata=mri_raw.kdata, axis=0, target_channels=20)
-                mri_raw.Num_Coils = 20
-
-            if Num_Coils > 32:
-                mri_raw.kdata = pca_coil_compression(kdata=mri_raw.kdata, axis=0, target_channels=20)
-                mri_raw.Num_Coils = 28
-                mri_raw.Num_Coils = 20
+            mri_raw.kdata = pca_coil_compression(kdata=mri_raw.kdata, axis=0, target_channels=compress_coils)
+            mri_raw.Num_Coils = compress_coils
 
         return mri_raw
 
