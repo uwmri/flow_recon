@@ -333,55 +333,56 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
                                        lamda=args.jsense_lamda,
                                        device=device,
                                        max_iter=args.jsense_max_iter,
-                                       max_inner_iter=args.jsense_max_inner_iter).run()
+                                       max_inner_iter=args.jsense_max_inner_iter,
+                                       img_shape=(320,320)).run()
 
-            # Get a composite image
-            img_shape = sp.estimate_shape(coord)
-            image = 0
-            for e in range(mri_rawdata.Num_Encodings):
-                kr = sp.get_device(mri_rawdata.coords[e]).xp.sum(mri_rawdata.coords[e] ** 2, axis=-1)
-                kr = sp.to_device(kr, device)
-                lpf = xp.exp(-kr / (2 * (16. ** 2)))
+        # Get a composite image
+        img_shape = sp.estimate_shape(coord)
+        image = 0
+        for e in range(mri_rawdata.Num_Encodings):
+            kr = sp.get_device(mri_rawdata.coords[e]).xp.sum(mri_rawdata.coords[e] ** 2, axis=-1)
+            kr = sp.to_device(kr, device)
+            lpf = xp.exp(-kr / (2 * (16. ** 2)))
 
-                for c in range(mri_rawdata.Num_Coils):
-                    logger.info(f'Reconstructing encode, coil {e} , {c} ')
-                    ksp = sp.to_device(mri_rawdata.kdata[e][c, ...], device)
-                    ksp *= sp.to_device(mri_rawdata.dcf[e], device)
-                    ksp *= lpf
-                    coords_temp = sp.to_device(mri_rawdata.coords[e], device)
-                    image += xp.abs(sp.nufft_adjoint(ksp, coords_temp, img_shape)) ** 2
+            for c in range(mri_rawdata.Num_Coils):
+                logger.info(f'Reconstructing encode, coil {e} , {c} ')
+                ksp = sp.to_device(mri_rawdata.kdata[e][c, ...], device)
+                ksp *= sp.to_device(mri_rawdata.dcf[e], device)
+                ksp *= lpf
+                coords_temp = sp.to_device(mri_rawdata.coords[e], device)
+                image += xp.abs(sp.nufft_adjoint(ksp, coords_temp, img_shape)) ** 2
 
-            if thresh_maps:
-                image = xp.sqrt(image)  # sos image
-                image = sp.to_device(image, sp.get_device(smaps))
+        if thresh_maps:
+            image = xp.sqrt(image)  # sos image
+            image = sp.to_device(image, sp.get_device(smaps))
 
-                xp = sp.get_device(smaps).xp
+            xp = sp.get_device(smaps).xp
 
-                # Threshold
-                image = xp.abs(image)
-                image /= xp.max(image)
-                thresh = 0.015
-                # print(thresh)
-                mask = image > thresh
+            # Threshold
+            image = xp.abs(image)
+            image /= xp.max(image)
+            thresh = 0.08
+            # print(thresh)
+            mask = image > thresh
 
-                mask = sp.to_device(mask, sp.cpu_device)
-                if len(mask.shape) == 3:
-                    zz, xx, yy = np.meshgrid(np.linspace(-1, 1, 11), np.linspace(-1, 1, 11), np.linspace(-1, 1, 11))
-                    rad = zz ** 2 + xx ** 2 + yy ** 2
-                else:
-                    xx, yy = np.meshgrid(np.linspace(-1, 1, 11), np.linspace(-1, 1, 11))
-                    rad = xx ** 2 + yy ** 2
+            mask = sp.to_device(mask, sp.cpu_device)
+            if len(mask.shape) == 3:
+                zz, xx, yy = np.meshgrid(np.linspace(-1, 1, 11), np.linspace(-1, 1, 11), np.linspace(-1, 1, 11))
+                rad = zz ** 2 + xx ** 2 + yy ** 2
+            else:
+                xx, yy = np.meshgrid(np.linspace(-1, 1, 11), np.linspace(-1, 1, 11))
+                rad = xx ** 2 + yy ** 2
 
-                smap_mask = rad < 1.0
-                # print(smap_mask)
-                mask = ndimage.morphology.binary_dilation(mask, smap_mask)
-                mask = np.array(mask, dtype=np.float32)
-                mask = sp.to_device(mask, sp.get_device(smaps))
+            smap_mask = rad < 1.0
+            # print(smap_mask)
+            mask = ndimage.morphology.binary_dilation(mask, smap_mask)
+            mask = np.array(mask, dtype=np.float32)
+            mask = sp.to_device(mask, sp.get_device(smaps))
 
-                # print(image)
-                # print(image.shape)
-                # print(smaps.shape)
-                smaps = mask * smaps
+            # print(image)
+            # print(image.shape)
+            # print(smaps.shape)
+            smaps = mask * smaps
 
     smaps_cpu = sp.to_device(smaps, sp.cpu_device)
     # if thresh_maps:
@@ -486,7 +487,7 @@ def crop_kspace(mri_rawdata=None, crop_factor=2, crop_type='radius'):
         logger.info(f'New shape = {sp.estimate_shape(mri_rawdata.coords[e])}')
 
 
-def get_gate_bins( gate_signal, gate_type, num_frames, discrete_gates=False, prep_disdaqs=0):
+def get_gate_bins(gate_signal, gate_type, num_frames, discrete_gates=False, prep_disdaqs=0):
     logger = logging.getLogger('Get Gate bins')
 
     #print(gate_signal)
@@ -1206,6 +1207,30 @@ def load_MRI_raw_ou(h5_filename=None, max_coils=None, compress_coils=False):
 
 
         return mri_raw
+
+
+def spatial_shift(mri_raw: MRI_Raw, shifts: list):
+
+    logger = logging.getLogger('spatial_shift')
+
+    # Set to GPU
+    device = sp.get_device(mri_raw.coords[0])
+    xp = device.xp
+
+    # For encode
+    for encode in range(mri_raw.Num_Encodings):
+        coord = mri_raw.coords[encode]
+
+        # Get a shifts
+        shifter = xp.ones_like(mri_raw.kdata[encode][0] )
+        for dim, shift in enumerate(shifts):
+            shifter *= xp.exp(2j*math.pi*coord[..., dim]*shift)
+
+        # Multiply all data
+        for c in range(mri_raw.Num_Coils):
+            mri_raw.kdata[encode][c] *= shifter
+
+    return
 
 def autofov(mri_raw=None, device=None,
             thresh=0.05, scale=1, oversample=2.0, square=True):

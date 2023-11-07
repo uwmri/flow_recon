@@ -64,6 +64,9 @@ if __name__ == "__main__":
     parser.set_defaults(test_run=False)
     parser.add_argument('--compress_coils', type=int, dest='compress_coils', default=-1, help='Number of coils to compress to')
 
+    parser.set_defaults(strided_gate=False)
+    parser.add_argument('--strided_gate', dest='strided_gate', action='store_true')
+
     # Input Output
     parser.add_argument('--filename', type=str, help='filename for data (e.g. MRI_Raw.h5)')
     parser.add_argument('--logdir', type=str, help='folder to log files to, default is current directory')
@@ -102,13 +105,17 @@ if __name__ == "__main__":
 
     # Resample
     # radial3d_regrid(mri_raw)
-    
+
+    # Shift
+    # spatial_shift(mri_raw, [0, 30/220])
+
     if args.crop_factor > 1.0:
         crop_kspace(mri_rawdata=mri_raw, crop_factor=args.crop_factor)  # 2.5 (320/128)
 
     # Reconstruct an low res image and get the field of view
     #logger.info(f'Estimating FOV MRI ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
     #autofov(mri_raw=mri_raw, thresh=args.thresh, scale=args.scale, square=False)
+
 
     # Get sensitivity maps
     logger.info(f'Reconstruct sensitivity maps ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
@@ -117,7 +124,7 @@ if __name__ == "__main__":
         xp = sp.Device(args.device).xp
         smaps = xp.ones([mri_raw.Num_Coils] + img_shape, dtype=xp.complex64)
     else:
-        smaps = get_smaps(mri_rawdata=mri_raw, args=args, thresh_maps=True, smap_type='jsense', log_dir=args.out_folder)
+        smaps = get_smaps(mri_rawdata=mri_raw, args=args, thresh_maps=True, smap_type='lowres', log_dir=args.out_folder)
 
 
     # Gate k-space
@@ -135,8 +142,9 @@ if __name__ == "__main__":
                                   discrete_gates=args.discrete_gates)
     
     # For the spiral flow situation with interleaved encodings
-    mri_raw = strided_encoding( mri_raw, stride=1, shots_per_frame=64)
-    args.frames = mri_raw.Num_Frames
+    if args.strided_gate:
+        mri_raw = strided_encoding(mri_raw, stride=1, shots_per_frame=2)
+        args.frames = mri_raw.Num_Frames
 
     # Fake rotations
     if False:
