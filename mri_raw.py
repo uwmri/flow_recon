@@ -334,7 +334,7 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
                                        device=device,
                                        max_iter=args.jsense_max_iter,
                                        max_inner_iter=args.jsense_max_inner_iter,
-                                       img_shape=(320,320)).run()
+                                       img_shape=(256,256)).run()
 
         # Get a composite image
         img_shape = sp.estimate_shape(coord)
@@ -770,13 +770,14 @@ def strided_encoding(mri_raw=None, stride=7, shots_per_frame=1):
 
     # Get the number of frames
     frames = math.floor( mri_raw.dcf[0].shape[-2] / stride / shots_per_frame)
+    frames = math.floor( frames / 2) #temp
 
     # Each stride is an encoding
     for frame in range(frames):
         for s in range(stride):
             for e in range(mri_raw.Num_Encodings):
             
-                start = s + frame*stride
+                start = s + frame*stride*shots_per_frame
                 stop = start + shots_per_frame*stride  
         
                 # Coords and K-space have extra dimensions (coils, directions)

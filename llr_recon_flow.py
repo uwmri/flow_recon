@@ -44,7 +44,7 @@ if __name__ == "__main__":
     parser.add_argument('--krad_cutoff', type=float, default=999990)
     parser.add_argument('--max_encodes', type=int, default=None)
 
-    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--epochs', type=int, default=10)
     parser.add_argument('--gate_type', type=str, default='time')  # recon type
     parser.add_argument('--gate_type2', type=str, default='prep')  # recon type
     parser.add_argument('--prep_disdaqs', type=int, default=0)
@@ -124,7 +124,7 @@ if __name__ == "__main__":
         xp = sp.Device(args.device).xp
         smaps = xp.ones([mri_raw.Num_Coils] + img_shape, dtype=xp.complex64)
     else:
-        smaps = get_smaps(mri_rawdata=mri_raw, args=args, thresh_maps=True, smap_type='lowres', log_dir=args.out_folder)
+        smaps = get_smaps(mri_rawdata=mri_raw, args=args, thresh_maps=False, smap_type='jsense', log_dir=args.out_folder)
 
 
     # Gate k-space
@@ -206,6 +206,7 @@ if __name__ == "__main__":
                            lamda=args.lamda,
                            max_epoch=args.epochs,
                            device=sp.Device(args.device),
+                           out_iter_mon=True,
                            comm=comm,
                            log_dir=args.out_folder,
                            num_encodings=mri_raw.Num_Encodings).run()
