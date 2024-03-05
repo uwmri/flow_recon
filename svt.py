@@ -4,6 +4,9 @@ import numba as nb
 #import torch as torch
 import sigpy as sp
 import numpy as np
+import h5py
+import sys
+
 
 __all__ = [ 'SingularValueThresholding', 'SingularValueThresholdingNumba' ]
 
@@ -175,7 +178,55 @@ def svt_numba2(output, input, lamda, blk_shape, blk_strides, block_iter, num_enc
 
     return output
 
+@nb.jit(nopython=True, cache=True, parallel=True)  # pragma: no cover
+def svt_numba2_update_threshold(input, blk_shape, blk_strides, num_encodes):
 
+    by = input.shape[1] // blk_strides[0]
+    bx = input.shape[2] // blk_strides[1]
+
+    Sy = int(input.shape[1])
+    Sx = int(input.shape[2])
+
+    num_frames = int(input.shape[0]/num_encodes)
+    bmat_shape = (num_encodes*blk_shape[0] * blk_shape[1], num_frames)
+
+    blocks_singular_value_array = np.zeros(by*bx, np.float32)
+
+    for ny in nb.prange(by):
+        sy = ny * blk_strides[0]
+        ey = sy + blk_shape[0]
+
+        for nx in range(bx):
+
+            sx = nx * blk_strides[1]
+            ex = sx + blk_shape[1]
+
+            block = np.zeros(bmat_shape, input.dtype)
+
+            # Grab a block
+            for tframe in range(num_frames):
+                count = 0
+                for encode in range(num_encodes):
+                    store_pos = int(tframe * num_encodes + encode)
+                    for j in range(sy, ey):
+                        for i in range(sx, ex):
+                            block[count, tframe] = input[store_pos, j % Sy, i % Sx]
+                            count += 1
+            
+            # Svd
+            u, s, vh = np.linalg.svd(block, full_matrices=False)
+            # Store first singular value
+            blocks_index = (ny*bx + nx) 
+            blocks_singular_value_array[blocks_index] = s[0]
+    
+    # Filter out non-zero values, sort and select final value based on some statistics
+    blocks_singular_value_array = blocks_singular_value_array[blocks_singular_value_array != 0]
+    blocks_singular_value_array.sort()
+    # Median
+    stat_index = int((50 / 100) * len(blocks_singular_value_array))
+    singular_value =  blocks_singular_value_array[stat_index]
+
+    return singular_value
 
 class SingularValueThresholdingNumba(sp.prox.Prox):
 
@@ -230,7 +281,11 @@ class SingularValueThresholdingNumba(sp.prox.Prox):
         if len(self.block_size) == 3:
             output = svt_numba3(output, input, bthresh, tuple(self.block_shape), tuple(self.block_stride), self.block_iter, self.num_encodes)
         elif len(self.block_size) ==2:
-            output = svt_numba2(output, input, bthresh, tuple(self.block_shape), tuple(self.block_stride),
+            bthresh = float(self.lamda*alpha)
+            update_th = svt_numba2_update_threshold(input, tuple(self.block_shape), tuple(self.block_stride), self.num_encodes)
+            update_bthresh = bthresh*update_th  
+            print(f'bthresh {bthresh}, update {update_th} and updated bthresh {update_bthresh}')
+            output = svt_numba2(output, input, update_bthresh, tuple(self.block_shape), tuple(self.block_stride),
                                 self.block_iter, self.num_encodes)
         else:
             raise RuntimeError(f'SVT only support 2 or 3 blocks but {len(self.block_size)} were requested')

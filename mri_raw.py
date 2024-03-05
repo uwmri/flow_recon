@@ -325,6 +325,7 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
             print(coord.shape)
             print(kdata.shape)            
 
+            # Warning: image shape hard coded to 320
             smaps = mr.app.JsenseRecon(kdata,
                                        coord=coord,
                                        weights=dcf,
@@ -334,7 +335,7 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
                                        device=device,
                                        max_iter=args.jsense_max_iter,
                                        max_inner_iter=args.jsense_max_inner_iter,
-                                       img_shape=(256,256)).run()
+                                       img_shape=(320,320)).run()
 
         # Get a composite image
         img_shape = sp.estimate_shape(coord)
