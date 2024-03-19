@@ -771,8 +771,10 @@ def strided_encoding(mri_raw=None, stride=7, shots_per_frame=1):
 
     # Get the number of frames
     frames = math.floor( mri_raw.dcf[0].shape[-2] / stride / shots_per_frame)
-    frames = math.floor( frames / 2) #temp
-
+    #frames = math.floor( frames / 2) #temp
+    
+    frames = 500 # temp 
+    
     # Each stride is an encoding
     for frame in range(frames):
         for s in range(stride):
@@ -790,8 +792,10 @@ def strided_encoding(mri_raw=None, stride=7, shots_per_frame=1):
 
                 mri_rawG.kdata.append(mri_raw.kdata[e][...,start:stop:stride,:])
                 mri_rawG.coords.append(mri_raw.coords[e][...,start:stop:stride,:,:])
-    
-                print(f'Strided {e} {frame} with {mri_rawG.kdata[-1].shape}')
+
+                #print(f'Strided {e} {frame} with {mri_rawG.kdata[-1].shape}')
+                logger.info(f'Strided {s} encode {e} frame {frame} with shape: {mri_rawG.kdata[-1].shape}')
+
 
     mri_rawG.Num_Frames = frames
 

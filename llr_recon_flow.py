@@ -128,21 +128,24 @@ if __name__ == "__main__":
 
 
     # Gate k-space
-    if args.frames > 1:
-        if args.frames2 > 1:
-            mri_raw = gate_kspace2d(mri_raw=mri_raw,
-                                  num_frames=[args.frames, args.frames2],
-                                  gate_type=[args.gate_type, args.gate_type2],
-                                  discrete_gates=[args.discrete_gates, args.discrete_gates2],
-                                  prep_disdaqs=args.prep_disdaqs)
-        else:
-            mri_raw = gate_kspace(mri_raw=mri_raw,
-                                  num_frames=args.frames,
-                                  gate_type=args.gate_type,
-                                  discrete_gates=args.discrete_gates)
+    #if args.frames > 1:
+        #if args.frames2 > 1:
+            #mri_raw = gate_kspace2d(mri_raw=mri_raw,
+            #                      num_frames=[args.frames, args.frames2],
+            #                      gate_type=[args.gate_type, args.gate_type2],
+            #                      discrete_gates=[args.discrete_gates, args.discrete_gates2],
+            #                      prep_disdaqs=args.prep_disdaqs)
+        #else:
+            #mri_raw = gate_kspace(mri_raw=mri_raw,
+            #                      num_frames=args.frames,
+            #                      gate_type=args.gate_type,
+            #                      discrete_gates=args.discrete_gates)
+    
     
     # For the spiral flow situation with interleaved encodings
     if args.strided_gate:
+        logger.info(f'Strided gating for spiral with interleaved encodes')
+        # hardcoded to 2. If this works then make a switch to this for 2d realtime recon.
         mri_raw = strided_encoding(mri_raw, stride=1, shots_per_frame=2)
         args.frames = mri_raw.Num_Frames
 
