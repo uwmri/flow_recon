@@ -165,7 +165,7 @@ def background_phase_correct(image_in, mag_thresh=0.15, fit_order=2):
     return background_phase
 
 
-with h5py.File(r'Time04.h5') as hf:
+with h5py.File(r'Time03_blk8_500_stride_3arms.h5') as hf:
     image = np.array(hf['IMAGE'])
 
 # Arrange into [encode, frame, xres, yres]
