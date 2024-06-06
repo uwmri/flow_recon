@@ -905,6 +905,11 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None,
                 prep = np.tile(prep_readout, (1, 1, dcf.shape[2]))
 
                 print(f'Min/max = {np.min(time)} {np.max(time)}')
+            else:
+                time = time_readout
+                ecg = ecg_readout
+                resp = resp_readout
+                prep = prep_readout
 
             # Get k-space
             ksp = []
