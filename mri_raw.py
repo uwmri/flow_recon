@@ -917,7 +917,6 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None,
                 resp = resp_readout
                 prep = prep_readout
 
-
             # Get k-space
             ksp = []
             for c in range(Num_Coils):
