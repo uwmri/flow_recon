@@ -7,6 +7,8 @@ import cupy
 import time
 import math
 import sys
+import fnmatch
+import hashlib
 from skimage.restoration import unwrap_phase
 
 
@@ -31,67 +33,67 @@ research_flow_min_venc = 50
 #print(vencs)
 
 # hard code Vencs at the moment 
-vencs = [1000000000, 1000, 390, 50]
-
-# ~~~ translation of the seperate matlab "lap3" function code ~~~#
-def lap3(in_, dir, mod, real_flag=0):
-    #  Args:
-    #     in: 3D input array
-    #     dir: forward or inverse transform (1 or -1)
-    #     mod: Laplaican kernel in frequency space
-    #     real_flag: restrict output to real (doesn't really matter, but this
-    #                lowers the memory load)
-    #  Returns:
-    #     out: output matrix
-    [sx, sy, sz] = np.array(in_.shape)
-    K = np.fft.fftshift(np.fft.fftn(np.fft.ifftshift(in_)))
-
-    if (dir == 1):
-        K = K * mod
-    elif (dir == -1):
-        mod[ sx // 2, sy // 2, sz // 2] = 1
-        K = K / mod
-    else:
-        print('ERROR')
-
-    if real_flag > 0:
-        out = np.real(np.fft.fftshift(np.fft.ifftn(np.fft.ifftshift(K))))
-    else:
-        out = np.fft.fftshift(np.fft.ifftn(np.fft.ifftshift(K)))
-    return out
+# vencs = [1000000000, 800, 500, 70]
 
 
-# ~~~ translation of the seperate matlab "unwrap3D" function code ~~~#
-def unwrap_3D(phi_w, real_flag=1):  # need to do the unwrap_4D function
-    #  Args:
-    #     phi_w: Wrapped input array (-pi to pi)
-    #     ts: Scales the temporal data to spatial dimensions
-    #     real_flag: restrcit laplacians to real (doesn't really matter, but
-    #     this lowers the memory load)
-    #  Returns:
-    #     nr: integer array containing the NUMBER of wraps per voxel
-    #         (note that this is not the actual unwrapped data)
-    phi_w_size = np.array(phi_w.shape)
-    # [X, Y, Z] = np.meshgrid((range((int(-phi_w_size[0] / 2)), (int(phi_w_size[0] / 2)))),
-    #                         (range((int(-phi_w_size[1] / 2)), (int(phi_w_size[1] / 2)))),
-    #                         (range((int(-phi_w_size[2] / 2)), (int(phi_w_size[2] / 2)))), indexing='ij')
-    #
-    ndim = phi_w.shape
-    X, Y, Z = np.mgrid[-ndim[0] // 2:ndim[0] // 2:,
+
+# Laplacian based phase unwrapping
+def unwrap_2D_time(phase_w):
+
+    logger = logging.getLogger('Laplacian Unwrap')
+
+    ts = 2.0  # scales temporal data to spatial dimentions
+    # real_flag = 1 # restrict laplacians to real (lowers memory load)
+    phase_w = np.moveaxis(phase_w, 0, -1)  # x y t
+
+    ndim = phase_w.shape
+
+    # create grid
+    X, Y, T = np.mgrid[-ndim[0] // 2:ndim[0] // 2:,
                  -ndim[1] // 2:ndim[1] // 2:,
                  -ndim[2] // 2:ndim[2] // 2:]
 
+    # get mod
+    mod = 2.0 * np.cos(np.pi * X / ndim[0]) + 2.0 * np.cos(np.pi * Y / ndim[1]) + ts * np.cos(np.pi * T / ndim[2]) - 6.0 - ts
 
-    mod = 2 * np.cos(math.pi * X / phi_w_size[0]) + 2 * np.cos(math.pi * Y / phi_w_size[1]) + 2 * np.cos(
-        math.pi * Z / phi_w_size[2]) - 6
-    # print(mod)
+    X = None
+    Y = None
+    T = None
 
-    lap_phiw = lap3(phi_w, 1, mod, real_flag)
-    lap_phi = (np.cos(phi_w) * lap3(np.sin(phi_w), 1, mod, real_flag)) - (
-                np.sin(phi_w) * lap3(np.cos(phi_w), 1, mod, real_flag))
-    ilap_phidiff = (lap3(lap_phi - lap_phiw, -1, mod, real_flag))
-    nr = np.int8(np.round((ilap_phidiff / 2) / math.pi))
-    return nr
+    logger.info('Laplacian')
+    print('Forward')
+    lap_phase_w = lap2t(phase_w, 1, mod)
+    lap_phase = np.cos(phase_w) * lap2t(np.sin(phase_w), 1, mod) - np.sin(phase_w) * lap2t(np.cos(phase_w), 1, mod)
+
+    logger.info('Inverse Laplacian')
+    print('Backwards')
+    ilap_phasediff = lap2t(lap_phase - lap_phase_w, -1, mod)
+    n_u4 = np.int8(np.real(np.ndarray.round(ilap_phasediff / 2 / np.pi)))
+
+    phase_w = np.moveaxis(phase_w, -1, 0)  # t x y 
+    n_u4 = np.moveaxis(n_u4, -1, 0)
+
+    return n_u4
+
+
+def lap2t(phase_w, direction, mod):
+    ndim = phase_w.shape
+    K = np.fft.fftshift(np.fft.fftn(np.fft.ifftshift(phase_w)))
+
+    if direction == 1:
+        K *= mod
+
+    elif direction == -1:
+        mod[ndim[0] // 2, ndim[1] // 2, ndim[2] // 2] = 1
+        K /= mod
+
+    else:
+        print("ERROR")
+
+    out = np.fft.fftshift(np.fft.ifftn(np.fft.ifftshift(K)))
+
+    return out
+
 
 def get_image( m0, v, vencs):
     image = []
@@ -164,46 +166,114 @@ def background_phase_correct(image_in, mag_thresh=0.15, fit_order=2):
     #Expand and subtract)
     return background_phase
 
+class recon_file:
+    def __init__(self):
+        self.full_hash = None
+        self.short_hash = None
+        self.filename = None
+        self.folder = None
+        self.extension = None
 
-with h5py.File(r'Time03_blk8_500_stride_3arms.h5') as hf:
-    image = np.array(hf['IMAGE'])
+    def __str__(self):
+        name = f'[ File:{os.path.join(self.folder,self.filename)} Hash:{self.short_hash} ]'
+        return name
 
-# Arrange into [encode, frame, xres, yres]
-image = np.swapaxes(image,0,1)
-image *= np.conj(image[0])
+    def fullname(self):
+        return(os.path.join(self.folder, self.filename))
 
-image_sub = image.copy()
+def find(patterns, path):
+    result = []
+    for root, dirs, files in os.walk(path, followlinks=False):
+        for name in files:
+            for pattern in patterns:
+                if fnmatch.fnmatch(name, pattern):
+                    if os.path.islink(os.path.join(root, name)) == False:
+                        f = recon_file()
+                        f.filename = name
+                        f.folder = root
+                        #f.short_hash = short_md5(os.path.join(root, name))
+                        f.extension = os.path.splitext(name)[1]
+                        result.append(f)
+    return result
 
-bf = []
-vz = []
-angio = []
-for i in range(image_sub.shape[0]):
-    background_phase = background_phase_correct(image_sub[i], mag_thresh=0.08, fit_order=3)
-    image_sub[i] *= np.exp(-1j*background_phase)
-    bf.append(background_phase)
+if __name__ == '__main__':
 
-    phase = unwrap_3D(np.angle(image_sub[i]))* 2 * np.pi  + np.angle(image_sub[i])
-    #phase = np.unwrap(np.angle(image_sub[i]), axis=0)
-    #phase = unwrap_phase(np.angle(image_sub[i]))
-    #phase = np.angle(image_sub[i])
-    vz.append(vencs[i] * phase /math.pi)
+    # Returns list with file structure
 
-    vmag = np.abs(vencs[i] * phase /math.pi)
-    mag  = np.abs(image_sub[i])
-    angio.append(mag*np.sin(math.pi/2.0*vmag/vencs[i]))
+    print('Finding Cardiac and Time recons', flush=True)
+    files_to_compare = find(['Cardiac*.h5','Time*.h5'], os.getcwd())
 
-max_angio = np.max(np.array(angio), axis=None)
-norm_angio = (np.array(angio) / max_angio) * 100
+    for idx, f in enumerate(files_to_compare):
+        
+        full_filename = f.fullname()
+        filename = os.path.basename(full_filename)
+        folder = f.folder
 
-bf = np.stack(bf,0)
+        output_full_filename = os.path.join(folder, f'Vel_{filename}')
 
-with h5py.File(r'RTvelocities.h5','w') as hf:
-    hf.create_dataset('image_abs', data=np.abs(image_sub))
-    hf.create_dataset('image_angle', data=np.angle(image_sub))
+        #print(full_filename)
+        #print(filename)
+        print(folder)
 
-    #hf.create_dataset('image_noBGC_abs', data=np.abs(image))
-    #hf.create_dataset('image_noBGC_angle', data=np.angle(image))
+        os.chdir(folder)
+        os.system(f'ls {filename}')
 
-    hf.create_dataset('back_phase', data=bf)
-    hf.create_dataset('vz', data=vz)
-    hf.create_dataset('angio', data=angio)
+        with h5py.File(full_filename) as hf:
+            image = np.array(hf['IMAGE'])
+        num_encodes = image.shape[1]
+
+        if num_encodes == 4:
+            vencs = [1000000000, 1000, 500, 80]
+        elif num_encodes == 3:
+            vencs = [1000000000, 750, 80]
+        elif num_encodes == 2:
+            user_input = input("Enter a value for the single Venc (mm/s) (i.e. Vencs: 80, 750, 1000): ")
+            vencs = [1000000000, int(user_input)]
+        else:
+            raise ValueError("Invalid number of encodes. Expected 2, 3, or 4.")
+        
+        print(f' Number of encodes = {num_encodes}')
+        print(f'Vencs = {vencs}')
+
+        # Arrange into [encode, frame, xres, yres]
+        image = np.swapaxes(image,0,1)
+        image *= np.conj(image[0])
+
+        image_sub = image.copy()
+
+        bf = []
+        vz = []
+        angio = []
+        for i in range(image_sub.shape[0]):
+            background_phase = background_phase_correct(image_sub[i], mag_thresh=0.08, fit_order=3)
+            image_sub[i] *= np.exp(-1j*background_phase)
+            bf.append(background_phase)
+
+            #phase = unwrap_3D(np.angle(image_sub[i]))* 2 * np.pi  + np.angle(image_sub[i])
+            phase = unwrap_2D_time(np.angle(image_sub[i]))* 2 * np.pi  + np.angle(image_sub[i])
+            #phase = np.unwrap(np.angle(image_sub[i]), axis=0)
+            #phase = unwrap_phase(np.angle(image_sub[i]))
+            #phase = np.angle(image_sub[i])
+            vz.append(vencs[i] * phase /math.pi)
+
+            vmag = np.abs(vencs[i] * phase /math.pi)
+            mag  = np.abs(image_sub[i])
+            angio.append(mag*np.sin(math.pi/2.0*vmag/vencs[i]))
+
+        max_angio = np.max(np.array(angio), axis=None)
+        norm_angio = (np.array(angio) / max_angio) * 100
+
+        bf = np.stack(bf,0)
+
+        with h5py.File(output_full_filename,'w') as hf:
+            #hf.create_dataset('image_abs', data=np.abs(image_sub))
+            #hf.create_dataset('image_angle', data=np.angle(image_sub))
+            #hf.create_dataset('image_noBGC_abs', data=np.abs(image))
+            #hf.create_dataset('image_noBGC_angle', data=np.angle(image))
+            hf.create_dataset('back_phase', data=bf)
+            hf.create_dataset('vz', data=vz)
+            hf.create_dataset('angio', data=angio)
+
+
+
+    

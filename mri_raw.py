@@ -334,8 +334,8 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
                                        lamda=args.jsense_lamda,
                                        device=device,
                                        max_iter=args.jsense_max_iter,
-                                       max_inner_iter=args.jsense_max_inner_iter,
-                                       img_shape=(320,320)).run()
+                                       max_inner_iter=args.jsense_max_inner_iter).run()
+                                       #img_shape=(320,320)).run()
 
         # Get a composite image
         img_shape = sp.estimate_shape(coord)
@@ -383,6 +383,7 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
             # print(image)
             # print(image.shape)
             # print(smaps.shape)
+            logger.info(f'Thresholding Sensitivity Maps by {thresh} ')
             smaps = mask * smaps
 
     smaps_cpu = sp.to_device(smaps, sp.cpu_device)
