@@ -774,7 +774,7 @@ def strided_encoding(mri_raw=None, stride=7, shots_per_frame=1):
     frames = math.floor( mri_raw.dcf[0].shape[-2] / stride / shots_per_frame)
     #frames = math.floor( frames / 2) #temp
     
-    frames = 500 # temp 
+    #frames = 1000 # temp 
     
     # Each stride is an encoding
     for frame in range(frames):
@@ -911,6 +911,12 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None,
                 prep = np.tile(prep_readout, (1, 1, dcf.shape[2]))
 
                 print(f'Min/max = {np.min(time)} {np.max(time)}')
+            else:
+                time = time_readout
+                ecg = ecg_readout
+                resp = resp_readout
+                prep = prep_readout
+
 
             # Get k-space
             ksp = []

@@ -225,6 +225,9 @@ def svt_numba2_update_threshold(input, blk_shape, blk_strides, num_encodes):
     # Median
     stat_index = int((50 / 100) * len(blocks_singular_value_array))
     singular_value =  blocks_singular_value_array[stat_index]
+    
+    # Max
+    #singular_value =  blocks_singular_value_array[-1]
 
     return singular_value
 

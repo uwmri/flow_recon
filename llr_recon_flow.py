@@ -32,9 +32,10 @@ if __name__ == "__main__":
 
     parser.set_defaults(autofov=False)
     parser.add_argument('--autofov', dest='autofov', action='store_true')
-
+    
     parser.set_defaults(thresh_maps=False)
     parser.add_argument('--thresh_maps', dest='thresh_maps', action='store_true')
+
 
     parser.add_argument('--reset_dens', dest='reset_dens', action='store_true')
     parser.set_defaults(reset_dens=False)
@@ -72,6 +73,7 @@ if __name__ == "__main__":
     parser.set_defaults(strided_gate=False)
     parser.add_argument('--strided_gate', dest='strided_gate', action='store_true')
     parser.add_argument('--shots_per_frame', type=int, default=2)
+
 
     # Input Output
     parser.add_argument('--filename', type=str, help='filename for data (e.g. MRI_Raw.h5)')
