@@ -1,2 +1,4 @@
 __pycache__/*
 .idea/*
+.vscode/flow_recon.code-workspace
+.vscode/settings.json
