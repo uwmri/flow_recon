@@ -67,6 +67,10 @@ if __name__ == "__main__":
 
     parser.set_defaults(resp_gate=False)
     parser.add_argument('--resp_gate', dest='resp_gate', action='store_true')
+    parser.add_argument('--resp_efficiency', type=float, default=0.5)
+    parser.add_argument('--resp_sign', type=int, help='flip the respiratory waveform', default=1)
+    parser.add_argument('--resp_filter_window', type=float, default=10)
+    parser.add_argument('--time_range', type=str, help='specify as start,end in seconds (Ex: 50,150)', default=None)
 
     parser.add_argument('--fast_maxeig', dest='fast_maxeig', action='store_true')
     parser.set_defaults(fast_maxeig=False)
@@ -76,7 +80,8 @@ if __name__ == "__main__":
     parser.set_defaults(compress_coils=False)
 
     # SMS Reconstruction
-    parser.add_argument('--sms_phase', type=int, default=0)  # phase demodulation (-1=-pi/2, 0=0, 1=pi/2)
+    parser.add_argument('--sms_factor', type=int, default=1)  # sms factor
+    parser.add_argument('--sms_phase', type=int, default=0)  # phase demodulation
 
     # Flow Processing
     parser.add_argument('--flow_processing', dest='flow_processing', action='store_true', default=False)
@@ -112,9 +117,9 @@ if __name__ == "__main__":
     # Load Data
     logger.info(f'Load MRI from {args.filename}')
     if args.test_run:
-        mri_raw = load_MRI_raw(h5_filename=args.filename, max_coils=2, max_encodes=args.max_encodes, sms_phase=args.sms_phase)
+        mri_raw = load_MRI_raw(h5_filename=args.filename, max_coils=2, max_encodes=args.max_encodes, sms_factor=args.sms_factor, sms_phase=args.sms_phase)
     else:
-        mri_raw = load_MRI_raw(h5_filename=args.filename, compress_coils=args.compress_coils, max_encodes=args.max_encodes, sms_phase=args.sms_phase)
+        mri_raw = load_MRI_raw(h5_filename=args.filename, compress_coils=args.compress_coils, max_encodes=args.max_encodes, sms_factor=args.sms_factor, sms_phase=args.sms_phase)
     print(f'Min/max = {np.max(mri_raw.time[0])} {np.max(mri_raw.time[0])}')
 
     # Resample
@@ -126,7 +131,9 @@ if __name__ == "__main__":
 
     # Perform respiratory gating 
     if args.resp_gate:
-        mri_raw = resp_gate(mri_raw)
+        if args.time_range is not None:
+            time_range = [int(x) for x in args.time_range.split(',')]
+        mri_raw = resp_gate(mri_raw, efficiency=args.resp_efficiency, resp_sign=args.resp_sign, resp_filter_window=args.resp_filter_window, time_range=time_range)
 
     # Reconstruct an low res image and get the field of view
     logger.info(f'Estimating FOV MRI ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')

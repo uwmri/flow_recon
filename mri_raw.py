@@ -970,8 +970,8 @@ def median_filter_resp(time, resp, window):
   idx_unsort[idx_sort] = np.arange(idx_sort.size)
 
   # Median filtered
-  from scipy.signal import medfilt
-  resp_filtered = bounded_medfilt(resp_sorted,window // 2)
+  from scipy.image import median_filter
+  resp_filtered = med(resp_sorted, window // 2)
 
   # Unsort back into as acquired data
   resp_unsorted = resp_filtered[idx_unsort] 
@@ -979,7 +979,7 @@ def median_filter_resp(time, resp, window):
   return resp_unsorted
 
 
-def resp_gate(mri_raw=None, efficiency=0.5, filter_resp=True):
+def resp_gate(mri_raw=None, efficiency=0.5, resp_sign=1, resp_filter_window=10, time_range=None):
     logger = logging.getLogger('Resp Gate k-space')
 
     # Get the MRI Raw structure setup
@@ -1007,31 +1007,42 @@ def resp_gate(mri_raw=None, efficiency=0.5, filter_resp=True):
         # Grab the time and respiratory waveforms
         time = mri_raw.time[e].flatten()
         resp = mri_raw.resp[e].flatten()
-
+    
         # Estimate the TR
         dt = np.max(time) / len(time)
-        resp_filter_width = int(10 / dt)
+        resp_filter_width = int(resp_filter_window / dt)
 
         logger.info(f'Estimated TR = {dt} based on {np.max(time)} s acquisition with {len(time)} points')
         logger.info(f'Using a filter window of {resp_filter_width}')
-                
+            
         # Filter the respiratory signal
         # filter_resp = median_filter_resp(time, resp, resp_filter_width)
         filter_resp = resp
-
+        
         # Resp sorted to get threshold value
         sorted_resp = np.sort(filter_resp)
         resp_thresh = sorted_resp[int(len(filter_resp)*efficiency)]
 
-        logger.info(f'Resp threshold = {resp_thresh}, based on {efficiency}')
-
-        # Find index where value is held
-        idx = mri_raw.resp[e] < resp_thresh
+        logger.info(f'Resp threshold = {resp_thresh}, based on efficiency of {efficiency}')
+            
+        if resp_sign == -1:
+            logger.info(f'Flipping the respiratory window')
+            idx = mri_raw.resp[e] < resp_thresh 
+        else:
+            idx = mri_raw.resp[e] > resp_thresh
+        
+        # Find index where value is held within time range
+        if time_range is not None:
+            logger.info(f'Using data from {time_range[0]} s to {time_range[1]} s')
+            time_mask = np.logical_and(time > time_range[0], time < time_range[1])
+            print(f'New number of points = {len(resp)}')
+            idx &= time_mask
+            
         current_points = np.sum(idx)
-
+        
         # Gate the data
         points_per_bin.append(current_points)
-
+    
         logger.info(f'Encode {e}, Points = {current_points}')
 
         new_kdata = []
@@ -1063,7 +1074,7 @@ def resp_gate(mri_raw=None, efficiency=0.5, filter_resp=True):
     return (mri_rawG)
 
 
-def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_coils=False, sms_phase=None):
+def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_coils=False, sms_factor=None, sms_phase=None):
     with h5py.File(h5_filename, 'r') as hf:
 
         try:
@@ -1162,13 +1173,18 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_co
             # plt.plot(abs(np.diff(angles)))
             # plt.show()
 
-            if sms_phase != 0:
+            if sms_factor > 1:
                 coils = ksp.shape[0]
                 projs = ksp.shape[2]
-                angle = math.pi / 2  # phase blip (works for sms_factor=2)
+                if sms_factor == 2:
+                    angle = math.pi / 2  # phase blip (works for sms_factor=2)
+                elif sms_factor == 3:
+                    angle = 2* math.pi /3
+                else:
+                    raise ValueError('sms_factor not supported')
                 for c in range(coils):
                     for p in range(projs):
-                        blip = (p % 2) * sms_phase * angle  # alternate -pi/2 and 0 or pi/2 and 0
+                        blip = (p % 2) * sms_phase * angle  # alternate blips
                         euler = np.complex(math.cos(blip), math.sin(blip))  # e^(i*theta) phase blip
                         ksp[c, 0, p, :] = np.conjugate(euler) * ksp[c, 0, p, :]  # multiply by conjugate phase pattern
 
@@ -1473,3 +1489,4 @@ def autofov(mri_raw=None, device=None,
     # print(sp.estimate_shape(mri_raw.coords[4]))
 
     logger.info('Image shape: {}'.format(new_img_shape))
+    
