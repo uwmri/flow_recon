@@ -24,6 +24,9 @@ from readout_regrid import *
 class MRI_Raw:
     Num_Encodings = 0
     Num_Coils = 0
+    fovx = 0
+    fovy = 0
+    fovz = 0
     trajectory_type = None
     dft_needed = None
     Num_Frames = None
@@ -675,6 +678,9 @@ def gate_kspace2d(mri_raw=None, num_frames=[10, 10], gate_type=['time', 'prep'],
     mri_rawG.Num_Encodings = mri_raw.Num_Encodings
     mri_rawG.dft_needed = mri_raw.dft_needed
     mri_rawG.trajectory_type = mri_raw.trajectory_type
+    mri_rawG.fovx = mri_raw.fovx
+    mri_rawG.fovy = mri_raw.fovy
+    mri_rawG.fovz = mri_raw.fovz
 
     # List array
     mri_rawG.coords = []
@@ -797,6 +803,9 @@ def gate_kspace(mri_raw=None, num_frames=10, gate_type='time', discrete_gates=Fa
     mri_rawG.Num_Encodings = mri_raw.Num_Encodings
     mri_rawG.dft_needed = mri_raw.dft_needed
     mri_rawG.trajectory_type = mri_raw.trajectory_type
+    mri_rawG.fovx = mri_raw.fovx
+    mri_rawG.fovy = mri_raw.fovy
+    mri_rawG.fovz = mri_raw.fovz
 
     # List array
     mri_rawG.coords = []
@@ -956,30 +965,8 @@ def bounded_medfilt(signal, window):
   return filtered 
 
 
-def median_filter_resp(time, resp, window):
-  
-  # Get the sort index
-  idx_sort = np.argsort(time)
-
-  # Sort the data
-  time_sorted = time[idx_sort]
-  resp_sorted = resp[idx_sort]
-
-  # Get an index to unsort the data
-  idx_unsort = np.empty_like(idx_sort)
-  idx_unsort[idx_sort] = np.arange(idx_sort.size)
-
-  # Median filtered
-  from scipy.image import median_filter
-  resp_filtered = med(resp_sorted, window // 2)
-
-  # Unsort back into as acquired data
-  resp_unsorted = resp_filtered[idx_unsort] 
-  
-  return resp_unsorted
-
-
-def resp_gate(mri_raw=None, efficiency=0.5, resp_sign=1, resp_filter_window=10, time_range=None):
+def resp_gate(mri_raw=None, efficiency=0.5, resp_sign=1, resp_filter_window=10, time_ranges=None):
+    from scipy.ndimage import minimum_filter1d, maximum_filter1d
     logger = logging.getLogger('Resp Gate k-space')
 
     # Get the MRI Raw structure setup
@@ -989,7 +976,9 @@ def resp_gate(mri_raw=None, efficiency=0.5, resp_sign=1, resp_filter_window=10, 
     mri_rawG.dft_needed = mri_raw.dft_needed
     mri_rawG.trajectory_type = mri_raw.trajectory_type
     mri_rawG.Num_Frames = mri_raw.Num_Frames
-    mri_rawG.Num_Encodings = mri_raw.Num_Encodings
+    mri_rawG.fovx = mri_raw.fovx
+    mri_rawG.fovy = mri_raw.fovy
+    mri_rawG.fovz = mri_raw.fovz
 
     # List array
     mri_rawG.coords = []
@@ -1013,30 +1002,32 @@ def resp_gate(mri_raw=None, efficiency=0.5, resp_sign=1, resp_filter_window=10, 
         resp_filter_width = int(resp_filter_window / dt)
 
         logger.info(f'Estimated TR = {dt} based on {np.max(time)} s acquisition with {len(time)} points')
-        logger.info(f'Using a filter window of {resp_filter_width}')
-            
-        # Filter the respiratory signal
-        # filter_resp = median_filter_resp(time, resp, resp_filter_width)
-        filter_resp = resp
+        logger.info(f'Using a filter window of {resp_filter_window} s')
         
-        # Resp sorted to get threshold value
-        sorted_resp = np.sort(filter_resp)
-        resp_thresh = sorted_resp[int(len(filter_resp)*efficiency)]
-
-        logger.info(f'Resp threshold = {resp_thresh}, based on efficiency of {efficiency}')
-            
+        mins = minimum_filter1d(resp, resp_filter_width) 
+        maxs = maximum_filter1d(resp, resp_filter_width)
+        
+        logger.info(f'Thresholding based on resp efficiency of {efficiency}')
+        threshes = mins + (1.0 - efficiency) * (maxs - mins) # resp waveform is flipped by default
+        
         if resp_sign == -1:
             logger.info(f'Flipping the respiratory window')
-            idx = mri_raw.resp[e] < resp_thresh 
+            idx = resp < threshes
         else:
-            idx = mri_raw.resp[e] > resp_thresh
+            idx = resp > threshes
         
         # Find index where value is held within time range
-        if time_range is not None:
-            logger.info(f'Using data from {time_range[0]} s to {time_range[1]} s')
-            time_mask = np.logical_and(time > time_range[0], time < time_range[1])
-            print(f'New number of points = {len(resp)}')
+        if time_ranges is not None:
+            logger.info(f'Using data from: ')
+            time_mask = np.zeros_like(idx, dtype=bool)
+            for time_range in time_ranges:
+                logger.info(f'{time_range[0]} to {time_range[1]} s')
+                time_mask |= np.logical_and(time > time_range[0], time < time_range[1])
             idx &= time_mask
+            
+        # np.savetxt('resp_mask.txt', idx)
+        # np.savetxt('resp.txt', resp)
+        # np.savetxt('time.txt', time)
             
         current_points = np.sum(idx)
         
@@ -1074,7 +1065,7 @@ def resp_gate(mri_raw=None, efficiency=0.5, resp_sign=1, resp_filter_window=10, 
     return (mri_rawG)
 
 
-def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_coils=False, sms_factor=None, sms_phase=None):
+def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_coils=False, sms_factor=None, sms_slice=None):
     with h5py.File(h5_filename, 'r') as hf:
 
         try:
@@ -1088,12 +1079,21 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_co
 
             dft_needed = [np.squeeze(hf['Kdata'].attrs['dft_neededX']), np.squeeze(hf['Kdata'].attrs['dft_neededY']),
                           np.squeeze(hf['Kdata'].attrs['dft_neededZ'])]
-
+            fov_flag = False
+            try:
+                fovx = np.squeeze(hf['Kdata'].attrs['fovx'])
+                fovz = np.squeeze(hf['Kdata'].attrs['fovz'])
+                fovy = np.squeeze(hf['Kdata'].attrs['fovy'])
+                fov_flag = True
+            except:
+                print('FOV attributes not found')
+                pass
             logging.info(f'Frames {Num_Frames}')
             logging.info(f'Coils {Num_Coils}')
             logging.info(f'Encodings {Num_Encodings}')
             logging.info(f'Trajectory Type {trajectory_type}')
             logging.info(f'DFT Needed {dft_needed}')
+            logging.info(f'FOV x:{fovx} y:{fovy} z:{fovz}')
 
         except Exception:
             logging.info('Missing header data')
@@ -1112,7 +1112,13 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_co
         mri_raw.Num_Frames = int(Num_Frames)
         mri_raw.dft_needed = tuple(dft_needed)
         mri_raw.trajectory_type = tuple(trajectory_type)
-
+        if fov_flag:
+            mri_raw.fovx = float(fovx)
+            mri_raw.fovy = float(fovy)
+            mri_raw.fovz = float(fovz)
+        else:
+            print('FOV attributes not found')
+        
         # List array
         mri_raw.coords = []
         mri_raw.dcf = []
@@ -1173,18 +1179,31 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_co
             # plt.plot(abs(np.diff(angles)))
             # plt.show()
 
+            # if sms_factor > 1:
+            #     coils = ksp.shape[0]
+            #     projs = ksp.shape[2]
+            #     if sms_factor == 2:
+            #         angle = math.pi / 2  # phase blip (works for sms_factor=2)
+            #     else:
+            #         raise ValueError('sms_factor not supported')
+            #     for c in range(coils):
+            #         for p in range(projs):
+            #             blip = (p % 2) * sms_phase * angle  # alternate blips
+            #             euler = np.complex(math.cos(blip), math.sin(blip))  # e^(i*theta) phase blip
+            #             ksp[c, 0, p, :] = np.conjugate(euler) * ksp[c, 0, p, :]  # multiply by conjugate phase pattern
+            
             if sms_factor > 1:
+                logging.info(f"Applying phase blips for SMS slice {sms_slice+1} of {sms_factor}")
                 coils = ksp.shape[0]
                 projs = ksp.shape[2]
-                if sms_factor == 2:
-                    angle = math.pi / 2  # phase blip (works for sms_factor=2)
-                elif sms_factor == 3:
-                    angle = 2* math.pi /3
-                else:
-                    raise ValueError('sms_factor not supported')
+                phase_max = math.pi*(sms_factor - 1)/sms_factor
+                # sms_phase = phase_max * (-1 + (2*sms_slice)/(sms_factor-1))
+                # sms_phase = (2 * np.pi/sms_factor) * sms_slice
+                sms_phase = sms_slice * 2 * phase_max
                 for c in range(coils):
                     for p in range(projs):
-                        blip = (p % 2) * sms_phase * angle  # alternate blips
+                        blip = (p%sms_factor) * sms_phase
+                        # blip = sms_slice * sms_phase
                         euler = np.complex(math.cos(blip), math.sin(blip))  # e^(i*theta) phase blip
                         ksp[c, 0, p, :] = np.conjugate(euler) * ksp[c, 0, p, :]  # multiply by conjugate phase pattern
 

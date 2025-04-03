@@ -129,11 +129,11 @@ def lap3(phase_w, direction, mod):
 
 class MRI_4DFlow:
 
-    def __init__(self, encode_type, venc, unwrap_lap=False):
+    def __init__(self, encode_type, venc=None, unwrap_lap=False):
 
         'Initialization'
         self.set_encoding_matrix(encode_type)
-        self.Venc = venc  #m/s
+        self.venc = venc
         self.NoiseLevel = 0.0 #relative to max signal of 1
         self.spatial_resolution = 0.5 # percent of kmax
         self.time_resolution = 0.5 # percent of nominal
@@ -186,7 +186,7 @@ class MRI_4DFlow:
         print(velocity.shape)
 
         # Get the Phase
-        phase = np.matmul( self.EncodingMatrix/self.Venc, velocity)
+        phase = np.matmul( self.EncodingMatrix/self.venc, velocity)
 
         # Create Magnitude image (M*exp(i*phase))
         mag = np.copy(pd)
@@ -240,7 +240,7 @@ class MRI_4DFlow:
                 print('Laplacian based phase unwrapping finished')
 
         #Solve for velocity
-        self.velocity_estimate = np.matmul(self.DecodingMatrix*self.Venc,phase)
+        self.velocity_estimate = np.matmul(self.DecodingMatrix*self.venc,phase)
 
         # Data comes back as Nt x Nz X Ny x Nz x 3 x 1, reduce to
         #   Nt x Nz x Ny x Nx x 3
@@ -346,9 +346,9 @@ class MRI_4DFlow:
             self.solve_for_velocity()
 
         vmag = np.sqrt( np.mean( np.abs(self.velocity_estimate)**2 , -1))
-        self.angiogram = self.magnitude*np.sin(math.pi/2.0*vmag/self.Venc)
+        self.angiogram = self.magnitude*np.sin(math.pi/2.0*vmag/self.venc)
 
-        idx = np.where(vmag > self.Venc )
+        idx = np.where(vmag > self.venc )
         self.angiogram[idx] = self.magnitude[idx]
 
 
@@ -416,6 +416,7 @@ if __name__ == "__main__":
 
     # Solve for Velocity
     mri_flow = MRI_4DFlow(encode_type= encoding, venc=args.venc)
+    print(mri_flow.Venc)
     mri_flow.signal = temp
     mri_flow.solve_for_velocity()
     mri_flow.update_angiogram()

@@ -31,7 +31,7 @@ if __name__ == "__main__":
     parser.add_argument('--device', type=int, default=0)
     parser.add_argument('--thresh', type=float, default=0.1)
     parser.add_argument('--scale', type=float, default=1.0)
-    parser.add_argument('--frames', type=int, default=100, help='Number of time frames')
+    parser.add_argument('--frames', type=int, default=10, help='Number of time frames')
     parser.add_argument('--frames2', type=int, default=1, help='Number of time frames')
 
     parser.add_argument('--mps_ker_width', type=int, default=16)
@@ -70,7 +70,7 @@ if __name__ == "__main__":
     parser.add_argument('--resp_efficiency', type=float, default=0.5)
     parser.add_argument('--resp_sign', type=int, help='flip the respiratory waveform', default=1)
     parser.add_argument('--resp_filter_window', type=float, default=10)
-    parser.add_argument('--time_range', type=str, help='specify as start,end in seconds (Ex: 50,150)', default=None)
+    parser.add_argument('--time_range', type=str, help='specify ranges as start1-end1,start2-end2,... in seconds (Ex: 50-100,220-340)', default=None)
 
     parser.add_argument('--fast_maxeig', dest='fast_maxeig', action='store_true')
     parser.set_defaults(fast_maxeig=False)
@@ -81,7 +81,9 @@ if __name__ == "__main__":
 
     # SMS Reconstruction
     parser.add_argument('--sms_factor', type=int, default=1)  # sms factor
-    parser.add_argument('--sms_phase', type=int, default=0)  # phase demodulation
+    parser.add_argument('--sms_slice', type=int, default=0)  # sms slice, ordered bottom (0) to top (sms_factor - 1)
+    parser.add_argument('--venc', type=int, default=1500) # mm/s
+    parser.add_argument('--unwrap_lap', dest='unwrap_lap', action='store_true')
 
     # Flow Processing
     parser.add_argument('--flow_processing', dest='flow_processing', action='store_true', default=False)
@@ -117,9 +119,9 @@ if __name__ == "__main__":
     # Load Data
     logger.info(f'Load MRI from {args.filename}')
     if args.test_run:
-        mri_raw = load_MRI_raw(h5_filename=args.filename, max_coils=2, max_encodes=args.max_encodes, sms_factor=args.sms_factor, sms_phase=args.sms_phase)
+        mri_raw = load_MRI_raw(h5_filename=args.filename, max_coils=2, max_encodes=args.max_encodes, sms_factor=args.sms_factor, sms_slice=args.sms_slice)
     else:
-        mri_raw = load_MRI_raw(h5_filename=args.filename, compress_coils=args.compress_coils, max_encodes=args.max_encodes, sms_factor=args.sms_factor, sms_phase=args.sms_phase)
+        mri_raw = load_MRI_raw(h5_filename=args.filename, compress_coils=args.compress_coils, max_encodes=args.max_encodes, sms_factor=args.sms_factor, sms_slice=args.sms_slice)
     print(f'Min/max = {np.max(mri_raw.time[0])} {np.max(mri_raw.time[0])}')
 
     # Resample
@@ -132,8 +134,13 @@ if __name__ == "__main__":
     # Perform respiratory gating 
     if args.resp_gate:
         if args.time_range is not None:
-            time_range = [int(x) for x in args.time_range.split(',')]
-        mri_raw = resp_gate(mri_raw, efficiency=args.resp_efficiency, resp_sign=args.resp_sign, resp_filter_window=args.resp_filter_window, time_range=time_range)
+            time_ranges = []
+            ranges = args.time_range.split(',')
+            for trange in ranges:
+                time_ranges.append([float(x) for x in trange.split('-')])
+        else:
+            time_ranges = None
+        mri_raw = resp_gate(mri_raw, efficiency=args.resp_efficiency, resp_sign=args.resp_sign, resp_filter_window=args.resp_filter_window, time_ranges=time_ranges)
 
     # Reconstruct an low res image and get the field of view
     logger.info(f'Estimating FOV MRI ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
@@ -289,7 +296,7 @@ if __name__ == "__main__":
         img = []
 
         import time
-
+ 
         for i in range(len(mri_raw.kdata)):
             t = time.time()
             logger.info(f'Frame {i} of {len(mri_raw.kdata)}')
@@ -336,30 +343,55 @@ if __name__ == "__main__":
         print(f' encoding type is {encoding}')
 
         # Solve for Velocity
-        mri_flow = MRI_4DFlow(encode_type=encoding, venc=1500, unwrap_lap=True)
+        mri_flow = MRI_4DFlow(encode_type=encoding, venc=args.venc, unwrap_lap=args.unwrap_lap)
         mri_flow.signal = np.moveaxis(img, 1, -1)
         mri_flow.solve_for_velocity()
         # mri_flow.update_angiogram()
         # mri_flow.background_phase_correct()
         mri_flow.update_angiogram()
 
-        # Export to file
-        out_name = os.path.join(args.out_folder, args.out_filename)
-        logger.info('Saving images to ' + out_name)
-        try:
-            os.remove(out_name)
-        except OSError:
-            pass
-        with h5py.File(out_name, 'w') as hf:
-            hf.create_dataset("IMAGE_REAL", data=np.real(img))
-            hf.create_dataset("IMAGE_IMAG", data=np.imag(img))
-            hf.create_dataset("SMAPS", data=smaps_mag)
-            if args.flow_processing:
-                hf.create_dataset("VX", data=mri_flow.velocity_estimate[..., 0])
-                hf.create_dataset("VY", data=mri_flow.velocity_estimate[..., 1])
-                hf.create_dataset("VZ", data=mri_flow.velocity_estimate[..., 2])
-                hf.create_dataset("CD", data=mri_flow.angiogram)
-                hf.create_dataset("MAG", data=mri_flow.magnitude)
+    # Export to file
+    out_name = os.path.join(args.out_folder, args.out_filename)
+    logger.info('Saving images to ' + out_name)
+    try:
+        os.remove(out_name)
+    except OSError:
+        pass
+    with h5py.File(out_name, 'w') as hf:
+        header_group = hf.create_group("HEADER")
+        args_str = ";".join(f"{k}={v}" for k, v in vars(args).items() if v is not None)
+        header_group.attrs["recon_params"] = args_str
+        header_group.attrs["fovx"] = mri_raw.fovx
+        header_group.attrs["fovy"] = mri_raw.fovy
+        header_group.attrs["fovz"] = mri_raw.fovz
+        header_group.attrs["matrixx"] = img.shape[2]
+        header_group.attrs["matrixy"] = img.shape[3]
+        if len(img.shape) > 4:
+            header_group.attrs["matrixz"] = img.shape[4]
+        else:
+            header_group.attrs["matrixz"] = 1
+        header_group.attrs["frames"] = args.frames
+        if args.time_range is not None:
+            scan_length = sum([x[1] - x[0] for x in time_ranges])
+            header_group.attrs["time_res"] = scan_length/args.frames
+        else:
+            header_group.attrs["time_res"] = (np.max(mri_raw.time[0].flatten()))/args.frames
+        
+        if args.sms_factor > 1:
+            header_group.attrs["sms_factor"] = args.sms_factor
+            header_group.attrs["sms_slice"] = args.sms_slice
+        
+        hf.create_dataset("IMAGE_REAL", data=np.real(img))
+        hf.create_dataset("IMAGE_IMAG", data=np.imag(img))
+        hf.create_dataset("SMAPS", data=smaps_mag)
+        if args.flow_processing:
+            header_group.attrs["venc"] = mri_flow.venc
+            header_group.attrs["encoding_matrix"] = mri_flow.EncodingMatrix
+            hf.create_dataset("VX", data=mri_flow.velocity_estimate[..., 0])
+            hf.create_dataset("VY", data=mri_flow.velocity_estimate[..., 1])
+            hf.create_dataset("VZ", data=mri_flow.velocity_estimate[..., 2])
+            hf.create_dataset("CD", data=mri_flow.angiogram)
+            hf.create_dataset("MAG", data=mri_flow.magnitude)
 
 
 

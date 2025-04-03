@@ -111,21 +111,22 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
             max_eig = sp.app.MaxEig(AHA, dtype=y[0].dtype, device=self.op_device,
                              max_iter=self.max_power_iter,
                              show_pbar=self.show_pbar).run()
-        elif True:
+        # elif True:
 
-            for e in range(self.num_images):
-                A = sp.mri.linop.Sense(mps, coord[e], weights[e], ishape=None,
-                                                 coil_batch_size=None, comm=comm)
-                AHA = A.H
-                max_eig = sp.app.MaxEig(AHA, dtype=y[0].dtype, device=self.op_device,
-                                 max_iter=self.max_power_iter,
-                                 show_pbar=self.show_pbar).run()
+        #     for e in range(self.num_images):
+        #         A = sp.mri.linop.Sense(mps, coord[e], weights[e], ishape=None,
+        #                                          coil_batch_size=None, comm=comm)
+        #         AHA = A.H
+        #         max_eig = sp.app.MaxEig(AHA, dtype=y[0].dtype, device=self.op_device,
+        #                          max_iter=self.max_power_iter,
+        #                          show_pbar=self.show_pbar).run()
 
         else:
             #global max eigen
             ops_list = [sp.mri.linop.Sense(mps, coord[e], weights[e], ishape=None,
                         coil_batch_size=coil_batch_size, comm=comm) for e in range(self.num_images)]
-
+            print(len(ops_list))
+            print(np.shape(ops_list[0]))
             grad_ops_nodev = [ops_list[e].N for e in range(len(ops_list))]
             # A.h*A
             # wrap to run GPU
