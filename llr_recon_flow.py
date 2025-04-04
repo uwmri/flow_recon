@@ -17,6 +17,7 @@ import numba as nb
 import os
 import scipy.ndimage as ndimage
 from registration_tools import *
+from read_scan_archive import *
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
@@ -74,12 +75,16 @@ if __name__ == "__main__":
     parser.add_argument('--strided_gate', dest='strided_gate', action='store_true')
     parser.add_argument('--shots_per_frame', type=int, default=2)
 
+    parser.add_argument('--demod', type=float, default=0.0)
+    parser.add_argument('--gate_delay', type=float, default=0.0)
 
     # Input Output
-    parser.add_argument('--filename', type=str, help='filename for data (e.g. MRI_Raw.h5)')
+    parser.add_argument('--filename', type=str, help='filename for data (e.g. MRI_Raw.h5, ScanArch* (only for 2D PC spiral))')
     parser.add_argument('--logdir', type=str, help='folder to log files to, default is current directory')
     parser.add_argument('--out_folder', type=str, default=None)
     parser.add_argument('--out_filename', type=str, default='FullRecon.h5')
+
+    parser.add_argument('--skope_path', type=str, help='path/filename to SKOPE data')
 
     # Debugging / mslr mag and example images
     parser.add_argument('--example_images', dest='example_images', action='store_true')
@@ -109,7 +114,11 @@ if __name__ == "__main__":
     if args.test_run:
         mri_raw = load_MRI_raw(h5_filename=args.filename, max_coils=2, max_encodes=args.max_encodes)
     else:
-        mri_raw = load_MRI_raw(h5_filename=args.filename, compress_coils=args.compress_coils, max_encodes=args.max_encodes)
+        if "ScanArchive" in args.filename:
+            print(f'loading {args.filename} with demod = {args.demod} and gate delay = {args.gate_delay}')
+            mri_raw = load_ScanArchive(os.path.abspath(args.filename), args.gate_delay, args.demod, args.skope_path) 
+        else:
+            mri_raw = load_MRI_raw(h5_filename=args.filename, compress_coils=args.compress_coils, max_encodes=args.max_encodes)
 
     # Resample
     # radial3d_regrid(mri_raw)
