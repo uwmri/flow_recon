@@ -4,7 +4,7 @@ import h5py
 import sigpy.mri as mr
 import logging
 import sigpy as sp
-import cupy
+import cupy as cp
 import time
 import math
 
@@ -178,7 +178,7 @@ def pca_coil_compression(kdata=None, axis=0, target_channels=None):
     return kdata
 
 
-def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thresh_maps=True, log_dir=''):
+def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thresh_maps=True, thresh_maps_val=0.08, log_dir=''):
     logger = logging.getLogger('Get sensitivity maps')
 
     # Set to GPU
@@ -340,6 +340,23 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
         # Get a composite image
         img_shape = sp.estimate_shape(coord)
         image = 0
+        # check if dcf are just ones, which leads to terrible smap masks
+        if np.all(mri_rawdata.dcf[0] == 1):
+            logger.info("mri_rawdata.dcf[e=0] contains only ones. Doing pipe-menon dcf for better smap mask")
+            new_coord = np.stack(mri_rawdata.coords, axis=0)
+            new_coord = sp.to_device(new_coord, device)
+            logger.info(f'new_coords shape = {new_coord.shape}')
+            kw = []
+            for e in range(mri_rawdata.Num_Encodings):
+                kw_enc = sp.mri.pipe_menon_dcf(new_coord[e],img_shape=img_shape,device=device,max_iter=30,
+                                            n=320,
+                                            beta=8,
+                                            width=4,
+                                            show_pbar=True,)
+                kw.append(kw_enc)
+            kw = np.stack(kw)
+            logger.info(f'pipe menon kw shape = {kw.shape}')
+        
         for e in range(mri_rawdata.Num_Encodings):
             kr = sp.get_device(mri_rawdata.coords[e]).xp.sum(mri_rawdata.coords[e] ** 2, axis=-1)
             kr = sp.to_device(kr, device)
@@ -348,7 +365,10 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
             for c in range(mri_rawdata.Num_Coils):
                 logger.info(f'Reconstructing encode, coil {e} , {c} ')
                 ksp = sp.to_device(mri_rawdata.kdata[e][c, ...], device)
-                ksp *= sp.to_device(mri_rawdata.dcf[e], device)
+                if np.all(mri_rawdata.dcf[0] == 1):
+                    ksp *= sp.to_device(kw[e], device)
+                else:
+                    ksp *= sp.to_device(mri_rawdata.dcf[e], device)
                 ksp *= lpf
                 coords_temp = sp.to_device(mri_rawdata.coords[e], device)
                 image += xp.abs(sp.nufft_adjoint(ksp, coords_temp, img_shape)) ** 2
@@ -362,9 +382,9 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
             # Threshold
             image = xp.abs(image)
             image /= xp.max(image)
-            thresh = 0.08
+            #thresh = 0.08
             # print(thresh)
-            mask = image > thresh
+            mask = image > thresh_maps_val
 
             mask = sp.to_device(mask, sp.cpu_device)
             if len(mask.shape) == 3:
@@ -383,7 +403,7 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
             # print(image)
             # print(image.shape)
             # print(smaps.shape)
-            logger.info(f'Thresholding Sensitivity Maps by {thresh} ')
+            logger.info(f'Thresholding Sensitivity Maps by {thresh_maps_val} ')
             smaps = mask * smaps
 
     smaps_cpu = sp.to_device(smaps, sp.cpu_device)
@@ -451,7 +471,7 @@ def pils_recon(mri_rawdata=None, smaps=None, device=None):
     return (img)
 
 
-def crop_kspace(mri_rawdata=None, crop_factor=2, crop_type='radius'):
+def crop_kspace(mri_rawdata=None, crop_factor=2, crop_type='radius'): # there is probably a bug in this fucntion (the way data is been cropped)
     logger = logging.getLogger('Recon images')
 
     # Get initial shape
@@ -663,7 +683,7 @@ def gate_kspace2d(mri_raw=None, num_frames=[10, 10], gate_type=['time', 'prep'],
 
     return (mri_rawG)
 
-def gate_kspace(mri_raw=None, num_frames=10, gate_type='time', discrete_gates=False, ecg_delay=300e-3):
+def gate_kspace(mri_raw=None, num_frames=10, gate_type='time', discrete_gates=False, ecg_delay=300e-3, single_encode_gate=False):
     logger = logging.getLogger('Gate k-space')
 
     # Assume the input is a list
@@ -691,6 +711,11 @@ def gate_kspace(mri_raw=None, num_frames=10, gate_type='time', discrete_gates=Fa
         'resp': mri_raw.resp
     }
     gate_signal = gate_signals.get(gate_type, f'Cannot interpret gate signal {gate_type}')
+
+    if single_encode_gate:
+        gate_signal_encode0 = gate_signal[0].copy()  
+        gate_signal = [gate_signal_encode0.copy() for _ in gate_signal]
+        logger.info(f'Gating values copied from Encode 0')
 
     print(f'Gating off of {gate_type}')
 

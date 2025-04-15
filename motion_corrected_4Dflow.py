@@ -31,10 +31,13 @@ if __name__ == '__main__':
 
     # y = os.getcwd()  # get current path
     y = 'D:\\mc_flow\\DATA\\mc_adrc00574' # get data path
-    #y = '/home/kmjohnso/Data/Flow5'
+    y= '/mounts/data/analyses/larivera/projects/multivenc/test4dflow/radial_scan'
+    y = '/mounts/data/analyses/larivera/projects/multivenc/VOLDATA/SCAN_ARCH/VOL01_DV/01711_00006_Spiral_Dual_Venc_8-75/raw_data'
+    y = '/mounts/data/analyses/larivera/projects/multivenc/VOLDATA/SCAN_ARCH/VOL01_DV/01711_00006_Spiral_Dual_Venc_8-75/raw_data_TEST'
     print(y)
     # scan_data = ['P*.7', 'P*.7.bz2', 'ScanArchive*.h5','MRI_Raw.h5']  # files to get paths to
-    scan_data = 'MRI_Raw.h5'  # files to get paths to
+    #scan_data = 'MRI_Raw.h5'  # files to get paths to
+    scan_data = 'ScanArchive_608WIMRMR2_20240403_152702561.h5'
     scan_paths = find_file(scan_data, y)
     print(scan_paths)
     scan_filename = scan_paths[0]
@@ -67,14 +70,27 @@ if __name__ == '__main__':
     if args.motion_correction:
         if args.get_navigators:
             # Run the recon to get navigators
-            os.system(f'python {recon_script} --gate_type time --frames 256 --filename {filename} '
-                      f'--out_filename {file_nav} --out_folder {base_folder} --max_encodes 1 '
-                      f'--recon_type mslr --lamda 1e-8 --crop_factor 2 --krad_cutoff 32 --compress_coils --epochs 200')
-
+            #os.system(f'python {recon_script} --gate_type time --frames 256 --filename {filename} '
+            #          f'--out_filename {file_nav} --out_folder {base_folder} --max_encodes 1 '
+            #          f'--recon_type mslr --lamda 1e-8 --crop_factor 2--krad_cutoff 32 --compress_coils 20 --epochs 200')
+            
+            # Run the recon to get realtime spiral
+            os.system(f'python {recon_script} --gate_type ecg --frames 30 --filename {filename} '
+                      f'--out_filename {file_nav} --out_folder {base_folder} '
+                      f'--recon_type mslr --lamda 1e-15 --epochs 100 --single_encode_gate '
+                      f'--demod -250 --gate_delay 200 --skope_path /mounts/data/analyses/larivera/projects/multivenc/VOLDATA/SCAN_ARCH/skope_data '
+                      f'--thresh_maps --thresh_maps_val 0')
+            
+            #os.system(f'python {recon_script} --gate_type time --frames 500 --filename {filename} '
+            #          f'--out_filename {file_nav} --out_folder {base_folder} '
+            #          f'--recon_type mslr --lamda 1e-8 --epochs 200 '
+            #          f'--demod -250 --gate_delay 200 --skope_path /mounts/data/analyses/larivera/projects/multivenc/VOLDATA/SCAN_ARCH/skope_data '
+            #          f'--strided_gate --shots_per_frame 4 --thresh_maps --thresh_maps_val 0')
+                    
         # Run the motion corrected
-        print('Motion Correcting Data')
-        os.system(f'python {motion_script} --file_nav {file_nav} --file_data {filename} --out_folder {base_folder} --out_filename MRI_Raw_Corrected.h5')
-        exit()
+        #print('Motion Correcting Data')
+        #os.system(f'python {motion_script} --file_nav {file_nav} --file_data {filename} --out_folder {base_folder} --out_filename MRI_Raw_Corrected.h5')
+        #exit()
 
         # Now run a simple recon to verify the correction
         #os.system(f'python {recon_script} --filename {os.path.join(base_folder, "MRI_Raw_Corrected.h5")}'

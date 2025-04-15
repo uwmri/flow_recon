@@ -11,6 +11,7 @@ The goal of this code is to load Scan Archive data for 2D PC MRI using spiral re
     will create an MRI_Raw.h5 like structure to use by the flow recon code
 
     It will not perform gradient calibration
+    (consider pip install pyvoro)
 
 '''
 
@@ -152,7 +153,7 @@ def apply_offisocenter_data_demod(kx, ky, kdata, oc_xshift, oc_yshift, demod_fre
         for shot in range(kx.shape[0]):
             for i in range(kx.shape[2]):
 
-                # Shift due to off iso-center
+                # Shift due to off iso-center ( in the Cpp code the oc_yshift is negative)
                 #freq_shift = 2.0 * PI * (-oc_xshift * kx[ shot, enc, i] - oc_yshift * ky[shot, enc, i])
                 freq_shift = 2.0 * PI * (-oc_xshift * kx[ shot, enc, i] + oc_yshift * ky[shot, enc, i])
 
@@ -339,6 +340,7 @@ def gating_processing(gating_file,gate_delay):
 
     # Scale ECG vals to seconds
     data['ecg'] = data['ecg'] * 1e-3
+    print('ecgvals scaled to units of s')
 
     return data, encode_number
 
@@ -503,7 +505,10 @@ def define_MRI_Raw_dictionary(ksp, coord, kw, ktime, gating_data, arms, Num_Enco
     return MRI_Raw
 
 
-def define_MRI_Raw_structure(ksp, coord, kw, ktime, gating_data, arms, Num_Encodings, Num_Coils, Num_Frames, trajectory, spiral_z_encoding ):
+def define_MRI_Raw_structure(kdata, coord, kw, ktime, gating_data, arms, Num_Encodings,
+                            Num_Coils, Num_Frames, trajectory, spiral_z_encoding,
+                            max_coils=None, max_encodes=None, 
+                            compress_coils=-1, scale_kdata=True ):
 
     trajectory_type = np.zeros(3)
     dft_needed = np.zeros(3)
@@ -525,48 +530,68 @@ def define_MRI_Raw_structure(ksp, coord, kw, ktime, gating_data, arms, Num_Encod
         dft_needed[2] = 0
         trajectory_type[2] = 0
 
-    # Create data structure with groups 
-    MRI_Raw = {
-        'Kdata': {
-            'Num_Encodings': Num_Encodings,
-            'Num_Coils': Num_Coils,
-            'Num_Frames': Num_Frames,
-            'trajectory_typeX': int(trajectory_type[0]),
-            'trajectory_typeY': int(trajectory_type[1]),
-            'trajectory_typeZ': int(trajectory_type[2]),
-            'dft_neededX': int(dft_needed[0]),
-            'dft_neededY': int(dft_needed[1]),
-            'dft_neededZ': int(dft_needed[2])
-        },
+    try:
+        logging.info(f'Frames {Num_Frames}')
+        logging.info(f'Coils {Num_Coils}')
+        logging.info(f'Encodings {Num_Encodings}')
+        logging.info(f'Trajectory Type {trajectory_type}')
+        logging.info(f'DFT Needed {dft_needed}')
 
-        'Gating': {
+    except Exception:
+        logging.info('Missing header data')
+        pass
 
-        }
-        
-    }
+    if max_coils is not None:
+            Num_Coils = min(max_coils, Num_Coils)
 
-    # desire convention shape for export is (1868, 2000) (pts,arms) 
+    if max_encodes is not None:
+        Num_Encodings = min(max_encodes, Num_Encodings)
+
+    # Get the MRI Raw structure setup
+    mri_raw = MRI_Raw()
+    mri_raw.Num_Coils = int(Num_Coils)
+    mri_raw.Num_Encodings = int(Num_Encodings)
+    mri_raw.Num_Frames = int(Num_Frames)
+    mri_raw.dft_needed = tuple(dft_needed)
+    mri_raw.trajectory_type = tuple(trajectory_type)
+
+    # List array
+    mri_raw.coords = []
+    mri_raw.dcf = []
+    mri_raw.kdata = []
+    mri_raw.time = []
+    mri_raw.prep = []
+    mri_raw.ecg = []
+    mri_raw.resp = []
+
+    # desire convention shape for export is (1,2000, 1864) (arms, points) 
     # time_mri are derived from the data using the TE, BW and num points, is the same across encodes
     # print(time_mri.shape)
     # Reshape the array to have repeats for spiral arms, 
     KTime = np.tile(ktime[:, np.newaxis], (1, arms))
-    print(KTime.shape)
+    KTime = np.moveaxis(KTime, -1, 0)
+    KTime = KTime[np.newaxis,...]
+
+    print(f'ktime shape {KTime.shape}')
 
     #trajectories will be imported from SKOPE measures
     #print(coord.shape)
     #print(ksp.shape)
     #print(kw.shape)
 
-    export_coord = np.moveaxis(coord, 0, -2)
-    print(export_coord.shape) #(3, 1868, 2000, 2)
+    export_coord = np.moveaxis(coord, 0, -3)
+    export_coord = export_coord[np.newaxis,...]
+    print(export_coord.shape) #(1, 3, 2000, 1868, 2)
 
-    export_kw = np.moveaxis(kw, 1, -1)
-    print(export_kw.shape) #(3, 1868, 2000)
+    export_kw = np.copy(kw)
+    export_kw = export_kw[np.newaxis,...]
+    print(export_kw.shape) #(1, 3, 2000, 1868)
 
-    export_ksp = np.moveaxis(ksp, 1, -1)
-    print(export_ksp.shape) # (48, 3, 1868, 2000)
+    export_ksp = np.moveaxis(kdata, 1, -2)
+    export_ksp = export_ksp[:,np.newaxis,...]
+    print(export_ksp.shape) # (48, 1, 3, 2000, 1868)
 
-    # # desire convention shape for gating export is (arms, encodes) 
+    # # desire convention shape for gating export is (1, arms, encodes) 
 
     #print(gating_data['ecg'].shape)
     #print(gating_data['resp'].shape)
@@ -575,100 +600,104 @@ def define_MRI_Raw_structure(ksp, coord, kw, ktime, gating_data, arms, Num_Encod
     #print(gating_data['acq'].shape)
 
     # raw kspace (6000, 1868, 48), ecg data (6000,)
-    ecg = np.copy(gating_data['ecg'])
-    ecg = ecg.reshape(arms,Num_Encodings)
+    gecg = np.copy(gating_data['ecg'])
+    gecg = gecg.reshape(arms,Num_Encodings)
+    gecg = gecg[np.newaxis,...]
 
-    resp = np.copy(gating_data['resp'])
-    resp = resp.reshape(arms,Num_Encodings)
+    gresp = np.copy(gating_data['resp'])
+    gresp = gresp.reshape(arms,Num_Encodings)
+    gresp = gresp[np.newaxis,...]
 
-    time = np.copy(gating_data['time'])
-    time = time.reshape(arms,Num_Encodings)
+    gtime = np.copy(gating_data['time'])
+    gtime = gtime.reshape(arms,Num_Encodings)
+    gtime = gtime[np.newaxis,...]
 
-    prep = np.copy(gating_data['prep'])
-    prep = prep.reshape(arms,Num_Encodings)
+    gprep = np.copy(gating_data['prep'])
+    gprep = gprep.reshape(arms,Num_Encodings)
+    gprep = gprep[np.newaxis,...]
 
-    #print(ecg.shape)
+    print(gecg.shape) # (1,2000,3)
     #print(resp.shape)
     #print(time.shape)
     #print(prep.shape)
 
-    for encode in range(Num_Encodings):
-        print(f"Exporting {encode}")
-        
-        try:
-            s = f"KT_E{encode}"
-            MRI_Raw['Kdata'][s] = KTime
-        except Exception as e:
-            print(f"Can't export KT for encode {encode}: {e}")
-        
-        try:
-            s = f"KX_E{encode}"
-            MRI_Raw['Kdata'][s] = export_coord[encode,:,:,0]
-        except Exception as e:
-            print(f"Can't export KX for encode {encode}: {e}")
+    for encode in range(Num_Encodings*Num_Frames):
 
-        try:
-            s = f"KY_E{encode}"
-            MRI_Raw['Kdata'][s] = export_coord[encode,:,:,1]
-        except Exception as e:
-            print(f"Can't export KY for encode {encode}: {e}")
-        
-        try:
-            s = f"KZ_E{encode}"
-            MRI_Raw['Kdata'][s] = export_coord[encode,:,:,2]
-        except Exception as e:
-            print(f"Can't export KZ for encode {encode}: {e}, filling KZ with 0s (KX shape)")
-            MRI_Raw['Kdata'][s] = np.zeros_like(export_coord[encode, :, :, 0])
-        
-        try:
-            s = f"KW_E{encode}"
-            MRI_Raw['Kdata'][s] = export_kw[encode,:,:]
-        except Exception as e:
-            print(f"Can't export KW for encode {encode}: {e}")
-        
-        print("Exporting data")
-        for coil in range(Num_Coils):
-            try:
-                s = f"KData_E{encode}_C{coil}"
-                MRI_Raw['Kdata'][s] = export_ksp[coil, encode,:,:]
-            except Exception as e:
-                print(f"Can't export Kdata for encode {encode}, coil {coil}: {e}")
+        logging.info(f'Loading encode {encode}')
+        # expecting coords in z,y,x ordering
+        #coord = np.stack([ky,kx], axis=-1).astype(np.float32)
+        #coord = np.stack([export_coord[encode, :, :, 1], export_coord[encode, :, :, 0]], axis=-1)
+        coord = export_coord[:, encode, ...]
 
-        if ecg.size != 0:
-            print("Exporting Gating")
+        dcf = export_kw[:, encode,...]
 
-            try:
-                s = f"ECG_E{encode}"
-                MRI_Raw['Gating'][s] = ecg[:,encode]
-            except Exception as e:
-                print(f"Can't export ECG data: {e}")
+        #instead of skope pipe menon lets just use weights of ones
+        dcf = np.ones_like(dcf)
 
-            try:
-                s = f"RESP_E{encode}"
-                MRI_Raw['Gating'][s] = resp[:,encode]
-            except Exception as e:
-                print(f"Can't export Resp data: {e}")
+        time_readout = gtime[..., encode]
+        ecg_readout = gecg[..., encode]
+        prep_readout = gprep[..., encode]
+        resp_readout = gresp[..., encode]
 
-            try:
-                s = f"PREP_E{encode}"
-                MRI_Raw['Gating'][s] = prep[:,encode]
-            except Exception as e:
-                print(f"Can't export PREP data: {e}")
+        if resp_readout.size != dcf.size:
 
-            try:
-                s = f"TIME_E{encode}"
-                MRI_Raw['Gating'][s] = time[:,encode]
-            except Exception as e:
-                print(f"Can't export TIME data: {e}")
+            # This assigns the same time to each point in the readout
+            time_readout = np.expand_dims(time_readout, -1)
+            ecg_readout = np.expand_dims(ecg_readout, -1)
+            resp_readout = np.expand_dims(resp_readout, -1)
+            prep_readout = np.expand_dims(prep_readout, -1)
 
-    return MRI_Raw
+            time = np.tile(time_readout, (1, 1, dcf.shape[2]))
+            resp = np.tile(resp_readout, (1, 1, dcf.shape[2]))
+            ecg = np.tile(ecg_readout, (1, 1, dcf.shape[2]))
+            prep = np.tile(prep_readout, (1, 1, dcf.shape[2]))
+
+            print(f'Min/max = {np.min(time)} {np.max(time)}')
+
+        ksp = export_ksp[:,:,encode,:,:]
+
+        # Append to list
+        mri_raw.coords.append(coord)
+        mri_raw.dcf.append(dcf)
+        mri_raw.kdata.append(ksp)
+        mri_raw.time.append(time)
+        mri_raw.prep.append(prep)
+        mri_raw.ecg.append(ecg)
+        mri_raw.resp.append(resp)
+
+        # Log the data
+        logging.info(f'MRI coords {mri_raw.coords[encode].shape}')
+        logging.info(f'MRI dcf {mri_raw.dcf[encode].shape}')
+        logging.info(f'MRI kdata {mri_raw.kdata[encode].shape}')
+        logging.info(f'MRI time {mri_raw.time[encode].shape}')
+        logging.info(f'MRI ecg {mri_raw.ecg[encode].shape}')
+        logging.info(f'MRI resp {mri_raw.resp[encode].shape}')
+        logging.info(f'MRI prep {mri_raw.prep[encode].shape}')
+
+    if scale_kdata:
+        # Scale k-space to max 1
+        logging.info('Scaling k-space to max 1')
+        kdata_max = [np.abs(ksp).max() for ksp in mri_raw.kdata]
+        kdata_max = np.max(np.array(kdata_max))
+        for ksp in mri_raw.kdata:
+            ksp /= kdata_max
+
+    if compress_coils > 0:
+        # Compress Coils
+        logging.info('Doing PCA coil compression')
+        mri_raw.kdata = pca_coil_compression(kdata=mri_raw.kdata, axis=0, target_channels=compress_coils)
+        mri_raw.Num_Coils = compress_coils
+
+    return mri_raw
 
 
 # %% 
-def load_ScanArchive(archive_filename_scan, gate_delay, demod, skope_path):
+def load_ScanArchive(archive_filename_scan, gate_delay, demod, skope_path, max_coils=None, compress_coils=-1, max_encodes=None):
     '''
         Data loaded from ScanArchive 
     '''
+    logger = logging.getLogger('Loading Scan Archive')
+
     #archive_filename_scan = '/mounts/data/analyses/larivera/projects/multivenc/VOLDATA/SCAN_ARCH/VOL01_DV/01711_00006_Spiral_Dual_Venc_8-75/raw_data/ScanArchive_608WIMRMR2_20240403_152702561.h5'
     archive = GERecon.Archive(archive_filename_scan)
     archive_data_all_scan = read_scan_achive_data(archive) #(6000,1868,44)
@@ -750,12 +779,13 @@ def load_ScanArchive(archive_filename_scan, gate_delay, demod, skope_path):
     print(f' skope weights (pipe) shape = {kw.shape}') 
     print(f' skope B0 shape = {b0.shape}') 
     
-    try:
-        kdata= apply_b0correction(kdata, b0)
-        print("B0 data found: correction performed")
+    #turning off for testing
+    #try:
+    #    kdata= apply_b0correction(kdata, b0)
+    #    print("B0 data found: correction performed")
 
-    except NameError:
-        print("No B0 correction")
+    #except NameError:
+    #    print("No B0 correction")
 
     #read demod factor
     #demod = -250
@@ -775,6 +805,7 @@ def load_ScanArchive(archive_filename_scan, gate_delay, demod, skope_path):
     #kspace shape for recon (2000, 3, 1868, 48)
 
     # Do we really need to do it on a coil-by-coil basis ?
+    logger.info(f'Off-center correction off-center shift in x = {oc_xshift*fov} mm and y = {oc_yshift*fov} mm and global demodulation {demod} Hz')
     kdata_off_corrected = np.zeros_like(kdata, dtype=kdata.dtype)
     for coil in range(kdata.shape[-1]):
         kdata_off_corrected[:,:,:,coil] = apply_offisocenter_data_demod( coord[:,:,:,0], coord[:,:,:,1], kdata[:,:,:,coil], oc_xshift, oc_yshift, demod, time_mri)
@@ -785,13 +816,13 @@ def load_ScanArchive(archive_filename_scan, gate_delay, demod, skope_path):
         Current limitation:Orchestra Python SDK seems to be read int header values as float, 
         leading to a precision of 7, which is not enough to represent the header value. 
         GE might need to fix this. 
-        In the meantime read files using precision of 7 until a fix is available. 
+        In the meantime read files using precision of 6-7 until a fix is available. 
     '''
 
     # keep the first 7 digits only because of GE error
     Coil_UID = header['rdb_hdr_rec']['rdb_hdr_coilConfigUID']
     strCoil_UID = str(Coil_UID)
-    Coil_UID7   = strCoil_UID[:7]
+    Coil_UID7   = strCoil_UID[:6]
     print(Coil_UID)
     print(Coil_UID7)
 
@@ -808,7 +839,7 @@ def load_ScanArchive(archive_filename_scan, gate_delay, demod, skope_path):
     # Move coils to first dim for noise whitenning 
     ksp = np.moveaxis(kdata_off_corrected, -1, 0)
     print(ksp.shape)
-
+    logger.info(f'Noise whitening with:{noise_file}')
     with h5py.File(noise_file, 'r') as hf:
         noise = hf['Data']['NoiseData']['real'] + 1j * hf['Data']['NoiseData']['imag']
         print(noise.shape)
@@ -841,9 +872,11 @@ def load_ScanArchive(archive_filename_scan, gate_delay, demod, skope_path):
     # keep the first 7 digits only because of GE error
     kacq_uid = header['rdb_hdr_rec']['rdb_hdr_kacq_uid']
     str_kacq_uid = str(kacq_uid)
-    kacq_uid7   = str_kacq_uid[:7]
+    kacq_uid7   = str_kacq_uid[:6]
     print(kacq_uid)
     print(kacq_uid7)
+
+    logger.info(f'kacq_uid :{kacq_uid} str_kacq_uid {str_kacq_uid} and kacq_uid7 {kacq_uid7}')
 
     # Define the path to the directory containing the files
     gating_directory = os.path.dirname(archive_filename_scan)
@@ -856,12 +889,11 @@ def load_ScanArchive(archive_filename_scan, gate_delay, demod, skope_path):
     print(f'Using {gating_file}')
 
     #gate_delay = 200
+    logger.info(f'Processing gating file:{gating_file} and applying delay {gate_delay}')
 
     gating_data, gating_num_enc = gating_processing(gating_file,gate_delay)
 
-    # Scale ecg vals to seconds
-    gating_data['ecg'] = gating_data['ecg'] * 1e-3
-    print(gating_data['ecg'])
+    #print(gating_data['ecg'])
 
     '''
         Arrange data into MRI_Raw structure
@@ -872,9 +904,13 @@ def load_ScanArchive(archive_filename_scan, gate_delay, demod, skope_path):
     trajectory = 'NONCARTESIAN'
     spiral_z_encoding = 'CARTESIAN_PHASE_ENCODED'
 
-    MRI_Raw = define_MRI_Raw(ksp, coord, kw, time_mri, gating_data, arms, total_num_encodes, Num_Coils, Num_Frames, trajectory, spiral_z_encoding )
+    #MRI_Raw = define_MRI_Raw(ksp, coord, kw, time_mri, gating_data, arms, total_num_encodes, Num_Coils, Num_Frames, trajectory, spiral_z_encoding )
 
-    return MRI_Raw
-
+    mri_raw = define_MRI_Raw_structure(ksp, coord, kw, time_mri, gating_data, arms, total_num_encodes,
+                            Num_Coils, Num_Frames, trajectory, spiral_z_encoding,
+                            max_coils=None, max_encodes=max_encodes, 
+                            compress_coils=compress_coils, scale_kdata=True )
+    
+    return mri_raw
 
 

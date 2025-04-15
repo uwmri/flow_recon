@@ -36,6 +36,7 @@ if __name__ == "__main__":
     
     parser.set_defaults(thresh_maps=False)
     parser.add_argument('--thresh_maps', dest='thresh_maps', action='store_true')
+    parser.add_argument('--thresh_maps_val', type=float, default=0.08)
 
 
     parser.add_argument('--reset_dens', dest='reset_dens', action='store_true')
@@ -77,6 +78,8 @@ if __name__ == "__main__":
 
     parser.add_argument('--demod', type=float, default=0.0)
     parser.add_argument('--gate_delay', type=float, default=0.0)
+    parser.add_argument('--single_encode_gate', dest='single_encode_gate', action='store_true')
+    parser.set_defaults(single_encode_gate=False)
 
     # Input Output
     parser.add_argument('--filename', type=str, help='filename for data (e.g. MRI_Raw.h5, ScanArch* (only for 2D PC spiral))')
@@ -115,8 +118,8 @@ if __name__ == "__main__":
         mri_raw = load_MRI_raw(h5_filename=args.filename, max_coils=2, max_encodes=args.max_encodes)
     else:
         if "ScanArchive" in args.filename:
-            print(f'loading {args.filename} with demod = {args.demod} and gate delay = {args.gate_delay}')
-            mri_raw = load_ScanArchive(os.path.abspath(args.filename), args.gate_delay, args.demod, args.skope_path) 
+            logger.info(f'loading {args.filename} with demod = {args.demod} and gate delay = {args.gate_delay}')
+            mri_raw = load_ScanArchive(os.path.abspath(args.filename), args.gate_delay, args.demod, args.skope_path, compress_coils=args.compress_coils, max_encodes=args.max_encodes) 
         else:
             mri_raw = load_MRI_raw(h5_filename=args.filename, compress_coils=args.compress_coils, max_encodes=args.max_encodes)
 
@@ -142,7 +145,7 @@ if __name__ == "__main__":
         xp = sp.Device(args.device).xp
         smaps = xp.ones([mri_raw.Num_Coils] + img_shape, dtype=xp.complex64)
     else:
-        smaps = get_smaps(mri_rawdata=mri_raw, args=args, thresh_maps=args.thresh_maps, smap_type='jsense', log_dir=args.out_folder)
+        smaps = get_smaps(mri_rawdata=mri_raw, args=args, thresh_maps=args.thresh_maps, thresh_maps_val=args.thresh_maps_val, smap_type='jsense', log_dir=args.out_folder)
 
 
     # Gate k-space
@@ -177,7 +180,8 @@ if __name__ == "__main__":
                 mri_raw = gate_kspace(mri_raw=mri_raw,
                                     num_frames=args.frames,
                                     gate_type=args.gate_type,
-                                    discrete_gates=args.discrete_gates)
+                                    discrete_gates=args.discrete_gates,
+                                    single_encode_gate=args.single_encode_gate)
 
 
     # Fake rotations
@@ -228,7 +232,11 @@ if __name__ == "__main__":
     if args.recon_type == 'mslr':
         comm = sp.Communicator()
         #blk_widths = (128, 64, 48, 32, 24, 16)
-        blk_widths = (128, 96, 64, 48)
+        #blk_widths = (128, 96, 64, 48)
+        #blk_widths=(128, 64, 32)
+        blk_widths=(128, 64, 32, 16, 8)
+        blk_widths=(128, 64, 32, 16, 8, 4)
+        blk_widths=[4, 8, 16, 24, 32, 48, 64, 96, 128]
 
         kdata = mri_raw.kdata
         coord = mri_raw.coords
