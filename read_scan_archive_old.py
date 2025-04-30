@@ -29,8 +29,6 @@ import sigpy as sp
 import sigpy.mri as mri
 import json
 import logging
-import struct
-from scipy.integrate import cumtrapz
 
 # Local libs
 from orc_support import * 
@@ -149,7 +147,7 @@ def load_skope_data(path):
     return coord, kw, b0 
 
 @njit(parallel=True)
-def apply_offisocenter_data_demod(kx, ky, kdata, oc_xshift, oc_yshift, time_mri, demod_freq=0):
+def apply_offisocenter_data_demod(kx, ky, kdata, oc_xshift, oc_yshift, demod_freq, time_mri):
     PI = np.pi
     for enc in prange(kx.shape[1]):
         for shot in range(kx.shape[0]):
@@ -346,6 +344,167 @@ def gating_processing(gating_file,gate_delay):
 
     return data, encode_number
 
+def define_MRI_Raw_dictionary(ksp, coord, kw, ktime, gating_data, arms, Num_Encodings, Num_Coils, Num_Frames, trajectory, spiral_z_encoding ):
+
+    trajectory_type = np.zeros(3)
+    dft_needed = np.zeros(3)
+
+    if trajectory == 'NONCARTESIAN':
+        for i in range(2):
+            trajectory_type[i] = 1
+            dft_needed[i] = 1
+
+    if spiral_z_encoding == "CARTESIAN_PHASE_ENCODED":
+        dft_needed[2] = 1
+        trajectory_type[2] = 0
+
+    elif spiral_z_encoding == "NONCARTESIAN_PHASE_ENCODED":
+        dft_needed[2] = 1
+        trajectory_type[2] = 1
+        
+    elif spiral_z_encoding == "SLICE_ENCODED":
+        dft_needed[2] = 0
+        trajectory_type[2] = 0
+
+    # Create data structure with groups 
+    MRI_Raw = {
+        'Kdata': {
+            'Num_Encodings': Num_Encodings,
+            'Num_Coils': Num_Coils,
+            'Num_Frames': Num_Frames,
+            'trajectory_typeX': int(trajectory_type[0]),
+            'trajectory_typeY': int(trajectory_type[1]),
+            'trajectory_typeZ': int(trajectory_type[2]),
+            'dft_neededX': int(dft_needed[0]),
+            'dft_neededY': int(dft_needed[1]),
+            'dft_neededZ': int(dft_needed[2])
+        },
+
+        'Gating': {
+
+        }
+        
+    }
+
+    # desire convention shape for export is (1868, 2000) (pts,arms) 
+    # time_mri are derived from the data using the TE, BW and num points, is the same across encodes
+    # print(time_mri.shape)
+    # Reshape the array to have repeats for spiral arms, 
+    KTime = np.tile(ktime[:, np.newaxis], (1, arms))
+    print(KTime.shape)
+
+    #trajectories will be imported from SKOPE measures
+    #print(coord.shape)
+    #print(ksp.shape)
+    #print(kw.shape)
+
+    export_coord = np.moveaxis(coord, 0, -2)
+    print(export_coord.shape) #(3, 1868, 2000, 2)
+
+    export_kw = np.moveaxis(kw, 1, -1)
+    print(export_kw.shape) #(3, 1868, 2000)
+
+    export_ksp = np.moveaxis(ksp, 1, -1)
+    print(export_ksp.shape) # (48, 3, 1868, 2000)
+
+    # # desire convention shape for gating export is (arms, encodes) 
+
+    #print(gating_data['ecg'].shape)
+    #print(gating_data['resp'].shape)
+    #print(gating_data['time'].shape)
+    #print(gating_data['prep'].shape)
+    #print(gating_data['acq'].shape)
+
+    # raw kspace (6000, 1868, 48), ecg data (6000,)
+    ecg = np.copy(gating_data['ecg'])
+    ecg = ecg.reshape(arms,Num_Encodings)
+
+    resp = np.copy(gating_data['resp'])
+    resp = resp.reshape(arms,Num_Encodings)
+
+    time = np.copy(gating_data['time'])
+    time = time.reshape(arms,Num_Encodings)
+
+    prep = np.copy(gating_data['prep'])
+    prep = prep.reshape(arms,Num_Encodings)
+
+    #print(ecg.shape)
+    #print(resp.shape)
+    #print(time.shape)
+    #print(prep.shape)
+
+    for encode in range(Num_Encodings):
+        print(f"Exporting {encode}")
+        
+        try:
+            s = f"KT_E{encode}"
+            MRI_Raw['Kdata'][s] = KTime
+        except Exception as e:
+            print(f"Can't export KT for encode {encode}: {e}")
+        
+        try:
+            s = f"KX_E{encode}"
+            MRI_Raw['Kdata'][s] = export_coord[encode,:,:,0]
+        except Exception as e:
+            print(f"Can't export KX for encode {encode}: {e}")
+
+        try:
+            s = f"KY_E{encode}"
+            MRI_Raw['Kdata'][s] = export_coord[encode,:,:,1]
+        except Exception as e:
+            print(f"Can't export KY for encode {encode}: {e}")
+        
+        try:
+            s = f"KZ_E{encode}"
+            MRI_Raw['Kdata'][s] = export_coord[encode,:,:,2]
+        except Exception as e:
+            print(f"Can't export KZ for encode {encode}: {e}, filling KZ with 0s (KX shape)")
+            MRI_Raw['Kdata'][s] = np.zeros_like(export_coord[encode, :, :, 0])
+        
+        try:
+            s = f"KW_E{encode}"
+            MRI_Raw['Kdata'][s] = export_kw[encode,:,:]
+        except Exception as e:
+            print(f"Can't export KW for encode {encode}: {e}")
+        
+        print("Exporting data")
+        for coil in range(Num_Coils):
+            try:
+                s = f"KData_E{encode}_C{coil}"
+                MRI_Raw['Kdata'][s] = export_ksp[coil, encode,:,:]
+            except Exception as e:
+                print(f"Can't export Kdata for encode {encode}, coil {coil}: {e}")
+
+        if ecg.size != 0:
+            print("Exporting Gating")
+
+            try:
+                s = f"ECG_E{encode}"
+                MRI_Raw['Gating'][s] = ecg[:,encode]
+            except Exception as e:
+                print(f"Can't export ECG data: {e}")
+
+            try:
+                s = f"RESP_E{encode}"
+                MRI_Raw['Gating'][s] = resp[:,encode]
+            except Exception as e:
+                print(f"Can't export Resp data: {e}")
+
+            try:
+                s = f"PREP_E{encode}"
+                MRI_Raw['Gating'][s] = prep[:,encode]
+            except Exception as e:
+                print(f"Can't export PREP data: {e}")
+
+            try:
+                s = f"TIME_E{encode}"
+                MRI_Raw['Gating'][s] = time[:,encode]
+            except Exception as e:
+                print(f"Can't export TIME data: {e}")
+
+    return MRI_Raw
+
+
 def define_MRI_Raw_structure(kdata, coord, kw, ktime, gating_data, arms, Num_Encodings,
                             Num_Coils, Num_Frames, trajectory, spiral_z_encoding,
                             max_coils=None, max_encodes=None, 
@@ -533,7 +692,7 @@ def define_MRI_Raw_structure(kdata, coord, kw, ktime, gating_data, arms, Num_Enc
 
 
 # %% 
-def load_ScanArchive(archive_filename_scan, gate_delay, demod=0, skope_path=None, max_coils=None, compress_coils=-1, max_encodes=None, cal_offset=8.5e-6):
+def load_ScanArchive(archive_filename_scan, gate_delay, demod, skope_path, max_coils=None, compress_coils=-1, max_encodes=None):
     '''
         Data loaded from ScanArchive 
     '''
@@ -541,13 +700,10 @@ def load_ScanArchive(archive_filename_scan, gate_delay, demod=0, skope_path=None
 
     #archive_filename_scan = '/mounts/data/analyses/larivera/projects/multivenc/VOLDATA/SCAN_ARCH/VOL01_DV/01711_00006_Spiral_Dual_Venc_8-75/raw_data/ScanArchive_608WIMRMR2_20240403_152702561.h5'
     archive = GERecon.Archive(archive_filename_scan)
-    archive_data_all_scan, slice_order, view_order = read_scan_achive_data(archive) #(6000,1868,44)
+    archive_data_all_scan = read_scan_achive_data(archive) #(6000,1868,44)
 
     rawdata = np.stack(archive_data_all_scan, axis=0)
     print(f'rawdata shape = {rawdata.shape} type = {rawdata.dtype}')
-
-    slice_index = np.stack(slice_order, axis=0)
-    view_index = np.stack(view_order, axis=0)
     
     '''
         Load Some Header information 
@@ -567,7 +723,7 @@ def load_ScanArchive(archive_filename_scan, gate_delay, demod=0, skope_path=None
     # xres = int(header['rdb_hdr_rec']['rdb_hdr_da_xres']) - rba_extra_data
     bw = float(header['rdb_hdr_image']['vbw'])
     dt_mri = 1./(2*bw*1000)
-    #time_mri = np.arange(xres)*dt_mri
+    #time_mri = np.arange(xres)*dt_mri 
 
     Num_Coils = rawdata.shape[-1]
     mri_points = rawdata.shape[-2]
@@ -584,14 +740,6 @@ def load_ScanArchive(archive_filename_scan, gate_delay, demod=0, skope_path=None
     rhuser30 = convert_float_to_uint(header['rdb_hdr_rec']['rdb_hdr_user30'])
     total_num_encodes = int((float(rhuser30 % 100) / 1.0))
 
-    npe_z = int(header['rdb_hdr_rec']['rdb_hdr_user19'])
-    flag2d = int(float(int(header['rdb_hdr_rec']['rdb_hdr_user29']+ 11111100) % 100) / 10.0)
-    print(f'2D PC flag {flag2d}')
-    
-    flag2d = 1
-    if flag2d:  
-        npe_z = 1
-    
     print(mri_points)
     print(time_mri)
     print(total_num_encodes)
@@ -613,88 +761,35 @@ def load_ScanArchive(archive_filename_scan, gate_delay, demod=0, skope_path=None
     '''
         Prepare kspace for processing (NOT DOING CALIBRATION) 
     '''
-    # get acquisition ordering
-    sicnt = (slice_index * (header['rdb_hdr_rec']['rdb_hdr_da_yres'] - 1) + view_index)
-
-    # find spiral table order 
-    sort_act_order = np.argsort(sicnt)  
-
-    # sort kspace to match spiral table order 
-    kdata_sorted = rawdata[sort_act_order, ...]  
-
-    # remove calibration data which is stored at the end of the array
     total_samples = total_num_encodes*arms
-    kdata = kdata_sorted[:total_samples,...]
+    print(total_samples)
+    kdata = rawdata[:total_samples,...]
     print(f'raw kspace shape {kdata.shape}')
 
-    kdata_points = kdata.shape[-2]
-    # col ordering
-    kdata = kdata.reshape((arms,total_num_encodes,kdata_points,Num_Coils), order='F')
+    kdata = kdata.reshape(arms,total_num_encodes,xres,Num_Coils)
     print(f'kspace shape for recon {kdata.shape}')
     
     '''
-        If available Load SKOPE data else 
-
-        load Rspiral152656538.kacq file contains z and theta spiral table information and
-        estimate k-space trajectory
-
-        Current limitation:Orchestra Python SDK seems to be read int header values as float, 
-        leading to a precision of 7, which is not enough to represent the header value. 
-        GE might need to fix this. In the meantime read files using precision of 6-7 until a fix is available. 
-
+        Load SKOPE data 
     '''
-    if skope_path is not None:
-        coord, kw, b0 = load_skope_data(skope_path)
-        print('SKOPE data available to load') 
-        print(f' skope coord shape = {coord.shape}') 
-        print(f' skope weights (pipe) shape = {kw.shape}') 
-        print(f' skope B0 shape = {b0.shape}') 
-    else:
-        # keep the first 7 digits only because of GE error
-        kacq_uid = header['rdb_hdr_rec']['rdb_hdr_kacq_uid']
-        str_kacq_uid = str(kacq_uid)
-        kacq_uid7   = str_kacq_uid[:6]
-        #Rspiral152656538.kacq
+    #path = '/mounts/data/analyses/larivera/projects/multivenc/VOLDATA/SCAN_ARCH/skope_data'
 
-        # Define the path to the directory containing the files
-        rspiral_directory = os.path.dirname(archive_filename_scan)
-        rspiral_file_pattern = os.path.join(rspiral_directory, f'Rspiral{kacq_uid7}*.kacq')
+    coord, kw, b0 = load_skope_data(skope_path)
+    print(f' skope coord shape = {coord.shape}') 
+    print(f' skope weights (pipe) shape = {kw.shape}') 
+    print(f' skope B0 shape = {b0.shape}') 
+    
+    #turning off for testing
+    #try:
+    #    kdata= apply_b0correction(kdata, b0)
+    #    print("B0 data found: correction performed")
 
-        # Find all files that match the pattern
-        matching_files = glob.glob(rspiral_file_pattern)
-        rspiral_file = matching_files[0] if matching_files else None
+    #except NameError:
+    #    print("No B0 correction")
 
-        print(f'Loading {rspiral_file} to calculate kspace trajectory')
-
-        output = load_Rspiral(rspiral_file)
-
-        logger.info(f'Calc kspace trajectory with cal offset = {cal_offset*1e6} us')
-
-
-        Spiral_Kx, Spiral_Ky = calc_kspiral_trajectory(output,dt_mri,fov,cal_offset)
-        print(f'Spiral shape {Spiral_Kx.shape}')
-        
-        min_points = int(min(Spiral_Kx.shape[-1], kdata.shape[-2]))
-        print(min_points)
-
-        coord = np.stack([Spiral_Kx, Spiral_Ky],axis=-1)
-
-        print(f'coord shape {coord.shape}')
-
-        kdata = kdata[:,:,:min_points,:]
-        coord = coord[:,:min_points,:]
-        coord_dim = coord.shape[-1]
-        
-        #col ordering
-        coord = coord.reshape((arms,total_num_encodes,min_points,coord_dim), order='F')
-
-        #create DCF of ones for sense recon (will not work for pils). We can use pipe menon method too (e.g. for pils), but is not great for sense
-        # probably voronoi method is best compromise
-        kw = np.ones((total_num_encodes, arms, min_points))
-
-        print(f'kspace shape for recon {kdata.shape}')
-        print(f'coord shape for recon {coord.shape}')
-
+    #read demod factor
+    #demod = -250
+    
     '''
         Estimate and apply off-center correction and global demodulation
     '''
@@ -713,7 +808,7 @@ def load_ScanArchive(archive_filename_scan, gate_delay, demod=0, skope_path=None
     logger.info(f'Off-center correction off-center shift in x = {oc_xshift*fov} mm and y = {oc_yshift*fov} mm and global demodulation {demod} Hz')
     kdata_off_corrected = np.zeros_like(kdata, dtype=kdata.dtype)
     for coil in range(kdata.shape[-1]):
-        kdata_off_corrected[:,:,:,coil] = apply_offisocenter_data_demod( coord[:,:,:,0], coord[:,:,:,1], kdata[:,:,:,coil], oc_xshift, oc_yshift, time_mri, demod)
+        kdata_off_corrected[:,:,:,coil] = apply_offisocenter_data_demod( coord[:,:,:,0], coord[:,:,:,1], kdata[:,:,:,coil], oc_xshift, oc_yshift, demod, time_mri)
 
     '''
         Kspace whitening
@@ -745,18 +840,23 @@ def load_ScanArchive(archive_filename_scan, gate_delay, demod=0, skope_path=None
     ksp = np.moveaxis(kdata_off_corrected, -1, 0)
     print(ksp.shape)
     logger.info(f'Noise whitening with:{noise_file}')
+    with h5py.File(noise_file, 'r') as hf:
+        noise = hf['Data']['NoiseData']['real'] + 1j * hf['Data']['NoiseData']['imag']
+        print(noise.shape)
+        cov = sp.mri.get_cov(noise)
+        ksp = sp.mri.whiten(ksp, cov)
 
+    '''
     try:
-        with h5py.File(noise_file, 'r') as hf:
-            noise = hf['Data']['NoiseData']['real'] + 1j * hf['Data']['NoiseData']['imag']
-            print(noise.shape)
-            cov = sp.mri.get_cov(noise)
-            ksp = sp.mri.whiten(ksp, cov)
-
+        noise = hf['Kdata']['Noise']['real'] + 1j * hf['Kdata']['Noise']['imag']
+        logging.info('Whitening ksp.')
+        cov = mr.util.get_cov(noise)
+        ksp = mr.util.whiten(ksp, cov)
     except Exception:
         ksp /= np.abs(ksp).max()
         logging.info('No noise data.')
         pass
+    '''
     
     '''
         Load Gating Data
@@ -764,15 +864,19 @@ def load_ScanArchive(archive_filename_scan, gate_delay, demod=0, skope_path=None
         Assuming ScanArchive data was stored sequentially 
 
         Current limitation:Orchestra Python SDK seems to be read int header values as float, 
-        leading to a precision of 6-7, which is not enough to represent the header value. 
+        leading to a precision of 7, which is not enough to represent the header value. 
         GE might need to fix this. 
-        In the meantime read files using precision of 6-7 until a fix is available. 
+        In the meantime read files using precision of 7 until a fix is available. 
 
     '''
-    # keep the first 6 digits only because of GE error
+    # keep the first 7 digits only because of GE error
     kacq_uid = header['rdb_hdr_rec']['rdb_hdr_kacq_uid']
     str_kacq_uid = str(kacq_uid)
     kacq_uid7   = str_kacq_uid[:6]
+    print(kacq_uid)
+    print(kacq_uid7)
+
+    logger.info(f'kacq_uid :{kacq_uid} str_kacq_uid {str_kacq_uid} and kacq_uid7 {kacq_uid7}')
 
     # Define the path to the directory containing the files
     gating_directory = os.path.dirname(archive_filename_scan)
@@ -784,9 +888,12 @@ def load_ScanArchive(archive_filename_scan, gate_delay, demod=0, skope_path=None
 
     print(f'Using {gating_file}')
 
+    #gate_delay = 200
     logger.info(f'Processing gating file:{gating_file} and applying delay {gate_delay}')
 
     gating_data, gating_num_enc = gating_processing(gating_file,gate_delay)
+
+    #print(gating_data['ecg'])
 
     '''
         Arrange data into MRI_Raw structure
@@ -797,6 +904,8 @@ def load_ScanArchive(archive_filename_scan, gate_delay, demod=0, skope_path=None
     trajectory = 'NONCARTESIAN'
     spiral_z_encoding = 'CARTESIAN_PHASE_ENCODED'
 
+    #MRI_Raw = define_MRI_Raw(ksp, coord, kw, time_mri, gating_data, arms, total_num_encodes, Num_Coils, Num_Frames, trajectory, spiral_z_encoding )
+
     mri_raw = define_MRI_Raw_structure(ksp, coord, kw, time_mri, gating_data, arms, total_num_encodes,
                             Num_Coils, Num_Frames, trajectory, spiral_z_encoding,
                             max_coils=None, max_encodes=max_encodes, 
@@ -804,426 +913,4 @@ def load_ScanArchive(archive_filename_scan, gate_delay, demod=0, skope_path=None
     
     return mri_raw
 
-def load_Rspiral(fname):
-    out = {}
-
-    # Open file in binary read mode
-    with open(fname, 'rb') as fid:
-
-        # Read the first data fields using struct to unpack binary data
-        out['Rspiral_pts'] = struct.unpack('>i', fid.read(4))[0]  # int32 (big-endian)
-        out['a_gxSpiral'] = struct.unpack('>f', fid.read(4))[0]  # float32 (big-endian) # gradient amplitude scaling factors ?
-        out['a_gySpiral'] = struct.unpack('>f', fid.read(4))[0]  # float32 (big-endian)
-
-        # Read SpiralX and SpiralY
-        spiral_x_int = np.fromfile(fid, dtype='>i', count=out['Rspiral_pts'])
-        spiral_y_int = np.fromfile(fid, dtype='>i', count=out['Rspiral_pts'])
-        
-        out['SpiralX'] = out['a_gxSpiral'] * spiral_x_int.astype(np.float64) / 32768
-        out['SpiralY'] = out['a_gySpiral'] * spiral_y_int.astype(np.float64) / 32768
-
-        # Read Theta and Phase Encodes (in PSD these may be populated ~ shots first then encodes)
-        out['Rspiral_total_shots'] = struct.unpack('>i', fid.read(4))[0]  # int32 (big-endian)
-        out['SpiralTheta'] = np.fromfile(fid, dtype='>f4', count=out['Rspiral_total_shots'])
-        out['SpiralZpos'] = np.fromfile(fid, dtype='>f4', count=out['Rspiral_total_shots'])
-
-        # Read Timing Information
-        out['Rspiral_time'] = struct.unpack('>i', fid.read(4))[0]  # int (big-endian)
-        out['Rspiral_sampling_time'] = struct.unpack('>i', fid.read(4))[0]  # int (big-endian)
-        out['Rspiral_start'] = struct.unpack('>i', fid.read(4))[0]  # int (big-endian)
-        out['Rspiral_stop'] = struct.unpack('>i', fid.read(4))[0]  # int (big-endian)
-
-    return out
-
-def calc_kspiral_trajectory(gdata,DT,FOV, cal_offset=8.5e-6):
- 
-    # only supports 2d single echo center out spiral 
-
-    gamma = 4258
-    factor = 1000
-    dt = 4.0e-6 / factor
-    dt_grad = 4.0e-6
-    time_offset = 5e-3 # zero padding interpolation
-
-    # DT dwell time from bw (sampling rate)
-
-    samples_per_spiral = int(gdata['Rspiral_sampling_time'] / (1e6*DT))
-
-    total_time = 2 * time_offset + samples_per_spiral * DT
-    #print(total_time)
-
-    num_points = int(total_time / dt)
-    t_highres = np.linspace(0, total_time, num_points)
-
-    # gradient time vector (low-res)
-    grad_time = np.arange(gdata['Rspiral_pts']) * dt_grad + time_offset
-    print(grad_time)
-    print(t_highres)
-
-    # Interpolate gradients to high-res time vector
-    gx_highres = np.interp(t_highres, grad_time, gdata['SpiralX'],left=0, right=0)
-    gy_highres = np.interp(t_highres, grad_time, gdata['SpiralY'],left=0, right=0)
-
-    # Integrate gradients to get k-space trajectories (try other integrations)
-    #kx_highres = np.cumsum(gx_highres * dt )
-    #ky_highres = np.cumsum(gy_highres * dt )
-
-    kx_highres = cumtrapz(gx_highres, dx=dt, initial=0)
-    ky_highres = cumtrapz(gy_highres, dx=dt, initial=0)
-
-    # Subsample at readout times 
-    #scale_factor = DT / dt
-    #readout_indices = (time_offset / dt + np.arange(samples_per_spiral) * scale_factor).astype(int)
-    #kx = kx_highres[readout_indices]
-    #ky = ky_highres[readout_indices]
-
-    #delay=-2*dt_grad works ok, heuristically selected 8.5e-6
-    sampling_t = np.arange(samples_per_spiral) * DT + time_offset - cal_offset
-
-    #print(sampling_t)
-
-    kx = np.interp(sampling_t, t_highres, kx_highres, left=0, right=0)
-    ky = np.interp(sampling_t, t_highres, ky_highres, left=0, right=0)
-
-    kx *= gamma * (FOV/10)
-    ky *= gamma * (FOV/10)
-
-    # Rotate Kx and Ky using table
-    nShots = len(gdata['SpiralTheta'])
-    nPoints = len(kx)
-
-    Kx_rotated = np.zeros((nShots, nPoints))
-    Ky_rotated = np.zeros((nShots, nPoints))
-
-    for i in range(nShots):
-        theta = gdata['SpiralTheta'][i]  # angle in radians
-
-        cos_t = np.cos(theta)
-        sin_t = np.sin(theta)
-
-        Kx_rotated[i] = -kx*cos_t - ky*sin_t
-        Ky_rotated[i] = kx*sin_t - ky*cos_t
-
-    # not sure why we have to negate Ky, but then it matches the first shot  with SKOPE coordinates
-    Kx_rotated *= 1
-    Ky_rotated *= -1
-
-    return Kx_rotated, Ky_rotated
-
-# %%
-if __name__ == '__main__':
-
-    # %%
-    # Try to recon data with MRI structure data (pts, arms)
-
-    '''
-        Data loaded from ScanArchive 
-    '''
-    archive_filename_scan = '/mounts/data/analyses/larivera/projects/multivenc/VOLDATA/SCAN_ARCH/test_random_order/09656_00006_vol_sp_dv_5_75_2000arms_39os_tr14/raw_data/ScanArchive_608262WIMRMR1_20250415_173117629.h5'
-    archive = GERecon.Archive(archive_filename_scan)
-    archive_data_all_scan, slice_order, view_order = read_scan_achive_data(archive) #(6000,1868,44)
-
-    # %%
-    rawdata = np.stack(archive_data_all_scan, axis=0)
-    print(f'rawdata shape = {rawdata.shape} type = {rawdata.dtype}')
-
-    slice_index = np.stack(slice_order, axis=0)
-    print(f'rawdata shape = {slice_index.shape} type = {slice_index.dtype}')
-    print(slice_index)
-
-    view_index = np.stack(view_order, axis=0)
-    print(f'rawdata shape = {view_index.shape} type = {view_index.dtype}')
-    print(view_index)
-
-    np.savetxt("slice_index.csv", slice_index, delimiter=",", fmt='%d')
-    np.savetxt("view_index.csv", view_index, delimiter=",", fmt='%d')
-
-    # %%
-    '''
-        Load Some Header information 
-    '''
-    metadata = archive.Metadata()
-    x_res = metadata["acquiredXRes"]
-    y_res = metadata["acquiredYRes"]
-    num_control = metadata["controlCount"]
-    num_channels = metadata["numChannels"]
-    num_passes = metadata["passes"]
-    slices_per_pass = archive.SlicesPerPass()
-    header = archive.Header()    
-    bw = float(header['rdb_hdr_image']['vbw'])
-    dt_mri = 1./(2*bw*1000)
-
-    arms = int(header['rdb_hdr_rec']['rdb_hdr_user10']) # number of spiral arms 
-    #rhuser30 = convert_float_to_uint(header['rdb_hdr_rec']['rdb_hdr_user30'])
-    #total_num_encodes = int((float(rhuser30 % 100) / 1.0))
-    Num_Coils = rawdata.shape[-1]
-    print(Num_Coils)
-    rba_extra_data = int(header['rdb_hdr_rec']['rdb_hdr_user11'])
-    yres = int(header['rdb_hdr_rec']['rdb_hdr_da_yres'])
-    print(yres)
-
-    sicnt = (slice_index * (header['rdb_hdr_rec']['rdb_hdr_da_yres'] - 1) + view_index)
-    np.savetxt("new_view_index.csv", sicnt, delimiter=",", fmt='%d')
-
-
-    #%% Now sort kdata to match spiral table
-    '''
-        Prepare kspace for processing (NOT DOING CALIBRATION) 
-    '''
-    total_num_encodes = 3 
-    total_samples = total_num_encodes*arms
-    print(total_samples)
-
-    # find spiral table order 
-    sort_act_order = np.argsort(sicnt)
-    print(sort_act_order)
-
-    # Sort kspace to match spiral table order 
-    kdata_sorted = rawdata[sort_act_order, ...]
-
-    print(f'raw kspace shape {kdata_sorted.shape}')
-    #remove calibration data which is stored at the end of the array
-    kdata = kdata_sorted[:total_samples,...]
-    print(f'raw kspace shape {kdata.shape}')
-
-
-    # %%
-
-    '''
-        Load Rspiral152656538.kacq file contains z and theta spiral table information
-
-        Assuming ScanArchive data was stored sequentially 
-
-         Current limitation:Orchestra Python SDK seems to be read int header values as float, 
-        leading to a precision of 7, which is not enough to represent the header value. 
-        GE might need to fix this. 
-        In the meantime read files using precision of 6-7 until a fix is available. 
-
-    '''
-    # keep the first 7 digits only because of GE error
-    kacq_uid = header['rdb_hdr_rec']['rdb_hdr_kacq_uid']
-
-    str_kacq_uid = str(kacq_uid)
-    kacq_uid7   = str_kacq_uid[:6]
-    print(kacq_uid)
-    print(kacq_uid7)
-    #Rspiral152656538.kacq
-
-    print(f'kacq_uid :{kacq_uid} str_kacq_uid {str_kacq_uid} and kacq_uid7 {kacq_uid7}')
-
-    # Define the path to the directory containing the files
-    rspiral_directory = os.path.dirname(archive_filename_scan)
-    rspiral_file_pattern = os.path.join(rspiral_directory, f'Rspiral{kacq_uid7}*.kacq')
-
-    # Find all files that match the pattern
-    matching_files = glob.glob(rspiral_file_pattern)
-    rspiral_file = matching_files[0] if matching_files else None
-
-    print(f'Using {rspiral_file}')
-
-    #scaling factor for gradients (only needed when doing calibration)
-    #gamma = 4258
-    #area_to_kspace = gamma / cal_ampmod * (10*fov) #units of 1/cm
-
-    output = load_Rspiral(rspiral_file)
-
-    xres = int(header['rdb_hdr_rec']['rdb_hdr_da_xres'])
-    fov = float(header['rdb_hdr_image']['dfov']) # mm
-
-    bw = float(header['rdb_hdr_image']['vbw'])
-    dt_mri = 1./(2*bw*1000)
-    print(f'dt sampling = {dt_mri}')
-
-    delay = 8.5e-6
-    Spiral_Kx, Spiral_Ky = calc_kspiral_trajectory(output,dt_mri,fov,delay)
-
-    print(Spiral_Kx.shape)
-    print(output['Rspiral_sampling_time'])
-    print(Spiral_Kx[0,:])
-
-
-    # %%
-    # Number of shots and points per shot
-    nShots, nPoints = Spiral_Kx.shape
-
-    plt.figure(figsize=(6, 6))
-
-    nShots = 1
-    # Plot each shot
-    for i in range(nShots):
-        plt.plot(Spiral_Kx[i], Spiral_Ky[i], lw=0.8)
-        plt.plot(Spiral_Kx[i+2000], Spiral_Ky[i+2000], lw=0.8)
-        plt.plot(Spiral_Kx[i+4000], Spiral_Ky[i+4000], lw=0.8)
-
-
-    plt.xlabel('Kx')
-    plt.ylabel('Ky')
-    plt.title('Spiral K-space Trajectories (Rotated)')
-    plt.axis('equal')
-    plt.grid(True)
-    plt.show()
-
-    # %% Now prepare for recon
-    print(Spiral_Kx.shape)
-    print(kdata.shape)
-    min_points = min(Spiral_Kx.shape[-1], kdata.shape[-2])
-    print(min_points)
-
-    TE = float(header['rdb_hdr_image']['te']) #us
-    time_mri = np.arange(min_points)*dt_mri + TE*1e-6
-    new_coord = np.stack([Spiral_Kx, Spiral_Ky],axis=-1)
-
-    print(new_coord.shape)
-
-    new_ksp = np.copy(kdata[:,:min_points,:])
-    new_coord = new_coord[:,:min_points,:]
-
-    print(new_ksp.shape)
-
-    # this is reshape from spiral table to have encode coils
-    new_ksp = new_ksp.reshape((arms,total_num_encodes,min_points,Num_Coils), order='F')
-    new_coord = new_coord.reshape((arms,total_num_encodes,min_points,2), order='F')
-
-    print(f'kspace shape for recon {new_ksp.shape}')
-    print(f'kspace shape for recon {new_coord.shape}')
-    
-    #%%
-    plt.figure(figsize=(6, 6))
-
-    nShots = 3
-    # Plot each shot
-    for i in range(nShots):
-        # Original coordinate trajectory (2D spiral) (2000, 3, 1868, 2)
-        plt.plot(new_coord[i, 0, :, 0], new_coord[i, 0, :, 1], lw=0.8, label=f'Shot {i+1} Raw' if i==0 else "")
-
-        # Interpolated / Rotated Spiral trajectory
-        plt.plot(Spiral_Kx[i+0000], Spiral_Ky[i+0000], lw=0.8, linestyle='--', label=f'Shot {i+1} Rotated' if i==0 else "")
-
-
-    plt.xlabel('Kx')
-    plt.ylabel('Ky')
-    plt.title('Spiral K-space Trajectories (Rotated)')
-    plt.axis('equal')
-    plt.grid(True)
-    plt.show()
-
-
-    # %% run recon
-    res = [3,320,320]
-    sos_combined = np.zeros(res, dtype=np.float32) 
-
-    try:
-        device = sp.Device(0)
-    except:
-        device = sp.cpu_device
-
-    new_coord = sp.to_device(new_coord, device)
-    print(f'numer of encodes = {new_coord.shape[1]}')
-    kw = []
-    for enc in range(new_coord.shape[1]):
-        kw_enc = sp.mri.pipe_menon_dcf(new_coord[:,enc,:,:],img_shape=(320,320),device=device,max_iter=30,
-                                    n=320,
-                                    beta=8,
-                                    width=4,
-                                    show_pbar=True,)
-        kw.append(kw_enc)
-    new_kw = np.stack(kw)
-
-    print(f' kw shape is {new_kw.shape}') #(2000,3,1868)
-    print(new_kw.dtype)
-    new_kw = new_kw.astype(np.float32)
-    new_kw = sp.to_device(new_kw, device)
-
-    new_ksp = sp.to_device(new_ksp, device)
-    time_mri = sp.to_device(time_mri, device)
-
-    #demod = -250
-    for enc in range(new_ksp.shape[1]):
-        images = []
-        for coil in range(new_ksp.shape[-1]):
-            #print(coil)
-            kdata_temp = new_ksp[:,enc,:,coil]
-            xp = sp.get_device(kdata_temp).xp
-            #for k in range(min_points):
-            #        kdata_temp[:,k] *= xp.exp(1j*demod*2*np.pi*time_mri[k])
-
-            image = sp.nufft_adjoint(kdata_temp[:,:]*new_kw[enc,:,:], new_coord[:,enc,:,:], oshape=[320, 320])
-            images.append( sp.to_device(image))
-
-        images = np.stack(images,0)
-        sos = np.sqrt(np.sum(np.abs(images)**2, axis=0))     
-
-
-        sos_combined[enc,...] = sos 
-
-    directory = '/mounts/data/analyses/larivera/projects/multivenc/VOLDATA/SCAN_ARCH/'
-    recon_name = f'{directory}/vol_spiral_trajectory_from_header.h5'
-
-    with h5py.File(recon_name, 'w') as hf:
-        hf.create_dataset("sos", data=np.abs(sos_combined))
-
-    # image quality still not as expected. Maybe issues with samplin times interpolation of trajectories, 
-    # or other kspace processing we should do before recon (e.g. nomalization?)
-
-
-    # %% 
-    skope_path= '/mounts/data/analyses/larivera/projects/multivenc/VOLDATA/SCAN_ARCH/skope_data'
-    coord, kw, b0 = load_skope_data(skope_path)
-    print(coord.shape) #(2000, 3, 1868, 2)
-    print(coord[0,0,:,0])
-
-    plt.plot(coord[0,0,:1865,0], label='SKOPE highres')
-    plt.legend()
-    plt.show()
-
-    print(coord[0,0,:1864,0] - Spiral_Kx[0])
-
-
-    #%%
-    plt.figure(figsize=(6, 6))
-
-    nShots = 1
-    # Plot each shot
-    for i in range(nShots):
-        plt.plot(coord[i,0,:,0], coord[i,0,:,1], lw=0.8)
-        #plt.plot(coord[i,1,:,0], coord[i,1,:,1], lw=0.8)
-        #plt.plot(coord[i,2,:,0], coord[i,2,:,1], lw=0.8)
-
-        plt.plot(Spiral_Kx[i], Spiral_Ky[i], lw=0.8)
-        #plt.plot(Spiral_Kx[i+2000], Spiral_Ky[i+2000], lw=0.8)
-        #plt.plot(Spiral_Kx[i+4000], Spiral_Ky[i+4000], lw=0.8)
-
-    plt.xlabel('Kx')
-    plt.ylabel('Ky')
-    plt.title('Spiral K-space Trajectories (Rotated)')
-    plt.axis('equal')
-    plt.grid(True)
-    plt.show()
-
-    print(coord[0,0,:15,0])
-    print(Spiral_Kx[0,:15])
-    print(Spiral_Ky[0,:15])
-
-    print(Spiral_Kx.shape)
-
-
-    #%%
-    plt.figure(figsize=(6, 6))
-
-    nShots = 3
-    # Plot each shot
-    for i in range(nShots):
-        # Original coordinate trajectory (2D spiral) (2000, 3, 1868, 2)
-        plt.plot(coord[i, 2, :, 0], coord[i, 2, :, 1], lw=0.8, label=f'Shot {i+1} Raw' if i==0 else "")
-
-        # Interpolated / Rotated Spiral trajectory
-        plt.plot(Spiral_Kx[i+4000], Spiral_Ky[i+4000], lw=0.8, linestyle='--', label=f'Shot {i+1} Rotated' if i==0 else "")
-
-
-    plt.xlabel('Kx')
-    plt.ylabel('Ky')
-    plt.title('Spiral K-space Trajectories (Rotated)')
-    plt.axis('equal')
-    plt.grid(True)
-    plt.show()
 

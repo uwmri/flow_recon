@@ -236,7 +236,7 @@ if __name__ == "__main__":
         #blk_widths=(128, 64, 32)
         blk_widths=(128, 64, 32, 16, 8)
         blk_widths=(128, 64, 32, 16, 8, 4)
-        blk_widths=[4, 8, 16, 24, 32, 48, 64, 96, 128]
+        blk_widths=(128, 96, 64, 48, 32, 24, 16, 8, 4)
 
         kdata = mri_raw.kdata
         coord = mri_raw.coords

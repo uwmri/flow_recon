@@ -73,19 +73,23 @@ if __name__ == '__main__':
             #os.system(f'python {recon_script} --gate_type time --frames 256 --filename {filename} '
             #          f'--out_filename {file_nav} --out_folder {base_folder} --max_encodes 1 '
             #          f'--recon_type mslr --lamda 1e-8 --crop_factor 2--krad_cutoff 32 --compress_coils 20 --epochs 200')
-            
-            # Run the recon to get realtime spiral
-            os.system(f'python {recon_script} --gate_type ecg --frames 30 --filename {filename} '
+
+            os.system(f'python {recon_script} --gate_type time --frames 2000 --filename {filename} '
                       f'--out_filename {file_nav} --out_folder {base_folder} '
-                      f'--recon_type mslr --lamda 1e-15 --epochs 100 --single_encode_gate '
+                      f'--recon_type mslr --lamda 1e-10 --epochs 200 '
                       f'--demod -250 --gate_delay 200 --skope_path /mounts/data/analyses/larivera/projects/multivenc/VOLDATA/SCAN_ARCH/skope_data '
-                      f'--thresh_maps --thresh_maps_val 0')
-            
-            #os.system(f'python {recon_script} --gate_type time --frames 500 --filename {filename} '
+                      f'--strided_gate --shots_per_frame 1 --thresh_maps --thresh_maps_val 0')
+
+            # Run the recon to get realtime spiral (maybe max eigen should be done across all encodes?)
+            #os.system(f'python {recon_script} --gate_type ecg --frames 30 --filename {filename} '
             #          f'--out_filename {file_nav} --out_folder {base_folder} '
-            #          f'--recon_type mslr --lamda 1e-8 --epochs 200 '
+            #          f'--recon_type mslr --lamda 1e-8 --epochs 100 --single_encode_gate '
             #          f'--demod -250 --gate_delay 200 --skope_path /mounts/data/analyses/larivera/projects/multivenc/VOLDATA/SCAN_ARCH/skope_data '
-            #          f'--strided_gate --shots_per_frame 4 --thresh_maps --thresh_maps_val 0')
+            #          f'--thresh_maps --thresh_maps_val 0.025')
+            
+            #the recon seems to diverge if the smaps are threshold >0.05
+            #without thresholding the smaps, recon converges, but the cardiac recon is quite flat even with the smallest lamda and many block sizes.
+            #real time does not look great either for blood.
                     
         # Run the motion corrected
         #print('Motion Correcting Data')

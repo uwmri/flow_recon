@@ -24,6 +24,8 @@ def read_scan_achive_data( archive):
     # Output: data_all - the data from the scan archive
 
     data_all = []
+    slice_index_all = []
+    view_index_all = []
     #ontrol_all
 
     # Get the control count
@@ -32,10 +34,10 @@ def read_scan_achive_data( archive):
 
     # Loop over all the control packets
     progress_update_interval = num_control // 10
-    for i in range(num_control):
+    for control_packet_index in range(num_control):
 
-        if i % progress_update_interval == 0:
-            print(f'Control {i} of {num_control} ({ 100*i // num_control} % )')
+        if control_packet_index % progress_update_interval == 0:
+            print(f'Control {control_packet_index} of {num_control} ({ 100*control_packet_index // num_control} % )')
 
         # Retrieve the next control packet
         control = archive.NextControl()
@@ -60,6 +62,14 @@ def read_scan_achive_data( archive):
             data_all.append(next_frame)
             #control_all.append(control)
 
+            #echoNum = control['echoNum']
+            slice_index = control['sliceNum']
+            view_index = control['viewNum'] - 1
+
+            slice_index_all.append(slice_index)
+            view_index_all.append(view_index)
+
+
     print('Data loaded')
 
-    return data_all
+    return data_all, slice_index_all, view_index_all
