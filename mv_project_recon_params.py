@@ -131,6 +131,8 @@ if __name__ == '__main__':
         # With CSmap masking we need a lamda ~= 0.0002, may have to go up or down depending on case (use steps of 2.5e-4)
         # jsense still produces best smaps (even if they are not great and have holes). B0 skope correction off otherwise large flickering artifacts
         # Filtering data makes kspace look cleaner, but minimal changes in image quality including it may remove some noise. Add it to the post-procesing.
+        
+        lamda = 0.001
         command = (
                     'python /home/larivera/CODE/RECON/python_recon/flow_recon/llr_recon_flow.py '
                     f'--filename {filename} '
@@ -139,24 +141,27 @@ if __name__ == '__main__':
                     '--recon_type llr '
                     '--max_iter 200 '
                     '--llr_block_width 8 '
-                    '--frames 30 '
+                    '--frames 20 '
                     '--gate_type ecg '
-                    '--lamda 0.001 '
+                    f'--lamda {lamda} '
                     f'--demod {demod} '
                     '--gate_delay 200 '
                     '--single_encode_gate '
                     '--skope_path /mounts/data/analyses/larivera/projects/multivenc/VOLDATA/SCAN_ARCH/skope_data '
                     '> recon.log'
                 )
-                     
-        #command = 'python /home/larivera/CODE/RECON/python_recon/flow_recon/llr_recon_flow.py  --filename MRI_Raw.h5 --thresh_maps --recon_type llr --max_iter 200 --llr_block_width 8 --frames 30 --gate_type ecg --lamda 0.0075 > recon.log'
-        os.system(command)
-        os.rename('FullRecon.h5', f'Cardiac001.h5') # we have tested block width 8 mostly  (block 4 not necessary better)
+        
+         #'--lamda 0.001 ' valued used for most recons
+         #'--lamda 0.00025 ' value used for cases 3 and 6
+
+        #os.system(command)
+        #os.rename('FullRecon.h5', f'tf_20_Cardiac{lamda}.h5') # we have tested block width 8 mostly  (block 4 not necessary better)
 
         # for realtime recons: 
         # We decided to use no CSmap masking and lamda = 0.0025 (less flickering), may have to go up or down depending on case (use steps of 2e-3)
         # With CSmap masking we need a lamda ~= 0.0005, may have to go up or down depending on case (use steps of 2.5e-4)
-
+        
+        #lamda = 
         command = (
                     'python /home/larivera/CODE/RECON/python_recon/flow_recon/llr_recon_flow.py '
                     f'--filename {filename} '
@@ -169,15 +174,44 @@ if __name__ == '__main__':
                     '--llr_block_width 8 '
                     '--frames 500 '
                     '--gate_type time '
-                    '--lamda 0.0025 '
+                    f'--lamda {lamda} '
                     f'--demod {demod} '
                     '--gate_delay 200 '
                     '--skope_path /mounts/data/analyses/larivera/projects/multivenc/VOLDATA/SCAN_ARCH/skope_data '
                     '> recon.log'
                 )
-        os.system(command)
+            #'--lamda 0.0025 ' value used for most recons
+            #'--lamda 0.0008 ' value used for cases 3 and 6
+
+        #os.system(command)
         #os.rename('FullRecon.h5', 'Time0025_500tf_200iter_noSmapmask.h5')
-        os.rename('FullRecon.h5', 'Time0025.h5')
+        #os.rename('FullRecon.h5', f'400tf_Time{lamda}.h5')
+
+
+        # time average
+        command = (
+                    'python /home/larivera/CODE/RECON/python_recon/flow_recon/llr_recon_flow.py '
+                    f'--filename {filename} '
+                    '--thresh_maps '
+                    '--thresh_maps_val 0 '
+                    '--recon_type pils '
+                    '--max_iter 200 '
+                    '--llr_block_width 8 '
+                    '--frames 1 '
+                    '--gate_type ecg '
+                    f'--lamda 0.01 '
+                    f'--demod -250 '
+                    '--gate_delay 200 '
+                    '--single_encode_gate '
+                    '--skope_path /mounts/data/analyses/larivera/projects/multivenc/VOLDATA/SCAN_ARCH/skope_data '
+                    '> recon.log'
+                )
+        
+         #'--lamda 0.001 ' valued used for most recons
+         #'--lamda 0.00025 ' value used for cases 3 and 6
+
+        os.system(command)
+        os.rename('FullRecon.h5', 'withSkope_timeAvg_pils.h5') # we have tested block width 8 mostly  (block 4 not necessary better)
 
 
 

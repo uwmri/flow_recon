@@ -139,7 +139,7 @@ if __name__ == '__main__':
                     '--recon_type llr '
                     '--max_iter 200 '
                     '--llr_block_width 8 '
-                    '--frames 1 '
+                    '--frames 30 '
                     '--gate_type ecg '
                     '--lamda 0.001 '
                     f'--demod 0 '
@@ -149,8 +149,8 @@ if __name__ == '__main__':
                 )
                      
         #command = 'python /home/larivera/CODE/RECON/python_recon/flow_recon/llr_recon_flow.py  --filename MRI_Raw.h5 --thresh_maps --recon_type llr --max_iter 200 --llr_block_width 8 --frames 30 --gate_type ecg --lamda 0.0075 > recon.log'
-        os.system(command)
-        os.rename('FullRecon.h5', f'Cardiac001.h5') # we have tested block width 8 mostly  (block 4 not necessary better)
+        #os.system(command)
+        #os.rename('FullRecon.h5', f'Cardiac001.h5') # we have tested block width 8 mostly  (block 4 not necessary better)
 
         # for realtime recons: 
         # We decided to use no CSmap masking and lamda = 0.0025 (less flickering), may have to go up or down depending on case (use steps of 2e-3)
@@ -169,14 +169,34 @@ if __name__ == '__main__':
                     '--frames 500 '
                     '--gate_type time '
                     '--lamda 0.0025 '
-                    f'--demod {demod} '
+                    '--demod -250 '
                     '--gate_delay 200 '
-                    '--skope_path /mounts/data/analyses/larivera/projects/multivenc/VOLDATA/SCAN_ARCH/skope_data '
                     '> recon.log'
                 )
         #os.system(command)
-        #os.rename('FullRecon.h5', 'Time0025_500tf_200iter_noSmapmask.h5')
+        #os.rename('FullRecon.h5', 'no_skope_Time0025.h5')
         #os.rename('FullRecon.h5', 'Time0025.h5')
+
+        # just time average
+        command = (
+                    'python /home/larivera/CODE/RECON/python_recon/flow_recon/llr_recon_flow.py '
+                    f'--filename {filename} '
+                    '--thresh_maps '
+                    '--thresh_maps_val 0 '
+                    '--recon_type pils '
+                    '--max_iter 200 '
+                    '--llr_block_width 8 '
+                    '--frames 1 '
+                    '--gate_type ecg '
+                    '--lamda 0.01 '
+                    f'--demod -250 '
+                    '--gate_delay 200 '
+                    '--single_encode_gate '
+                    '> recon.log'
+                )
+                     
+        os.system(command)
+        os.rename('FullRecon.h5', f'noskope_TimeAverage_pils.h5') # we have tested block width 8 mostly  (block 4 not necessary better)
 
 
 

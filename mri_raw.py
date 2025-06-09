@@ -530,6 +530,9 @@ def get_gate_bins(gate_signal, gate_type, num_frames, discrete_gates=False, prep
         sum_within = np.sum([np.sum(gate < t_max) for gate in gate_signal])
         sum_total = np.sum([gate.size for gate in gate_signal])
         within_rr = 100.0 * sum_within / sum_total
+        estimate_hr = 60.0 / median_rr
+        
+        logger.info(f'ECG, expected HR {estimate_hr} bpm')
         logger.info(f'ECG, {within_rr} percent within RR')
     elif gate_type == 'resp':
         # Outlier rejection

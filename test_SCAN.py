@@ -193,77 +193,55 @@ with h5py.File(recon_name, 'w') as hf:
 
 
 
-
 # %% Applying High Frequency Filtering to kspace
 
 # Load Image
-image_data = '/mounts/data/analyses/larivera/projects/multivenc/VOLDATA/SCAN_ARCH/VOL01_DV/01711_00006_Spiral_Dual_Venc_8-75/raw_data/Time0005_500tf_500iter.h5'   
-#image_data = '/mounts/data/analyses/larivera/projects/multivenc/VOLDATA/VOL01/free_breathing/dv/rawdata_01711_00006_Spiral_Dual_Venc_8-75/Cardiac0075_30tf.h5'
+image_data = '/mounts/data/analyses/larivera/projects/multivenc/VOLDATA/SCAN_ARCH/VOL01_DV/01711_00006_Spiral_Dual_Venc_8-75/raw_data_TEST/Cardiac001.h5'   
 with h5py.File(image_data, 'r') as hf:
+    
     complex_data = hf['IMAGE']
-
-
     complex_img = np.stack(complex_data)
     print(complex_img.shape)
-
-    # plot mag and phase
-    mag = np.abs(complex_img)
-    phase = np.angle(complex_img * np.conj(complex_img[:,0:1,:,:]))
-
 
     frame_index = 14  # You can change this depending on the frame you want to view
     coil_index = 1   # You can change this depending on the coil/channel you want to view
 
-    # Plot magnitude
-    plt.figure(figsize=(12, 6))
+    # Determine axes for spatial dimensions (last two for 2D, last three for 3D)
+    ndim = complex_img.ndim #expecting (tf, enc, y, x)
 
-    # Plot magnitude image
-    plt.subplot(1, 2, 1)
-    plt.imshow(mag[frame_index, coil_index, :, :], cmap='gray', aspect='auto')
-    plt.title(f'Magnitude (Frame {frame_index}, Coil {coil_index})')
-    plt.colorbar()
-    plt.axis('off')
+    if ndim == 4:
+        axes = (-2, -1)
 
-    # Plot phase image
-    plt.subplot(1, 2, 2)
-    plt.imshow(phase[frame_index, coil_index, :, :], cmap='gray', aspect='auto')  # 'twilight' colormap for phase
-    plt.title(f'Phase (Frame {frame_index}, Coil {coil_index})')
-    plt.colorbar()
-    plt.axis('off')
+        frames = complex_img.shape[0]
+        enc = complex_img.shape[1]
+        yres = complex_img.shape[2]
+        xres = complex_img.shape[3]
 
-    # Show the plots
-    plt.tight_layout()
-    plt.show()
+    elif ndim == 5:
+        axes = (-3, -2, -1)
+    else:
+        raise ValueError("Unsupported image dimensionality: must be 2D or 3D.")
 
-    # Perform 2D FFT (for 2D images) or 3D FFT (for 3D data)
-    kspace = np.fft.fftn(complex_img, axes=(-2, -1))  # For 2D image (axes are last two dimensions)
+    # Perform FFT
+    kspace = np.fft.fftn(complex_img, axes=axes)
 
     # Shift the zero-frequency component to the center of k-space
-    kspace = np.fft.fftshift(kspace, axes=(-2, -1))
+    kspace = np.fft.fftshift(kspace, axes=axes)
 
-    # You can plot k-space magnitude for visualization (optional)
+    # (Optional) Plot or inspect k-space magnitude and phase
     kspace_mag = np.abs(kspace)
-    kspace_phase = np.angle(kspace)  # Phase of k-space data
+    kspace_phase = np.angle(kspace)
 
+    # Inverse FFT to image space
+    image_space = np.fft.ifftn(np.fft.ifftshift(kspace, axes=axes), axes=axes)
 
     # Plot k-space magnitude (just for visualization, not usually done in MRI directly)
     plt.figure(figsize=(6, 6))
-    plt.imshow(np.log(1 + kspace_mag[frame_index, coil_index, :, :]), cmap='gray', aspect='auto')  # Log scale for better contrast
+    plt.imshow(np.log(kspace_mag[frame_index, coil_index, :, :]), cmap='gray', aspect='auto')  # Log scale for better contrast
     plt.title(f'K-space Magnitude (Frame {frame_index}, Encode {coil_index})')
     plt.colorbar()
     plt.axis('off')
     plt.show()
-
-
-    #plt.figure(figsize=(6, 6))
-    #plt.imshow((kspace_phase[frame_index, coil_index, :, :]), cmap='twilight', aspect='auto')  # Example colormap
-    #plt.title(f'K-space Magnitude (Frame {frame_index}, Encode {coil_index})')
-    #plt.colorbar()
-    #plt.axis('off')
-    #plt.show()
-
-    # Apply inverse FFT on the last two axes (axis=-2 and axis=-1)
-    image_space = np.fft.ifft2(np.fft.ifftshift(kspace, axes=(-2, -1)), axes=(-2, -1))
 
     # You can extract the magnitude and/or phase from the complex image
     magnitude_image = np.abs(image_space)
@@ -280,7 +258,7 @@ with h5py.File(image_data, 'r') as hf:
 
     # Optionally, plot the phase image (first frame, first coil)
     plt.subplot(1, 2, 2)
-    plt.imshow(phase_image[frame_index, coil_index, :, :] - phase[frame_index, coil_index, :, :], cmap='gray')
+    plt.imshow(phase_image[frame_index, coil_index, :, :], cmap='gray')
     plt.title('Reconstructed Image (Phase)')
     plt.colorbar()
     plt.axis('off')
@@ -292,9 +270,10 @@ with h5py.File(image_data, 'r') as hf:
     #fh0=(0.5+atan(200*(1-rk/max(kx(:))))/pi);
  
     # Assuming you have kx, ky, and rk arrays already
+
     # Example: Create kx and ky for demonstration (Replace with your actual data)
-    kx = np.linspace(-1, 1, 320)  # Example kx axis (replace with actual data)
-    ky = np.linspace(-1, 1, 320)  # Example ky axis (replace with actual data)
+    kx = np.linspace(-1, 1, xres)  # Example kx axis (replace with actual data)
+    ky = np.linspace(-1, 1, yres)  # Example ky axis (replace with actual data)
     kx, ky = np.meshgrid(kx, ky)  # Create a meshgrid (replace with actual mesh)
 
     # Calculate radial distance rk
@@ -304,13 +283,14 @@ with h5py.File(image_data, 'r') as hf:
     kx_max = np.max(kx)
 
     # Apply the filter (using numpy for vectorized operations)
+    # change scale to increase or decrease filter slope
     fh0 = (0.5 + np.arctan(100 * (1 - rk / kx_max)) / np.pi)
 
     # Add new dimensions for broadcasting
     fh0_broadcasted = fh0[np.newaxis, np.newaxis, :, :]  # Shape becomes (1, 1, 320, 320)
 
     # Broadcast it to match kspace shape (30, 3, 320, 320)
-    fh0_broadcasted = fh0_broadcasted * np.ones((500, 3, 1, 1))  # Shape becomes (30, 3, 320, 320)
+    fh0_broadcasted = fh0_broadcasted * np.ones((frames, enc, 1, 1))  # Shape becomes (30, 3, 320, 320)
 
     # Apply the filter to the k-space data
     filtered_kspace = kspace * fh0_broadcasted
@@ -364,10 +344,64 @@ with h5py.File(image_data, 'r') as hf:
     plt.tight_layout()
     plt.show()
 
-
-image_out = '/mounts/data/analyses/larivera/projects/multivenc/VOLDATA/SCAN_ARCH/VOL01_DV/01711_00006_Spiral_Dual_Venc_8-75/raw_data_TEST3/testing_filter/time_filterW100_200.h5'   
+image_out = '/mounts/data/analyses/larivera/projects/multivenc/VOLDATA/SCAN_ARCH/VOL01_DV/01711_00006_Spiral_Dual_Venc_8-75/raw_data_TEST/cardiac_filter.h5'   
 with h5py.File(image_out, 'w') as hf2:
     hf2.create_dataset("IMAGE_MAG", data=magnitude_image_filtered)
     hf2.create_dataset("IMAGE_PHASE_DIFFERENCE", data=phase_image_filtered)
 
 # %%
+# %% Applying High Frequency Filtering to kspace (clean)
+
+def filter_kspace(complex_img):
+
+    # Determine axes for spatial dimensions (last two for 2D, last three for 3D)
+    ndim = complex_img.ndim #expecting (tf, enc, y, x)
+
+    if ndim == 4:
+        axes = (-2, -1)
+
+        frames = complex_img.shape[0]
+        enc = complex_img.shape[1]
+        yres = complex_img.shape[2]
+        xres = complex_img.shape[3]
+
+    elif ndim == 5:
+        axes = (-3, -2, -1)
+    else:
+        raise ValueError("Unsupported image dimensionality: must be 2D or 3D.")
+
+    # Perform FFT
+    kspace = np.fft.fftn(complex_img, axes=axes)
+
+    # Shift the zero-frequency component to the center of k-space
+    kspace = np.fft.fftshift(kspace, axes=axes)
+
+    #Using filter from Pruessmann sense paper fh0=(0.5+atan(200*(1-rk/max(kx(:))))/pi);
+    # Create kx and ky for demonstration 
+    kx = np.linspace(-1, 1, xres)  
+    ky = np.linspace(-1, 1, yres)   
+    kx, ky = np.meshgrid(kx, ky)  # Create a meshgrid 
+
+    # Calculate radial distance rk
+    rk = np.sqrt(kx**2 + ky**2)
+
+    # Normalize rk by the maximum of kx (assuming this is what you're intending)
+    kx_max = np.max(kx)
+
+    # change scale to increase or decrease filter sharpness
+    scale=100
+    fh0 = (0.5 + np.arctan(scale * (1 - rk / kx_max)) / np.pi)
+
+    # Add new dimensions for broadcasting
+    fh0_broadcasted = fh0[np.newaxis, np.newaxis, :, :]  # Shape becomes (1, 1, 320, 320)
+
+    # Broadcast it to match kspace shape (30, 3, 320, 320)
+    fh0_broadcasted = fh0_broadcasted * np.ones((frames, enc, 1, 1))  # Shape becomes (30, 3, 320, 320)
+
+    # Apply the filter to the k-space data
+    filtered_kspace = kspace * fh0_broadcasted
+
+    # Inverse FFT to image space
+    image_space = np.fft.ifftn(np.fft.ifftshift(filtered_kspace, axes=axes), axes=axes)
+
+    return image_space
