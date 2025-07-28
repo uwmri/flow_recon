@@ -1160,50 +1160,15 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_co
                 except:
                     ksp.append(k)
             ksp = np.stack(ksp, axis=0)
-
-            # coil = 12
-            # encode = 0
-            # projs = ksp.shape[2]
-            # centerK = round(ksp.shape[3]//2)
-            # inds = np.zeros(projs, dtype='int16')
-            # angles = np.zeros(projs)
-            # for p in range(projs):
-            #     projection = ksp[coil,encode,p,:]
-            #     center = projection[centerK-20:centerK+20]
-            #     inds[p] = np.argmax(abs(center)) - 20 + centerK
-            #     angles[p] = np.angle(projection[inds[p]])
-            # #plt.plot(ksp[coil,encode,p,inds])
-            # angles = np.rad2deg(np.unwrap(angles))
-            # plt.plot(angles)
-            # plt.show()
-            # plt.plot(abs(np.diff(angles)))
-            # plt.show()
-
-            # if sms_factor > 1:
-            #     coils = ksp.shape[0]
-            #     projs = ksp.shape[2]
-            #     if sms_factor == 2:
-            #         angle = math.pi / 2  # phase blip (works for sms_factor=2)
-            #     else:
-            #         raise ValueError('sms_factor not supported')
-            #     for c in range(coils):
-            #         for p in range(projs):
-            #             blip = (p % 2) * sms_phase * angle  # alternate blips
-            #             euler = np.complex(math.cos(blip), math.sin(blip))  # e^(i*theta) phase blip
-            #             ksp[c, 0, p, :] = np.conjugate(euler) * ksp[c, 0, p, :]  # multiply by conjugate phase pattern
             
             if sms_factor > 1:
                 logging.info(f"Applying phase blips for SMS slice {sms_slice+1} of {sms_factor}")
                 coils = ksp.shape[0]
                 projs = ksp.shape[2]
-                phase_max = math.pi*(sms_factor - 1)/sms_factor
-                # sms_phase = phase_max * (-1 + (2*sms_slice)/(sms_factor-1))
-                # sms_phase = (2 * np.pi/sms_factor) * sms_slice
-                sms_phase = sms_slice * 2 * phase_max
+                sms_phase = (2 * sms_slice - (sms_factor - 1)) * math.pi / sms_factor
                 for c in range(coils):
                     for p in range(projs):
                         blip = (p%sms_factor) * sms_phase
-                        # blip = sms_slice * sms_phase
                         euler = np.complex(math.cos(blip), math.sin(blip))  # e^(i*theta) phase blip
                         ksp[c, 0, p, :] = np.conjugate(euler) * ksp[c, 0, p, :]  # multiply by conjugate phase pattern
 
