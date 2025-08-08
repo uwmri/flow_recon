@@ -31,8 +31,18 @@ if __name__ == "__main__":
     parser.add_argument('--device', type=int, default=0)
     parser.add_argument('--thresh', type=float, default=0.1)
     parser.add_argument('--scale', type=float, default=1.0)
-    parser.add_argument('--frames', type=int, default=10, help='Number of time frames')
+    parser.add_argument('--frames',type=int, default=1, help='Number of time frames')
     parser.add_argument('--frames2', type=int, default=1, help='Number of time frames')
+
+    parser.set_defaults(autofov=False)
+    parser.add_argument('--autofov', dest='autofov', action='store_true')
+    
+    parser.set_defaults(thresh_maps=False)
+    parser.add_argument('--thresh_maps', dest='thresh_maps', action='store_true')
+
+
+    parser.add_argument('--reset_dens', dest='reset_dens', action='store_true')
+    parser.set_defaults(reset_dens=False)
 
     parser.add_argument('--mps_ker_width', type=int, default=16)
     parser.add_argument('--ksp_calib_width', type=int, default=32)
@@ -47,7 +57,7 @@ if __name__ == "__main__":
     parser.add_argument('--max_encodes', type=int, default=None)
     parser.add_argument('--coil_batch_size', type=int, default=1)
 
-    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--epochs', type=int, default=10)
     parser.add_argument('--gate_type', type=str, default='time')  # recon type
     parser.add_argument('--gate_type2', type=str, default='prep')  # recon type
     parser.add_argument('--prep_disdaqs', type=int, default=0)
@@ -76,8 +86,12 @@ if __name__ == "__main__":
     parser.set_defaults(fast_maxeig=False)
     parser.add_argument('--test_run', dest='test_run', action='store_true')
     parser.set_defaults(test_run=False)
-    parser.add_argument('--compress_coils', dest='compress_coils', action='store_true')
-    parser.set_defaults(compress_coils=False)
+    parser.add_argument('--compress_coils', type=int, dest='compress_coils', default=-1, help='Number of coils to compress to')
+
+    parser.set_defaults(strided_gate=False)
+    parser.add_argument('--strided_gate', dest='strided_gate', action='store_true')
+    parser.add_argument('--shots_per_frame', type=int, default=2)
+
 
     # SMS Reconstruction
     parser.add_argument('--sms_factor', type=int, default=1)  # sms factor
@@ -122,12 +136,10 @@ if __name__ == "__main__":
         mri_raw = load_MRI_raw(h5_filename=args.filename, max_coils=2, max_encodes=args.max_encodes, sms_factor=args.sms_factor, sms_slice=args.sms_slice)
     else:
         mri_raw = load_MRI_raw(h5_filename=args.filename, compress_coils=args.compress_coils, max_encodes=args.max_encodes, sms_factor=args.sms_factor, sms_slice=args.sms_slice)
-    print(f'Min/max = {np.max(mri_raw.time[0])} {np.max(mri_raw.time[0])}')
 
     # Resample
     # radial3d_regrid(mri_raw)
 
-    num_enc = mri_raw.Num_Encodings
     if args.crop_factor > 1.0:
         crop_kspace(mri_rawdata=mri_raw, crop_factor=args.crop_factor)  # 2.5 (320/128)
 
@@ -160,25 +172,87 @@ if __name__ == "__main__":
         xp = sp.Device(args.device).xp
         smaps = xp.ones([mri_raw.Num_Coils] + img_shape, dtype=xp.complex64)
     else:
-        smaps = get_smaps(mri_rawdata=mri_raw, args=args, thresh_maps=False, smap_type=args.smap_type, log_dir=args.out_folder)
+        smaps = get_smaps(mri_rawdata=mri_raw, args=args, thresh_maps=args.thresh_maps, smap_type=args.smap_type, log_dir=args.out_folder)
 
-
-    # Put the maps on the GPU
-    smaps = array_to_gpu(smaps, sp.Device(args.device))
 
     # Gate k-space
-    if args.frames > 1:
-        if args.frames2 > 1:
-            mri_raw = gate_kspace2d(mri_raw=mri_raw,
-                                  num_frames=[args.frames, args.frames2],
-                                  gate_type=[args.gate_type, args.gate_type2],
-                                  discrete_gates=[args.discrete_gates, args.discrete_gates2],
-                                  prep_disdaqs=args.prep_disdaqs)
-        else:
-            mri_raw = gate_kspace(mri_raw=mri_raw,
-                                  num_frames=args.frames,
-                                  gate_type=args.gate_type,
-                                  discrete_gates=args.discrete_gates)
+    #if args.frames > 1:
+    #    if args.frames2 > 1:
+    #        mri_raw = gate_kspace2d(mri_raw=mri_raw,
+    #                              num_frames=[args.frames, args.frames2],
+    #                              gate_type=[args.gate_type, args.gate_type2],
+    #                              discrete_gates=[args.discrete_gates, args.discrete_gates2],
+    #                              prep_disdaqs=args.prep_disdaqs)
+    #    else:
+    #        mri_raw = gate_kspace(mri_raw=mri_raw,
+    #                              num_frames=args.frames,
+    #                              gate_type=args.gate_type,
+    #                              discrete_gates=args.discrete_gates)
+    
+    # For the spiral flow situation with interleaved encodings
+    if args.strided_gate:
+        logger.info(f'Strided gating for spiral with interleaved encodes')
+        # Hardcoded frames per cardiac bin. 
+        mri_raw = strided_encoding(mri_raw, stride=1, shots_per_frame=args.shots_per_frame)
+        args.frames = mri_raw.Num_Frames
+    else:
+        if args.frames > 1:
+            if args.frames2 > 1:
+                mri_raw = gate_kspace2d(mri_raw=mri_raw,
+                                        num_frames=[args.frames, args.frames2],
+                                        gate_type=[args.gate_type, args.gate_type2],
+                                        discrete_gates=[args.discrete_gates, args.discrete_gates2],
+                                        prep_disdaqs=args.prep_disdaqs)
+            else:
+                mri_raw = gate_kspace(mri_raw=mri_raw,
+                                    num_frames=args.frames,
+                                    gate_type=args.gate_type,
+                                    discrete_gates=args.discrete_gates)
+
+
+    # Fake rotations
+    if False:
+        for i in range(mri_raw.Num_Frames*mri_raw.Num_Encodings):
+            print(f'Frame {i} ')
+            device = sp.get_device(mri_raw.coords[i])
+            kdata = sp.to_device(mri_raw.kdata[i], device)
+            dcf = sp.to_device(mri_raw.dcf[i], device)
+            coord = sp.to_device(mri_raw.coords[i], device)
+
+            psi = -float(i // mri_raw.Num_Encodings)*0.05
+            phi = 0
+            theta = float(i // mri_raw.Num_Encodings)*0.1
+            print(f'Rotation = {theta} {phi} {psi}')
+
+            tx = -float(i // mri_raw.Num_Encodings) * 0.01
+            ty =  float(i // mri_raw.Num_Encodings) * 0.02
+            tz = -float(i // mri_raw.Num_Encodings) * 0.005
+            mri_raw.kdata[i] *= device.xp.exp(1j*2.0*math.pi*tx*mri_raw.coords[i][...,0])
+
+            # Build Rotation matrix
+            rot = build_rotation(theta, phi, psi)
+            rot = sp.to_device( rot, device)
+
+            coord_rot = coord
+            coord_rot = device.xp.expand_dims( coord_rot, -1)
+            coord_rot = device.xp.matmul(rot, coord_rot)
+            coord_rot = device.xp.squeeze( coord_rot)
+
+            mri_raw.coords[i] = coord_rot
+
+    if args.reset_dens:
+        for i in range(len(mri_raw.kdata)):
+            mri_raw.dcf[i][:] = 1.0
+
+
+    if True:
+        for i in range(len(mri_raw.kdata)):
+            mri_raw.kdata[i] = sp.to_device(mri_raw.kdata[i], sp.Device(args.device))
+            mri_raw.coords[i] = sp.to_device(mri_raw.coords[i], sp.Device(args.device))
+            mri_raw.dcf[i] = sp.to_device(mri_raw.dcf[i], sp.Device(args.device))
+
+    # Put the maps on the GPU
+    smaps = sp.to_device(smaps, sp.Device(args.device))
 
     # Reconstruct the image
     if args.recon_type == 'mslr':
@@ -202,6 +276,7 @@ if __name__ == "__main__":
                            lamda=args.lamda,
                            max_epoch=args.epochs,
                            device=sp.Device(args.device),
+                           out_iter_mon=True,
                            comm=comm,
                            log_dir=args.out_folder,
                            num_encodings=mri_raw.Num_Encodings)
@@ -209,9 +284,20 @@ if __name__ == "__main__":
         lrimg = mslr_recon.run()
         out_name = os.path.join(args.out_folder,'MSLRObject.h5')
         lrimg.save(out_name)
+
+        print(lrimg.shape)
+        #Sz = lrimg[..., lrimg.shape[-3] // 2, :, :]
+        #Sy = lrimg[..., lrimg.shape[-2] // 2, :]
+        #Sx = lrimg[..., lrimg.shape[-1] // 2]
         
-        img = lrimg[:,:,:,:]
+        #img = lrimg[:, :, :, :, :]
+        img = []
+        for t in range(lrimg.total_images):
+            img.append(sp.to_device(lrimg[t]))
+        img = np.stack( img, axis=0)
+
         
+        img = np.reshape(img, (args.frames, -1) + img.shape[1:])
         out_name = os.path.join(args.out_folder, 'FullRecon.h5')
         logger.info('Saving images to ' + out_name)
         try:
@@ -264,8 +350,8 @@ if __name__ == "__main__":
     elif args.recon_type == 'llr':
         logger.info(f'Reconstruct Images ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
         img = BatchedSenseRecon(mri_raw.kdata, mps=smaps, weights=mri_raw.dcf, coord=mri_raw.coords,
-                                device=sp.Device(args.device), lamda=args.lamda, num_enc=num_enc,
-                                coil_batch_size=args.coil_batch_size, max_iter=args.max_iter, batched_iter=args.max_iter,
+                                device=sp.Device(args.device), lamda=args.lamda, num_enc=mri_raw.Num_Encodings,
+                                coil_batch_size=None, max_iter=args.max_iter, batched_iter=args.max_iter,
                                 gate_type=args.gate_type, fast_maxeig=args.fast_maxeig,
                                 block_width=args.llr_block_width, log_folder=args.out_folder,
                                 composite_init=False
@@ -324,9 +410,13 @@ if __name__ == "__main__":
     # Copy to CPU and reshape
     img = np.stack(img,axis=0)
     img = sp.to_device(img, sp.cpu_device)
-    img = np.reshape(img, (args.frames*args.frames2, -1) + img.shape[1:])
+    img = np.reshape(img, (args.frames*args.frames2, -1) + smaps.shape[1:])
     logger.info(f'Image shape {img.shape}')
 
+    img_mag = np.abs(img)
+    img_phase = np.angle(img)
+    img_phase_difference = np.angle( img * np.conj(np.expand_dims(img[:, 0, ...], axis=1)))
+    
     smaps = sp.to_device(smaps, sp.cpu_device)
     smaps_mag = np.abs(smaps)
 
@@ -349,6 +439,8 @@ if __name__ == "__main__":
         # mri_flow.update_angiogram()
         # mri_flow.background_phase_correct()
         mri_flow.update_angiogram()
+
+    
 
     # Export to file
     out_name = os.path.join(args.out_folder, args.out_filename)
@@ -383,6 +475,7 @@ if __name__ == "__main__":
         
         hf.create_dataset("IMAGE_REAL", data=np.real(img))
         hf.create_dataset("IMAGE_IMAG", data=np.imag(img))
+        hf.create_dataset("IMAGE_PHASE_DIFFERENCE", data=img_phase_difference)
         hf.create_dataset("SMAPS", data=smaps_mag)
         if args.flow_processing:
             header_group.attrs["venc"] = mri_flow.venc
