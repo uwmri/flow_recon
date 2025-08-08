@@ -136,7 +136,7 @@ if __name__ == "__main__":
 
     if sys.argv[1] == 'calc_rx':
         calc_rx(sys.argv[2], sys.argv[3]) # sms_factor, slice_locs
-    else if sys.argv[1] == 'show_images':
+    elif sys.argv[1] == 'show_images':
         show_images(sys.argv[2]) # sms_dir
     elif sys.argv[1] == 'show_raw':
         show_raw(sys.argv[2])
