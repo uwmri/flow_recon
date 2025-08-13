@@ -700,30 +700,30 @@ def gate_kspace2d(mri_raw=None, num_frames=[10, 10], gate_type=['time', 'prep'],
     gate_signal1 = gate_signals.get(gate_type[1], f'Cannot interpret gate signal {gate_type}')
 
     # For ECG, delay the waveform
-    if gate_type == 'ecg':
-       time = mri_raw.time
+    # if gate_type == 'ecg':
+    #    time = mri_raw.time
 
-       for e in range(mri_raw.Num_Encodings):
-           time_encode = time[e].flatten()
-           ecg_encode = gate_signal[e].flatten()
+    #    for e in range(mri_raw.Num_Encodings):
+    #        time_encode = time[e].flatten()
+    #        ecg_encode = gate_signal[e].flatten()
 
-            #Sort the data by time
-           idx = np.argsort(time_encode)
-           idx_inverse = idx.argsort()
+    #         #Sort the data by time
+    #        idx = np.argsort(time_encode)
+    #        idx_inverse = idx.argsort()
 
-           # Estimate the delay
-           if e == 0:
-               print(f'Time max {time_encode.max()}')
-               print(f'Time size {time_encode.size}')
-               print(f'Time ecg delay {ecg_delay}')
+    #        # Estimate the delay
+    #        if e == 0:
+    #            print(f'Time max {time_encode.max()}')
+    #            print(f'Time size {time_encode.size}')
+    #            print(f'Time ecg delay {ecg_delay}')
                
-               ecg_shift = int(ecg_delay / time_encode.max() * time_encode.size)
-               print(f'Shifting by {ecg_shift}')
+    #            ecg_shift = int(ecg_delay / time_encode.max() * time_encode.size)
+    #            print(f'Shifting by {ecg_shift}')
 
-           #Using circular shift for now. This should be fixed
-           ecg_sorted = ecg_encode[idx]
-           ecg_shifted = np.roll( ecg_sorted, -ecg_shift)
-           gate_signal[e] = np.reshape(ecg_shifted[idx_inverse], time[e].shape)
+    #        #Using circular shift for now. This should be fixed
+    #        ecg_sorted = ecg_encode[idx]
+    #        ecg_shifted = np.roll( ecg_sorted, -ecg_shift)
+    #        gate_signal[e] = np.reshape(ecg_shifted[idx_inverse], time[e].shape)
 
 
     print(f'Gating off of {gate_type}')
@@ -1093,7 +1093,7 @@ def resp_gate(mri_raw=None, efficiency=0.5, resp_sign=1, resp_filter_window=10, 
 
     return (mri_rawG)
 
-def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, sms_factor=None, sms_slice=None 
+def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, sms_factor=None, sms_slice=None, 
                 compress_coils=-1, scale_kdata=True):
 
     with h5py.File(h5_filename, 'r') as hf:
@@ -1190,6 +1190,10 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, sms_factor=
                 except:
                     ksp.append(k)
             ksp = np.stack(ksp, axis=0)
+            # logging.info(f'Loading kspace data...')
+            # real = np.stack([np.array(hf['Kdata'][f'KData_E{encode}_C{c}']['real']) for c in range(Num_Coils)], axis=0)
+            # imag = np.stack([np.array(hf['Kdata'][f'KData_E{encode}_C{c}']['imag']) for c in range(Num_Coils)], axis=0)
+            # ksp = real + 1j * imag
             
             if sms_factor > 1:
                 logging.info(f"Applying phase blips for SMS slice {sms_slice+1} of {sms_factor}")
@@ -1199,7 +1203,7 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, sms_factor=
                 for c in range(coils):
                     for p in range(projs):
                         blip = (p%sms_factor) * sms_phase
-                        euler = np.complex(math.cos(blip), math.sin(blip))  # e^(i*theta) phase blip
+                        euler = complex(math.cos(blip), math.sin(blip))  # e^(i*theta) phase blip
                         ksp[c, 0, p, :] = np.conjugate(euler) * ksp[c, 0, p, :]  # multiply by conjugate phase pattern
 
             # Regrid the readout to reduce oversampling
@@ -1247,23 +1251,26 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, sms_factor=
                 prep = prep_readout
 
             # Append to lists and flatten
-            mri_raw.dcf.append(dcf.flatten())
+            
+            
 
             ksp2 = []
             for e in range(Num_Coils):
                 ksp2.append(ksp[e].flatten())
             ksp2 = np.stack(ksp2, axis=0)
 
-                k = hf['Kdata'][f'KData_E{encode}_C{c}']
-                try:
-                    ksp.append(np.array(k['real'] + 1j * k['imag'])) #.flatten())
-                except:
-                    ksp.append(k)
-            ksp = np.stack(ksp, axis=0)
+            coords2 = []
+            for dim in range(coord.shape[-1]):
+                coords2.append(coord[...,dim].flatten())
+            coords2 = np.stack(coords2, axis=-1)
 
+            mri_raw.dcf.append(dcf.flatten())
             mri_raw.coords.append(coords2)
-
             mri_raw.kdata.append(ksp2)
+
+            # mri_raw.coords.append(coord)
+            # mri_raw.dcf.append(dcf)
+            # mri_raw.kdata.append(ksp)
             mri_raw.time.append(time.flatten())
             mri_raw.prep.append(prep.flatten())
             mri_raw.ecg.append(ecg.flatten())

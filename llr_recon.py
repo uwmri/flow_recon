@@ -125,8 +125,6 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
             #global max eigen
             ops_list = [sp.mri.linop.Sense(mps, coord[e], weights[e], ishape=None,
                         coil_batch_size=coil_batch_size, comm=comm) for e in range(self.num_images)]
-            print(len(ops_list))
-            print(np.shape(ops_list[0]))
             grad_ops_nodev = [ops_list[e].N for e in range(len(ops_list))]
             # A.h*A
             # wrap to run GPU
@@ -216,7 +214,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
         # cardiac recon expected to be lower rank than temporal recon, thus smaller block size (as in cpp wrapper)
         print('batched iter = ', batched_iter)
         proxg = SingularValueThresholdingNumba(A_ishape, frames=self.frames, num_encodes=self.num_encodes,
-                                              lamda=lamda, block_size=block_width, block_stride=block_width, batched_iter=batched_iter)
+                                              lamda=lamda, block_size=block_width, block_stride=block_width//2, batched_iter=batched_iter)
 
 
         if comm is not None:
@@ -243,7 +241,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
 
     def _write_log(self):
 
-        self.logger.info(f'Logging to file {self.log_out_name}')
+        # self.logger.info(f'Logging to file {self.log_out_name}')
         xp = sp.get_device(self.x).xp
 
         # Reshape X if 2D
@@ -280,11 +278,11 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
         # Define the gradient
         def gradf(x):
 
-            print(f'Xin shape = {x.shape}')
+            # print(f'Xin shape = {x.shape}')
             # Go through lists and update images
             gradf_x = []
             x_reshape = np.reshape(x, (self.num_images, -1) + x.shape[1:])
-            print(f'x_reshape shape = {x_reshape.shape}')
+            # print(f'x_reshape shape = {x_reshape.shape}')
             for i in range(self.num_images):
                 kdata = sp.to_device(self.y[i], self.op_device)
                 image = sp.to_device(x_reshape[i], self.op_device)

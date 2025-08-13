@@ -280,14 +280,14 @@ class SingularValueThresholdingNumba(sp.prox.Prox):
         output = np.zeros_like(input)
         # noticed block_shape is define differently in the numba svt.
         bthresh = float(self.lamda*alpha * np.sqrt(self.num_encodes*np.prod(self.block_shape)))
-        print(f'Numba {bthresh}')
+        # print(f'Numba {bthresh}')
         if len(self.block_size) == 3:
             output = svt_numba3(output, input, bthresh, tuple(self.block_shape), tuple(self.block_stride), self.block_iter, self.num_encodes)
         elif len(self.block_size) ==2:
             bthresh = float(self.lamda*alpha)
             update_th = svt_numba2_update_threshold(input, tuple(self.block_shape), tuple(self.block_stride), self.num_encodes)
             update_bthresh = bthresh*update_th  
-            print(f'bthresh {bthresh}, update {update_th} and updated bthresh {update_bthresh}')
+            # print(f'bthresh {bthresh}, update {update_th} and updated bthresh {update_bthresh}')
             output = svt_numba2(output, input, update_bthresh, tuple(self.block_shape), tuple(self.block_stride),
                                 self.block_iter, self.num_encodes)
         else:
@@ -297,7 +297,7 @@ class SingularValueThresholdingNumba(sp.prox.Prox):
         output = sp.to_device(output, initial_device)
         output = initial_device.xp.reshape(output, self.old_shape)
 
-        print(f'SVT took {time.time() - t}')
+        # print(f'SVT took {time.time() - t}')
 
         return output
 

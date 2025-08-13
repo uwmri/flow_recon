@@ -265,6 +265,13 @@ if __name__ == "__main__":
         blk_widths = []
         for scale in range(num_scales):
             blk_widths.append([im_size// (2**scale) for im_size in smaps.shape[1:]])
+        
+        # blk_widths = [
+        #     [48, 48],   # Coarse scale
+        #     [36, 36],   # Mid-scale
+        #     [24, 24],   # Fine scale
+        #     [16, 16],   # Ultra-fine scale
+        # ]
 
         kdata = mri_raw.kdata
         coord = mri_raw.coords
@@ -278,6 +285,8 @@ if __name__ == "__main__":
                            device=sp.Device(args.device),
                            out_iter_mon=True,
                            comm=comm,
+                           alpha=0.8,
+                           hanning_window=True,
                            log_dir=args.out_folder,
                            num_encodings=mri_raw.Num_Encodings)
 
@@ -356,7 +365,7 @@ if __name__ == "__main__":
                                 block_width=args.llr_block_width, log_folder=args.out_folder,
                                 composite_init=False
                                 ).run()
-
+        logger.info(f'Image shape {img.shape}')
     elif args.recon_type == 'sense':
 
         img = []
@@ -411,6 +420,7 @@ if __name__ == "__main__":
     img = np.stack(img,axis=0)
     img = sp.to_device(img, sp.cpu_device)
     img = np.reshape(img, (args.frames*args.frames2, -1) + smaps.shape[1:])
+    img = np.squeeze(img)
     logger.info(f'Image shape {img.shape}')
 
     img_mag = np.abs(img)
@@ -421,13 +431,13 @@ if __name__ == "__main__":
     smaps_mag = np.abs(smaps)
 
     if args.flow_processing:
-        if num_enc == 5:
+        if mri_raw.Num_Encodings == 5:
             encoding = "5pt"
-        elif num_enc == 4:
+        elif mri_raw.Num_Encodings == 4:
             encoding = "4pt-referenced"
-        elif num_enc == 3:
+        elif mri_raw.Num_Encodings == 3:
             encoding = "3pt"
-        elif num_enc == 2:
+        elif mri_raw.Num_Encodings == 2:
             encoding = "2pt"
 
         print(f' encoding type is {encoding}')
