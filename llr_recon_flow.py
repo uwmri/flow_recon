@@ -66,9 +66,6 @@ if __name__ == "__main__":
     parser.add_argument('--llr_block_width', type=int, default=32)
     parser.add_argument('--data_oversampling', type=float, default=2.0)
 
-    parser.set_defaults(no_autofov=False)
-    parser.add_argument('--no_autofov', dest='no_autofov', action='store_true')
-
     parser.set_defaults(discrete_gates=False)
     parser.add_argument('--discrete_gates', dest='discrete_gates', action='store_true')
 
@@ -161,7 +158,7 @@ if __name__ == "__main__":
     else:
         autofov_block_size = 8
 
-    if not args.no_autofov:
+    if args.autofov:
         autofov(mri_raw=mri_raw, thresh=args.thresh, scale=args.scale, oversample=args.data_oversampling,
             square=False, block_size=autofov_block_size, logdir=args.out_folder)
 
@@ -261,16 +258,14 @@ if __name__ == "__main__":
         #blk_widths = (128, 96, 64, 48)
         #blk_widths = (512, 64)
 
-        num_scales = 4
+        num_scales = 3
         blk_widths = []
         for scale in range(num_scales):
             blk_widths.append([im_size// (2**scale) for im_size in smaps.shape[1:]])
         
         # blk_widths = [
-        #     [48, 48],   # Coarse scale
-        #     [36, 36],   # Mid-scale
-        #     [24, 24],   # Fine scale
-        #     [16, 16],   # Ultra-fine scale
+        #     [320, 320],
+        #     [160, 160],
         # ]
 
         kdata = mri_raw.kdata
