@@ -8,13 +8,12 @@
 FILENAME=""
 PCVIPR=""
 SMS_FACTOR=2
-SLICE="all"
 RCFRAMES=40
 RESP="exp"
-CR="pils"
+CR="sense"
 ITER="10"
 EPOCH="20"
-LAMBDA="0.01"
+LAMBDA="0.00001"
 TIME="full"
 OUT_NAME="SMS"
 ADD_FLAGS=()
@@ -24,7 +23,6 @@ usage() {
 	-f [path/to/data]
 	-p [do pcvipr_recon before SMS recon to export MRI_Raw file (provide path/to/raw_data)]
 	-n [sms factor, default is 2]
-	-s [slice number to recon, default is all]
 	-c [# of cardiac frames, default is 40] 
 	-r [respiratory type (exp, insp, or none, default is exp)]
 	-l [constrained recon (pils, sense, llr, or mslr, default is pils)]
@@ -47,7 +45,6 @@ while getopts 'f:p:n:s:r:c:l:i:e:y:t:o:z:x:h' flag; do
 		f) FILENAME="${OPTARG}" ;;
 		p) PCVIPR="${OPTARG}" ;;
 		n) SMS_FACTOR="${OPTARG}" ;;
-		s) SLICE="${OPTARG}" ;;
 		c) RCFRAMES="${OPTARG}" ;;
 		r) RESP="${OPTARG}" ;;
 		l) CR="${OPTARG}" ;;
@@ -78,16 +75,16 @@ if [ -z "$FILENAME" ]; then
 fi
 
 if [ "${RECON_TYPE}" == "test" ]; then
-	BASE_FLAGS=(--smap_type lowres --flow_processing --sms_factor "${SMS_FACTOR}")
+	BASE_FLAGS=(--smap_type lowres --coil_batch_size 40 --flow_processing --sms_factor "${SMS_FACTOR}")
 else 
-	BASE_FLAGS=(--gate_type ecg --resp_gate --resp_filter_window 5 --smap_type lowres --flow_processing --sms_factor "${SMS_FACTOR}")
+	BASE_FLAGS=(--gate_type ecg --smap_type lowres --coil_batch_size 20 --flow_processing --sms_factor "${SMS_FACTOR}")
 fi
 
 
 if [ "$RESP" == "exp" ]; then
-	RESP_FLAG=(--resp_sign 1)
+	RESP_FLAG=(--resp_gate --resp_filter_window 5 --resp_sign 1)
 elif [ "$RESP" == "insp" ]; then
-	RESP_FLAG=(--resp_sign -1)
+	RESP_FLAG=(--resp_gate --resp_filter_window 5 --resp_sign -1)
 elif [ "$RESP" == "none" ]; then
 	RESP_FLAG=(--resp_efficiency 1)
 else
@@ -117,16 +114,18 @@ else
 	TIME_FLAG=(--time_range "${TIME}")
 fi
 
-if [ "${SLICE}" == "all" ]; then
-	for i in $(seq 0 $((SMS_FACTOR-1))); do
-		SMS_FLAG=(--sms_slice "${i}")
-		NAME="${OUT_NAME}_slice${i}.h5"
-		llr_recon_flow.py --filename "${FILENAME}" "${BASE_FLAGS[@]}" --frames "${RCFRAMES}" "${CR_FLAG[@]}" "${RESP_FLAG[@]}" "${SMS_FLAG[@]}" "${TIME_FLAG[@]}" "${ADD_FLAGS[@]}" --out_filename "${NAME}"
-		llr_recon_flow.py --filename "${FILENAME}" "${BASE_FLAGS[@]}" --frames "${RCFRAMES}" "${CR_FLAG[@]}" "${RESP_FLAG[@]}" "${SMS_FLAG[@]}" "${TIME_FLAG[@]}" "${ADD_FLAGS[@]}" --out_filename "${NAME}" | tee pyrecon_${NAME}.log
-	done
-else
-	SMS_FLAG=(--sms_slice "${SLICE}")
-	NAME="${OUT_NAME}_slice${SLICE}.h5"
-	echo llr_recon_flow.py --filename "${FILENAME}" "${BASE_FLAGS[@]}" --frames "${RCFRAMES}" "${CR_FLAG[@]}" "${RESP_FLAG[@]}" "${SMS_FLAG[@]}" "${TIME_FLAG[@]}" "${ADD_FLAGS[@]}" --out_filename "${NAME}"
-	llr_recon_flow.py --filename "${FILENAME}" "${BASE_FLAGS[@]}" --frames "${RCFRAMES}" "${CR_FLAG[@]}" "${RESP_FLAG[@]}" "${SMS_FLAG[@]}" "${TIME_FLAG[@]}" "${ADD_FLAGS[@]}" --out_filename "${NAME}" | tee pyrecon_${NAME}.log
-fi
+echo llr_recon_flow.py --filename "${FILENAME}" "${BASE_FLAGS[@]}" --frames "${RCFRAMES}" "${CR_FLAG[@]}" "${RESP_FLAG[@]}" "${TIME_FLAG[@]}" "${ADD_FLAGS[@]}" --out_filename "${OUT_NAME}"
+llr_recon_flow.py --filename "${FILENAME}" "${BASE_FLAGS[@]}" --frames "${RCFRAMES}" "${CR_FLAG[@]}" "${RESP_FLAG[@]}" "${TIME_FLAG[@]}" "${ADD_FLAGS[@]}" --out_filename "${OUT_NAME}" | tee "pyrecon_${OUT_NAME}.log"
+# if [ "${SLICE}" == "all" ]; then
+# 	for i in $(seq 0 $((SMS_FACTOR-1))); do
+# 		SMS_FLAG=(--sms_slice "${i}")
+# 		NAME="${OUT_NAME}_slice${i}.h5"
+# 		echo llr_recon_flow.py --filename "${FILENAME}" "${BASE_FLAGS[@]}" --frames "${RCFRAMES}" "${CR_FLAG[@]}" "${RESP_FLAG[@]}" "${SMS_FLAG[@]}" "${TIME_FLAG[@]}" "${ADD_FLAGS[@]}" --out_filename "${NAME}"
+# 		llr_recon_flow.py --filename "${FILENAME}" "${BASE_FLAGS[@]}" --frames "${RCFRAMES}" "${CR_FLAG[@]}" "${RESP_FLAG[@]}" "${SMS_FLAG[@]}" "${TIME_FLAG[@]}" "${ADD_FLAGS[@]}" --out_filename "${NAME}" | tee pyrecon_${NAME}.log
+# 	done
+# else
+# 	SMS_FLAG=(--sms_slice "${SLICE}")
+# 	NAME="${OUT_NAME}_slice${SLICE}.h5"
+# 	echo llr_recon_flow.py --filename "${FILENAME}" "${BASE_FLAGS[@]}" --frames "${RCFRAMES}" "${CR_FLAG[@]}" "${RESP_FLAG[@]}" "${SMS_FLAG[@]}" "${TIME_FLAG[@]}" "${ADD_FLAGS[@]}" --out_filename "${NAME}"
+# 	llr_recon_flow.py --filename "${FILENAME}" "${BASE_FLAGS[@]}" --frames "${RCFRAMES}" "${CR_FLAG[@]}" "${RESP_FLAG[@]}" "${SMS_FLAG[@]}" "${TIME_FLAG[@]}" "${ADD_FLAGS[@]}" --out_filename "${NAME}" | tee pyrecon_${NAME}.log
+# fi
