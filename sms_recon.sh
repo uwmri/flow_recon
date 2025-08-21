@@ -86,7 +86,7 @@ if [ "$RESP" == "exp" ]; then
 elif [ "$RESP" == "insp" ]; then
 	RESP_FLAG=(--resp_gate --resp_filter_window 5 --resp_sign -1)
 elif [ "$RESP" == "none" ]; then
-	RESP_FLAG=(--resp_efficiency 1)
+	RESP_FLAG=(--resp_gate --resp_efficiency 1)
 else
 	echo "invalid respiratory type"
 	usage

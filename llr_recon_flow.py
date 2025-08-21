@@ -343,7 +343,6 @@ if __name__ == "__main__":
     elif args.recon_type == 'sense':
 
         img = []
-        # print(f"mri_raw.kdata : {len(mri_raw.kdata[0])}")
         for i in range(len(mri_raw.kdata)):
             logger.info(f'Sense Recon : Frame {i}')
 
@@ -431,7 +430,7 @@ if __name__ == "__main__":
             # logger.info(f'Image shape before reshape {img_slice.shape}')
             img = np.stack(img,axis=0)
             img = sp.to_device(img, sp.cpu_device)
-            img = np.reshape(img, (args.frames*args.frames2, -1) + smaps.shape[1:])
+            img = np.reshape(img, (args.frames*args.frames2, -1) + smaps.shape[1:-1]) # added sms_factor dimension to smap
             img = np.squeeze(img)
             logger.info(f'Image shape {img.shape}')
 

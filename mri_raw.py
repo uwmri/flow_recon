@@ -321,6 +321,8 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
     coord = mri_rawdata.coords[0]
     dcf = mri_rawdata.dcf[0]
     kdata = mri_rawdata.kdata[0]
+    sms_blips = mri_rawdata.sms_blips[0]
+    sms_factor = mri_rawdata.sms_factor
 
     if smap_type == 'espirit':
 
@@ -420,31 +422,61 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
 
     elif smap_type == "lowres":
         # Get a composite image
-        img_shape = sp.estimate_shape(coord)
-        image = store_device.xp.zeros([mri_rawdata.Num_Coils] + img_shape, dtype=store_device.xp.complex64)
+        if sms_factor > 1:
+            img_shape = sp.estimate_shape(coord)
+            image = store_device.xp.zeros([mri_rawdata.Num_Coils] + img_shape + [sms_factor], dtype=store_device.xp.complex64)
 
-        #for e in range(mri_rawdata.Num_Encodings):
-        for e in range(1):
-            xp = sp.get_device(mri_rawdata.coords[e]).xp
-            kr = xp.sum(mri_rawdata.coords[e] ** 2, axis=-1)
-            lpf = xp.exp(-kr / (2 * (32. ** 2)))
-            lpf *= mri_rawdata.dcf[e]
-            lpf = array_to_gpu(lpf, device)
+            #for e in range(mri_rawdata.Num_Encodings):
+            for s in range(sms_factor):
+                logger.info(f'Reconstructing smap for SMS slice {s}')
+                for e in range(1):
+                    xp = sp.get_device(mri_rawdata.coords[e]).xp
+                    kr = xp.sum(mri_rawdata.coords[e] ** 2, axis=-1)
+                    lpf = xp.exp(-kr / (2 * (16. ** 2)))
+                    lpf *= mri_rawdata.dcf[e]
+                    lpf = array_to_gpu(lpf, device)
 
-            for c in range(mri_rawdata.Num_Coils):
-                logger.info(f'Reconstructing encode, coil {e} , {c} ')
-                ksp = array_to_gpu(mri_rawdata.kdata[e][c, ...], op_device)
-                ksp *= lpf
-                coords_temp = array_to_gpu(mri_rawdata.coords[e], op_device)
-                image_temp = sp.nufft_adjoint(ksp, coords_temp, img_shape)
-                image[c] += sp.to_device(image_temp, store_device)
+                    for c in range(mri_rawdata.Num_Coils):
+                        logger.info(f'Reconstructing encode, coil {e} , {c} ')
+                        ksp = array_to_gpu(mri_rawdata.kdata[e][c, ...], op_device)
+                        ksp *= sp.to_device(np.conj(sms_blips[c, ..., s]), op_device)
+                        ksp *= lpf
+                        coords_temp = array_to_gpu(mri_rawdata.coords[e], op_device)
+                        image_temp = sp.nufft_adjoint(ksp, coords_temp, img_shape)
+                        image[c, ..., s] += sp.to_device(image_temp, store_device)
 
-        xp = store_device.xp
-        sos = xp.sqrt(xp.sum(xp.abs(image) **2, axis=0))
-        sos = xp.expand_dims(sos, axis=0)
-        sos = sos + xp.max(sos)*1e-5
+            xp = store_device.xp
+            sos = xp.sqrt(xp.sum(xp.abs(image) **2, axis=0))
+            sos = xp.expand_dims(sos, axis=0)
+            sos = sos + xp.max(sos)*1e-5
 
-        smaps = image / sos
+            smaps = image / sos
+        else:
+            img_shape = sp.estimate_shape(coord)
+            image = store_device.xp.zeros([mri_rawdata.Num_Coils] + img_shape, dtype=store_device.xp.complex64)
+
+            #for e in range(mri_rawdata.Num_Encodings):
+            for e in range(1):
+                xp = sp.get_device(mri_rawdata.coords[e]).xp
+                kr = xp.sum(mri_rawdata.coords[e] ** 2, axis=-1)
+                lpf = xp.exp(-kr / (2 * (32. ** 2)))
+                lpf *= mri_rawdata.dcf[e]
+                lpf = array_to_gpu(lpf, device)
+
+                for c in range(mri_rawdata.Num_Coils):
+                    logger.info(f'Reconstructing encode, coil {e} , {c} ')
+                    ksp = array_to_gpu(mri_rawdata.kdata[e][c, ...], op_device)
+                    ksp *= lpf
+                    coords_temp = array_to_gpu(mri_rawdata.coords[e], op_device)
+                    image_temp = sp.nufft_adjoint(ksp, coords_temp, img_shape)
+                    image[c] += sp.to_device(image_temp, store_device)
+
+            xp = store_device.xp
+            sos = xp.sqrt(xp.sum(xp.abs(image) **2, axis=0))
+            sos = xp.expand_dims(sos, axis=0)
+            sos = sos + xp.max(sos)*1e-5
+
+            smaps = image / sos
 
         print(f'Smaps Device = {sp.get_device(smaps)}')
     else:
@@ -1216,20 +1248,31 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, sms_factor=
                     ksp.append(k)
             ksp = np.stack(ksp, axis=0)
             
+            # if sms_factor > 1:
+            #     logging.info(f"Calculating phase blips for SMS acquisition with {sms_factor} slices")
+            #     coils = ksp.shape[0]
+            #     projs = ksp.shape[2]
+            #     sms_blips = np.zeros((coils, 1, projs, ksp.shape[3], sms_factor), dtype=np.complex64)
+            #     for sms_slice in range(sms_factor):
+            #         sms_phase = (2 * sms_slice - (sms_factor - 1)) * math.pi / sms_factor
+            #         for c in tqdm(range(coils)):
+            #             for p in range(projs):
+            #                 blip = (p%sms_factor) * sms_phase
+            #                 euler = complex(math.cos(blip), math.sin(blip))  # e^(i*theta) phase blip
+            #                 sms_blips[c, 0, p, :, sms_slice] = euler
+            # else:
+            #     sms_blips = np.zeros((ksp.shape[0], 1, ksp.shape[2], ksp.shape[3], 1), dtype=np.complex64)
+            
             if sms_factor > 1:
                 logging.info(f"Calculating phase blips for SMS acquisition with {sms_factor} slices")
-                coils = ksp.shape[0]
-                projs = ksp.shape[2]
-                sms_blips = np.zeros((coils, 1, projs, ksp.shape[3], sms_factor), dtype=np.complex64)
-                for sms_slice in range(sms_factor):
-                    sms_phase = (2 * sms_slice - (sms_factor - 1)) * math.pi / sms_factor
-                    for c in tqdm(range(coils)):
-                        for p in range(projs):
-                            blip = (p%sms_factor) * sms_phase
-                            euler = complex(math.cos(blip), math.sin(blip))  # e^(i*theta) phase blip
-                            sms_blips[c, 0, p, :, sms_slice] = euler
+                coils, _, projs, readout = ksp.shape  # (coils, 1, projs, readout)
+                sms_phases = (2 * np.arange(sms_factor) - (sms_factor - 1)) * math.pi / sms_factor
+                proj_mod = np.arange(projs) % sms_factor
+                blips = np.exp(1j * np.outer(proj_mod, sms_phases)).astype(np.complex64)
+                sms_blips = np.broadcast_to(blips[None, None, :, None, :],
+                                            (coils, 1, projs, readout, sms_factor)).copy()
             else:
-                sms_blips = np.zeros((ksp.shape[0], 1, ksp.shape[2], ksp.shape[3], 1), dtype=np.complex64)
+                sms_blips = np.zeros((*ksp.shape[:4], 1), dtype=np.complex64)
 
             # Regrid the readout to reduce oversampling
             # coord, dcf, ksp = radial3d_regrid(coord, dcf, ksp)

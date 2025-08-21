@@ -77,11 +77,11 @@ class SenseSMSRecon(sp.app.LinearLeastSquares):
             y = sp.to_device(y, device=device)
         
         # extend ishape dimensions to include multiple slices
-        if sms_factor > 1:
-            ishape = tuple(list(mps.shape[1:]) + [sms_factor])
-            mps = np.repeat(mps[..., None], sms_factor, axis=-1)
-        else:
-            ishape = mps.shape[1:]
+        # if sms_factor > 1:
+        #     ishape = tuple(list(mps.shape[1:]) + [sms_factor])
+        #     # mps = np.repeat(mps[..., None], sms_factor, axis=-1)
+        # else:
+        ishape = mps.shape[1:] # (nx, ny, nslices)
 
         A = SenseSMS(
             mps,
@@ -98,6 +98,9 @@ class SenseSMSRecon(sp.app.LinearLeastSquares):
 
         if comm is not None:
             show_pbar = show_pbar and comm.rank == 0
+        
+        # compressed sensing
+        # proxg = sp.prox.L1Reg(ishape, lamda=lamda)
 
         super().__init__(A, y, lamda=lamda, show_pbar=show_pbar, **kwargs)
 
@@ -141,7 +144,7 @@ def SenseSMS(
     # Get image shape and dimension.
     if ishape is None:
         ishape = mps.shape[1:]
-        img_ndim = mps.ndim - 1
+        img_ndim = mps.ndim - 2 # - 1 for sms_factor 
     else:
         img_ndim = len(ishape) - 1 # - 1 for sms_factor (fix later)
 
