@@ -1,7 +1,7 @@
-#%%
+#%% Importing
 import h5py
 import numpy as np
-#%%
+#%% Bringing the .h5 file in
 with h5py.File('/mounts/data/analyses/bawad2/testData/Images.h5', 'r') as hf:
     temp_img = hf['IMAGE'][:]
     temp_mag = hf['IMAGE_MAG'][:]
@@ -9,7 +9,7 @@ with h5py.File('/mounts/data/analyses/bawad2/testData/Images.h5', 'r') as hf:
 print(f"Loaded image shape: {temp_img.shape}")
 print(f"Loaded mag shape: {temp_mag.shape}")
 print(f"Loaded phase shape: {temp_phase.shape}")
-#%%
+#%% Calling in the encodings into their own images
 enc1, enc2, enc3, enc4, enc5, enc6, enc7, enc8 = [temp_img[:, i, :, :, :] for i in range(8)]
 encs = np.stack([enc1, enc2, enc3, enc4, enc5, enc6, enc7, enc8], axis=1)
 
@@ -36,20 +36,20 @@ phase2 = np.concatenate((encs[:, [4]], encs[:,[1]], encs[:, [6]], encs[:,[3]]), 
 
 print(f"Phase1 shape: {phase1.shape}")
 print(f"Phase2 shape: {phase2.shape}")
-#%%
-with h5py.File('Images1.h5', 'w') as hf:  
+#%% Creating new images file
+with h5py.File('/mounts/data/analyses/bawad2/testData/Image1.h5', 'w') as hf:  
     hf.create_dataset('IMAGE', data=img1)
     hf.create_dataset('IMAGE_MAG', data=mag1)
     hf.create_dataset('IMAGE_PHASE', data=phase1)
     print("Datasets:", list(hf.keys()))
 
-with h5py.File('Images2.h5', 'w') as hf:  
+with h5py.File('/mounts/data/analyses/bawad2/testData/Image2.h5', 'w') as hf:  
     hf.create_dataset('IMAGE', data=img2)
     hf.create_dataset('IMAGE_MAG', data=mag2)
     hf.create_dataset('IMAGE_PHASE', data=phase2)
     print("Datasets:", list(hf.keys()))
-#%%
-with h5py.File('Images1.h5', 'r') as hf:
+#%% Printing shape/size of each dataset to ensure it was done proper
+with h5py.File('/mounts/data/analyses/bawad2/testData/Image1.h5', 'r') as hf:
     print("Datasets:", list(hf.keys()))
     ds_tot = ["IMAGE", "IMAGE_MAG", "IMAGE_PHASE"]
     img = [[] for _ in range(8)]
