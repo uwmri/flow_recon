@@ -67,6 +67,7 @@ def encodingSplitter(inputFile, outputImg1, outputImg2, encodeOrder = "interleaf
         print("Datasets:", list(hf.keys()))
         
 #%% Printing shape/size of each dataset to ensure it was done proper
+import h5py
 with h5py.File('/mounts/data/analyses/bawad2/testData/Image1.h5', 'r') as hf:
     print("Datasets:", list(hf.keys()))
     ds_tot = ["IMAGE", "IMAGE_MAG", "IMAGE_PHASE"]
