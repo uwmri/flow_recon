@@ -13,6 +13,7 @@ from mri_raw import *
 from multi_scale_low_rank_recon import *
 from sense_recon_sms import *
 from llr_recon import *
+from llr_recon_sms import *
 from flow_processing import *
 from svt import *
 import numba as nb
@@ -332,7 +333,7 @@ if __name__ == "__main__":
 
     elif args.recon_type == 'llr':
         logger.info(f'Reconstruct Images ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
-        img = BatchedSenseRecon(mri_raw.kdata, mps=smaps, weights=mri_raw.dcf, coord=mri_raw.coords,
+        img = BatchedSenseSMSRecon(mri_raw.kdata, mps=smaps,sms_factor=args.sms_factor, blips=mri_raw.sms_blips, weights=mri_raw.dcf, coord=mri_raw.coords,
                                 device=sp.Device(args.device), lamda=args.lamda, num_enc=mri_raw.Num_Encodings,
                                 coil_batch_size=None, max_iter=args.max_iter, batched_iter=args.max_iter,
                                 gate_type=args.gate_type, fast_maxeig=args.fast_maxeig,
@@ -366,6 +367,32 @@ if __name__ == "__main__":
             # print('Run Sense')
             frame = sp.to_device(sense.run(), sp.cpu_device)
             img.append(frame)
+    elif args.recon_type == 'wavelet':
+        img = []
+        for i in range(len(mri_raw.kdata)):
+            logger.info(f'Sense Recon : Frame {i}')
+
+            kdata = array_to_gpu(mri_raw.kdata[i], args.device)
+            dcf = array_to_gpu(mri_raw.dcf[i], args.device)
+            coord = array_to_gpu(mri_raw.coords[i], args.device)
+
+            # print(f'Smaps device = {sp.get_device(smaps)}')
+            # print(f'Kdata = device = {sp.get_device(kdata)}')
+            # print(f'DCF device = {sp.get_device(dcf)}')
+            # print(f'Coord device = {sp.get_device(coord)}')
+            
+            if args.sms_factor > 1:
+                blips = array_to_gpu(mri_raw.sms_blips[i], args.device)
+                sense = L1WaveletRecon(kdata, smaps, args.lamda, sms_factor=args.sms_factor, blips=blips, weights=dcf, coord=coord, 
+                                  max_iter=args.max_iter, coil_batch_size=args.coil_batch_size, device=args.device)
+            else:
+                sense = sp.mri.app.L1WaveletRecon(kdata, smaps, args.lamda, weights=dcf, coord=coord, max_iter=args.max_iter, coil_batch_size=args.coil_batch_size, device=args.device)
+                # sense = sp.mri.app.L1WaveletRecon(kdata, smaps, lamda=1e-1, weights=dcf, coord=coord, max_iter=50, coil_batch_size=1, device=args.device)
+                
+            # print('Run Sense')
+            frame = sp.to_device(sense.run(), sp.cpu_device)
+            img.append(frame)
+        
     elif args.recon_type == 'pils':
         logger.info('PILS Recon')
         img = []
@@ -474,25 +501,24 @@ if __name__ == "__main__":
                 header_group = hf.create_group("HEADER")
                 args_str = ";".join(f"{k}={v}" for k, v in vars(args).items() if v is not None)
                 header_group.attrs["recon_params"] = args_str
-                header_group.attrs["fovx"] = mri_raw.fovx
-                header_group.attrs["fovy"] = mri_raw.fovy
-                header_group.attrs["fovz"] = mri_raw.fovz
-                header_group.attrs["matrixx"] = img.shape[2]
-                header_group.attrs["matrixy"] = img.shape[3]
+                header_group.attrs["fovx"] = int(mri_raw.fovx)
+                header_group.attrs["fovy"] = int(mri_raw.fovy)
+                header_group.attrs["fovz"] = int(mri_raw.fovz)
+                header_group.attrs["matrixx"] = int(img.shape[2])
+                header_group.attrs["matrixy"] = int(img.shape[3])
                 if len(img.shape) > 4:
-                    header_group.attrs["matrixz"] = img.shape[4]
+                    header_group.attrs["matrixz"] = int(img.shape[4])
                 else:
                     header_group.attrs["matrixz"] = 1
-                header_group.attrs["frames"] = args.frames
-                if args.time_range is not None:
-                    scan_length = sum([x[1] - x[0] for x in time_ranges])
-                    header_group.attrs["time_res"] = scan_length/args.frames
-                else:
-                    header_group.attrs["time_res"] = (np.max(mri_raw.time[0].flatten()))/args.frames
-                
-                if args.sms_factor > 1:
-                    header_group.attrs["sms_factor"] = args.sms_factor
-                    header_group.attrs["sms_slice"] = sms_slice
+                header_group.attrs["frames"] = int(args.frames)
+                if args.gate_type == "ecg":
+                    header_group.attrs["median_rr"] = float(mri_raw.median_rr)
+                    header_group.attrs["timeres"] = float(mri_raw.median_rr/args.frames)
+                if args.time_range is not None and args.resp_gate:
+                    header_group.attrs["time_range"] = args.time_range
+                    
+                    if args.sms_factor > 1:
+                        header_group.attrs["sms_factor"] = int(args.sms_factor)
                 
                 hf.create_dataset("IMAGE_REAL", data=np.real(img))
                 hf.create_dataset("IMAGE_IMAG", data=np.imag(img))
@@ -554,26 +580,22 @@ if __name__ == "__main__":
             header_group = hf.create_group("HEADER")
             args_str = ";".join(f"{k}={v}" for k, v in vars(args).items() if v is not None)
             header_group.attrs["recon_params"] = args_str
-            header_group.attrs["fovx"] = mri_raw.fovx
-            header_group.attrs["fovy"] = mri_raw.fovy
-            header_group.attrs["fovz"] = mri_raw.fovz
-            header_group.attrs["matrixx"] = img.shape[2]
-            header_group.attrs["matrixy"] = img.shape[3]
+            header_group.attrs["fovx"] = int(mri_raw.fovx)
+            header_group.attrs["fovy"] = int(mri_raw.fovy)
+            header_group.attrs["fovz"] = int(mri_raw.fovz)
+            header_group.attrs["matrixx"] = int(img.shape[2])
+            header_group.attrs["matrixy"] = int(img.shape[3])
             if len(img.shape) > 4:
-                header_group.attrs["matrixz"] = img.shape[4]
+                header_group.attrs["matrixz"] = int(img.shape[4])
             else:
                 header_group.attrs["matrixz"] = 1
-            header_group.attrs["frames"] = args.frames
-            if args.time_range is not None:
-                scan_length = sum([x[1] - x[0] for x in time_ranges])
-                header_group.attrs["time_res"] = scan_length/args.frames
-            else:
-                header_group.attrs["time_res"] = (np.max(mri_raw.time[0].flatten()))/args.frames
-            
-            if args.sms_factor > 1:
-                header_group.attrs["sms_factor"] = args.sms_factor
-                header_group.attrs["sms_slice"] = args.sms_slice
-            
+            header_group.attrs["frames"] = int(args.frames)
+            if args.gate_type == "ecg":
+                header_group.attrs["median_rr"] = float(mri_raw.median_rr)
+                header_group.attrs["timeres"] = float(mri_raw.median_rr/args.frames)
+            if args.time_range is not None and args.resp_gate:
+                header_group.attrs["time_range"] = args.time_range
+                
             hf.create_dataset("IMAGE_REAL", data=np.real(img))
             hf.create_dataset("IMAGE_IMAG", data=np.imag(img))
             hf.create_dataset("IMAGE_PHASE_DIFFERENCE", data=img_phase_difference)

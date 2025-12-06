@@ -9,6 +9,87 @@ def _estimate_weights(y, weights, coord):
 
     return weights
 
+class L1WaveletRecon(sp.app.LinearLeastSquares):
+    r"""L1 Wavelet regularized reconstruction.
+
+    Considers the problem
+
+    .. math::
+        \min_x \frac{1}{2} \| P F S x - y \|_2^2 + \lambda \| W x \|_1
+
+    where P is the sampling operator, F is the Fourier transform operator,
+    S is the SENSE operator, W is the wavelet operator,
+    x is the image, and y is the k-space measurements.
+
+    Args:
+        y (array): k-space measurements.
+        mps (array): sensitivity maps.
+        lamda (float): regularization parameter.
+        weights (float or array): weights for data consistency.
+        coord (None or array): coordinates.
+        wave_name (str): wavelet name.
+        device (Device): device to perform reconstruction.
+        coil_batch_size (int): batch size to process coils.
+        Only affects memory usage.
+        comm (Communicator): communicator for distributed computing.
+        **kwargs: Other optional arguments.
+
+    References:
+        Lustig, M., Donoho, D., & Pauly, J. M. (2007).
+        Sparse MRI: The application of compressed sensing for rapid MR imaging.
+        Magnetic Resonance in Medicine, 58(6), 1082-1195.
+
+    """
+
+    def __init__(
+        self,
+        y,
+        mps,
+        lamda,
+        sms_factor=1,
+        blips=None,
+        weights=None,
+        coord=None,
+        wave_name="db4",
+        device=sp.cpu_device,
+        coil_batch_size=None,
+        comm=None,
+        show_pbar=True,
+        transp_nufft=False,
+        **kwargs
+    ):
+        weights = _estimate_weights(y, weights, coord)
+        if weights is not None:
+            y = sp.to_device(y * weights**0.5, device=device)
+        else:
+            y = sp.to_device(y, device=device)
+
+        A = SenseSMS(
+            mps,
+            sms_factor=sms_factor,
+            blips=blips,
+            coord=coord,
+            weights=weights,
+            comm=comm,
+            coil_batch_size=coil_batch_size,
+            transp_nufft=transp_nufft,
+        )
+        img_shape = mps.shape[1:]
+        W = sp.linop.Wavelet(img_shape, wave_name=wave_name)
+        proxg = sp.prox.UnitaryTransform(sp.prox.L1Reg(W.oshape, lamda), W)
+
+        def g(input):
+            device = sp.get_device(input)
+            xp = device.xp
+            with device:
+                return lamda * xp.sum(xp.abs(W(input))).item()
+
+        if comm is not None:
+            show_pbar = show_pbar and comm.rank == 0
+
+        super().__init__(A, y, proxg=proxg, g=g, show_pbar=show_pbar, **kwargs)
+
+
 class SenseSMSRecon(sp.app.LinearLeastSquares):
     r"""SENSE Reconstruction.
 
@@ -100,7 +181,7 @@ class SenseSMSRecon(sp.app.LinearLeastSquares):
             show_pbar = show_pbar and comm.rank == 0
         
         # compressed sensing
-        # proxg = sp.prox.L1Reg(ishape, lamda=lamda)
+        proxg = sp.prox.L2Reg(ishape, lamda=lamda)
 
         super().__init__(A, y, lamda=lamda, show_pbar=show_pbar, **kwargs)
 

@@ -77,7 +77,7 @@ fi
 if [ "${RECON_TYPE}" == "test" ]; then
 	BASE_FLAGS=(--smap_type lowres --coil_batch_size 40 --flow_processing --sms_factor "${SMS_FACTOR}")
 else 
-	BASE_FLAGS=(--gate_type ecg --smap_type lowres --coil_batch_size 20 --flow_processing --sms_factor "${SMS_FACTOR}")
+	BASE_FLAGS=(--autofov --gate_type ecg --smap_type lowres --coil_batch_size 10 --flow_processing --sms_factor "${SMS_FACTOR}")
 fi
 
 
@@ -97,6 +97,8 @@ if [ "$CR" == "pils" ]; then
 	CR_FLAG=(--recon_type pils)
 elif [ "$CR" == "sense" ]; then
 	CR_FLAG=(--recon_type sense --max_iter $ITER --lamda $LAMBDA)
+elif [ "$CR" == "wavelet" ]; then
+	CR_FLAG=(--recon_type wavelet --max_iter $ITER --lamda $LAMBDA)
 elif [ "$CR" == "llr" ]; then
 	CR_FLAG=(--recon_type llr --max_iter $ITER --lamda $LAMBDA --llr_block_width 16)
 elif [ "$CR" == "mslr" ]; then

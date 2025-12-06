@@ -28,6 +28,7 @@ class MRI_Raw:
     fovy = 0
     fovz = 0
     sms_factor = 1
+    sms_fov = 100
     trajectory_type = None
     dft_needed = None
     Num_Frames = None
@@ -39,8 +40,20 @@ class MRI_Raw:
     dcf = None
     kdata = None
     frame = None
+    median_rr = 1
     target_image_size = [256, 256, 64]
-
+    ix = 0;
+    iy = 0;
+    iz = 0;
+    jx = 0;
+    jy = 0;
+    jz = 0;
+    kx = 0;
+    ky = 0;
+    kz = 0;
+    sx = 0;
+    sy = 0;
+    sz = 0;
 
 def resample_arc(input, coord, oshape=None, oversamp=2, width=7):
     """Adjoint non-uniform Fast Fourier Transform.
@@ -714,6 +727,8 @@ def gate_kspace2d(mri_raw=None, num_frames=[10, 10], gate_type=['time', 'prep'],
     mri_rawG.fovx = mri_raw.fovx
     mri_rawG.fovy = mri_raw.fovy
     mri_rawG.fovz = mri_raw.fovz
+    mri_rawG.sms_factor = mri_raw.sms_factor
+    mri_rawG.sms_fov= mri_raw.sms_fov
 
     # List array
     mri_rawG.coords = []
@@ -723,6 +738,7 @@ def gate_kspace2d(mri_raw=None, num_frames=[10, 10], gate_type=['time', 'prep'],
     mri_rawG.ecg = []
     mri_rawG.prep = []
     mri_rawG.resp = []
+    mri_rawG.sms_blips = []
 
     gate_signals = {
         'ecg': mri_raw.ecg,
@@ -825,6 +841,12 @@ def gate_kspace2d(mri_raw=None, num_frames=[10, 10], gate_type=['time', 'prep'],
     logger.info(f'Standard deviation = {np.std(points_per_bin)}')
 
     mri_rawG.Num_Frames = num_frames
+    if gate_type[0] == "ecg"
+        mri_rawG.median_rr = t_max0
+    elif gate_type[1] == "ecg"
+        mri_rawG.median_rr = t_max1
+    else:
+        mri_rawG.median_rr = mri_raw.median_rr
 
     return (mri_rawG)
 
@@ -843,6 +865,7 @@ def gate_kspace(mri_raw=None, num_frames=10, gate_type='time', discrete_gates=Fa
     mri_rawG.fovy = mri_raw.fovy
     mri_rawG.fovz = mri_raw.fovz
     mri_rawG.sms_factor = mri_raw.sms_factor
+    mri_rawG.sms_fov = mri_raw.sms_fov
 
     # List array for the gated k-space
     mri_rawG.coords = []
@@ -961,6 +984,10 @@ def gate_kspace(mri_raw=None, num_frames=10, gate_type='time', discrete_gates=Fa
     logger.info(f'Standard deviation = {np.std(points_per_bin)}')
 
     mri_rawG.Num_Frames = num_frames
+    if gate_type == "ecg"
+        mri_rawG.median_rr = t_max
+    else:
+        mri_rawG.median_rr = mri_raw.median_rr
 
     return (mri_rawG)
 
@@ -1053,6 +1080,8 @@ def resp_gate(mri_raw=None, efficiency=0.5, resp_sign=1, resp_filter_window=10, 
     mri_rawG.fovy = mri_raw.fovy
     mri_rawG.fovz = mri_raw.fovz
     mri_rawG.sms_factor = mri_raw.sms_factor
+    mri_rawG.sms_fov = mri_raw.sms_fov
+    mri_rawG.median_rr = mri_raw.median_rr
 
     # List array
     mri_rawG.coords = []
@@ -1148,7 +1177,7 @@ def resp_gate(mri_raw=None, efficiency=0.5, resp_sign=1, resp_filter_window=10, 
 
     return mri_rawG
 
-def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, sms_factor=None,
+def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None,
                 compress_coils=-1, scale_kdata=True):
 
     with h5py.File(h5_filename, 'r') as hf:
@@ -1164,21 +1193,56 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, sms_factor=
 
             dft_needed = [np.squeeze(hf['Kdata'].attrs['dft_neededX']), np.squeeze(hf['Kdata'].attrs['dft_neededY']),
                           np.squeeze(hf['Kdata'].attrs['dft_neededZ'])]
+            
             fov_flag = False
+            sms_flag = False
+            rot_flag = False
             try:
                 fovx = np.squeeze(hf['Kdata'].attrs['fovx'])
                 fovz = np.squeeze(hf['Kdata'].attrs['fovz'])
                 fovy = np.squeeze(hf['Kdata'].attrs['fovy'])
                 fov_flag = True
             except:
-                print('FOV attributes not found')
                 pass
+            try:
+                sms_factor = np.squeeze(hf['Kdata'].attrs['sms_factor'])
+                sms_fov = np.squeeze(hf['Kdata'].attrs['sms_fov'])
+                sms_flag = True
+            except:
+                pass
+            try:
+                ix = np.squeeze(hf['Kdata'].attrs['ix'])
+                iy = np.squeeze(hf['Kdata'].attrs['iy'])
+                iz = np.squeeze(hf['Kdata'].attrs['iz'])
+                jx = np.squeeze(hf['Kdata'].attrs['jx'])
+                jy = np.squeeze(hf['Kdata'].attrs['jy'])
+                jz = np.squeeze(hf['Kdata'].attrs['jz'])
+                kx = np.squeeze(hf['Kdata'].attrs['kx'])
+                ky = np.squeeze(hf['Kdata'].attrs['ky'])
+                kz = np.squeeze(hf['Kdata'].attrs['kz'])
+                sx = np.squeeze(hf['Kdata'].attrs['sx'])
+                sy = np.squeeze(hf['Kdata'].attrs['sy'])
+                sz = np.squeeze(hf['Kdata'].attrs['sz'])
+                rot_flag = True
+            except:
+                pass
+            
             logging.info(f'Frames {Num_Frames}')
             logging.info(f'Coils {Num_Coils}')
             logging.info(f'Encodings {Num_Encodings}')
             logging.info(f'Trajectory Type {trajectory_type}')
             logging.info(f'DFT Needed {dft_needed}')
-            logging.info(f'FOV x:{fovx} y:{fovy} z:{fovz}')
+            if fov_flag:
+                logging.info(f'FOV x:{fovx} y:{fovy} z:{fovz}')
+            if sms_flag:
+                logging.info(f'SMS factor: {sms_factor}')
+                logging.info(f'SMS fov: {sms_fov}')
+            if rot_flag:
+                logging.info(f'Rotation matrix:')
+                logging.info(f'[{ix} {iy} {iz} 0]
+                               [{jx} {jy} {jz} 0]
+                               [{kx} {ky} {kz} 0]
+                               [{sx} {sy} {sz} 1]')
 
         except Exception:
             logging.info('Missing header data')
@@ -1204,6 +1268,7 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, sms_factor=
         else:
             print('FOV attributes not found')
         mri_raw.sms_factor = sms_factor
+        mri_raw.sms_fov = sms_fov
         
         # List array
         mri_raw.coords = []
