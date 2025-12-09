@@ -316,6 +316,14 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
             smaps = image / sos
 
         else:
+            
+            # Jsense complains Magnus spiral data require casting data types again, just force during mri_raw structure filling
+            # from NVIDIA: cuDNN’s algorithm finder is strict about dtype/layout; if the combination isn’t supported, it returns “no available algorithm”
+            logger.info(f'Magnus data types are: kdata = {kdata.dtype},  coord = {coord.dtype},  dcf = {dcf.dtype}')
+
+            kdata   = np.asarray(kdata,   dtype=np.complex64)  # this was complex64
+            coord = np.asarray(coord, dtype=np.float32) # this was float64   in magnus (maybe from extended dynamic range settings)
+            dcf   = np.asarray(dcf,   dtype=np.float32) # this was float64 
 
             dcf = sp.to_device(dcf, device)
             coord = sp.to_device(coord, device)
@@ -323,9 +331,11 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
 
             print(dcf.shape)
             print(coord.shape)
-            print(kdata.shape)            
+            print(kdata.shape)  
 
-            # Warning: image shape hard coded to 320
+            #img_shape=(320,320)
+            #logger.info(f'WARNING: forcing image shape to {img_shape}')
+
             smaps = mr.app.JsenseRecon(kdata,
                                        coord=coord,
                                        weights=dcf,
@@ -335,11 +345,13 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
                                        device=device,
                                        max_iter=args.jsense_max_iter,
                                        max_inner_iter=args.jsense_max_inner_iter).run()
-                                       #img_shape=(320,320)).run()
+            #                           img_shape=img_shape).run()
 
         # Get a composite image
         img_shape = sp.estimate_shape(coord)
         image = 0
+        logger.info(f'Current estimated image shape: {img_shape}')
+
         # check if dcf are just ones, which leads to terrible smap masks
         if np.all(mri_rawdata.dcf[0] == 1):
             logger.info("mri_rawdata.dcf[e=0] contains only ones. Doing pipe-menon dcf for better smap mask")
