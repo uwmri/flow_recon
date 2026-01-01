@@ -129,9 +129,10 @@ def lap3(phase_w, direction, mod):
 
 class MRI_4DFlow:
 
-    def __init__(self, encode_type, venc=None, unwrap_lap=False):
+    def __init__(self, encode_type, signal=None, venc=None, unwrap_lap=False):
 
-        'Initialization'
+        # Initialization
+        self.encode_type = encode_type
         self.set_encoding_matrix(encode_type)
         self.venc = venc
         self.NoiseLevel = 0.0 #relative to max signal of 1
@@ -141,7 +142,7 @@ class MRI_4DFlow:
         self.unwrap_lap = unwrap_lap
         
         # Matrices
-        self.signal = None
+        self.signal = signal
         self.velocity_estimate = None
         self.angiogram = None
         self.magnitude = None
@@ -350,10 +351,65 @@ class MRI_4DFlow:
 
         idx = np.where(vmag > self.venc )
         self.angiogram[idx] = self.magnitude[idx]
+        
+
+def export_flow_data(mri_flow, out_name, header_info=None, c_format=False):
+
+    # Export to file
+    try:
+        os.remove(out_name)
+    except OSError:
+        pass
+    
+    # convert to int and scale
+    mg = mri_flow.magnitude * 32767/np.max(mri_flow.magnitude)
+    mg = mg.astype(np.int16)
+    cd = mri_flow.angiogram * 32767/np.max(mri_flow.angiogram)
+    cd = cd.astype(np.int16)
+    vx = mri_flow.velocity_estimate[..., 0].astype(np.int16)
+    vy = mri_flow.velocity_estimate[..., 1].astype(np.int16)
+    vz = mri_flow.velocity_estimate[..., 2].astype(np.int16)
+    
+    print(f'Exporting flow data to {out_name}')
+    with h5py.File(out_name, 'w') as hf:
+        header_group = hf.create_group("Header")
+        data_group = hf.create_group("Data")
+        if header_info is not None:
+            for attr in header_info.keys():
+                header_group.attrs[attr] = header_info[attr]
+        else:
+            header_group.attrs["venc"] = mri_flow.venc
+            header_group.attrs["matrixx"] = mg.shape[0]
+            header_group.attrs["matrixy"] = mg.shape[1]
+            if len(mg.shape) > 3:
+                header_group.attrs["matrixz"] = mg.shape[2]
+            else:
+                header_group.attrs["matrixz"] = 1
+            header_group.attrs["frames"] = mg.shape[-1]
+        
+        if c_format:
+            frames = mri_flow.magnitude.shape[0]
+            data_group.create_dataset("MAG", data=np.squeeze(np.mean(mg, axis=0)))
+            data_group.create_dataset("CD", data=np.squeeze(np.mean(cd, axis=0)))
+            data_group.create_dataset("comp_vd_1", data=np.squeeze(np.mean(vx, axis=0)))
+            data_group.create_dataset("comp_vd_2", data=np.squeeze(np.mean(vy, axis=0)))
+            data_group.create_dataset("comp_vd_3", data=np.squeeze(np.mean(vz, axis=0)))
+            if frames > 1:
+                for i in range(frames):
+                    data_group.create_dataset(f"ph_{i:03}_mag", data=np.squeeze(mg[i, ...]))
+                    data_group.create_dataset(f"ph_{i:03}_cd", data=np.squeeze(cd[i, ...]))
+                    data_group.create_dataset(f"ph_{i:03}_vd_1", data=np.squeeze(vx[i, ...]))
+                    data_group.create_dataset(f"ph_{i:03}_vd_2", data=np.squeeze(vy[i, ...]))
+                    data_group.create_dataset(f"ph_{i:03}_vd_3", data=np.squeeze(vz[i, ...]))
+        else:
+            hf.create_dataset("MAG", data=mg)
+            hf.create_dataset("CD", data=cd)
+            hf.create_dataset("VX", data=vx)
+            hf.create_dataset("VY", data=vy)
+            hf.create_dataset("VZ", data=vz)
 
 
 if __name__ == "__main__":
-
 
     # Parse Command Line
     parser = argparse.ArgumentParser()
@@ -363,9 +419,10 @@ if __name__ == "__main__":
     parser.add_argument('--logdir', type=str, help='folder to log files to, default is current directory')
     parser.add_argument('--out_folder', type=str, default=None)
     parser.add_argument('--out_filename', type=str, default='Flow.h5')
+    parser.add_argument('--c_format', dest='c_format', action='store_true', default=False, help='export flow HDF5 file in C++ recon format')
 
     args = parser.parse_args()
-
+    
     # Put up a file selector if the file is not specified
     if args.filename is None:
         from tkinter import Tk
@@ -373,37 +430,36 @@ if __name__ == "__main__":
 
         Tk().withdraw()
         args.filename = askopenfilename()
-
+    
     if args.out_folder is None:
-        out_folder = os.path.dirname(args.filename)
-    else:
-        out_folder = args.out_folder
-
+        args.out_folder = os.path.dirname(args.filename)
+            
     print(f'Loading {args.filename}')
     with h5py.File(args.filename, 'r') as hf:
-        temp = np.array(hf['IMAGE'])
-        print(temp.shape)
-        #temp = temp['real'] + 1j*temp['imag']
-        #temp = np.moveaxis(temp, -1, 0)
-        #frames = int(temp.shape[0]/4)
-        #temp = np.reshape(temp, newshape=(frames,4, temp.shape[1], temp.shape[2], temp.shape[3]))
-        # temp = np.reshape(temp, newshape=(10,4, temp.shape[-3], temp.shape[-2], temp.shape[-1]))
+        signal = np.array(hf['IMAGE'])
+    
+    print(signal.shape)
+    #signal = signal['real'] + 1j*signal['imag']
+    #signal = np.moveaxis(signal, -1, 0)
+    #frames = int(signal.shape[0]/4)
+    #signal = np.reshape(signal, newshape=(frames,4, signal.shape[1], signal.shape[2], signal.shape[3]))
+    # signal = np.reshape(signal, newshape=(10,4, signal.shape[-3], signal.shape[-2], signal.shape[-1]))
 
-        temp = np.squeeze(temp)
+    signal = np.squeeze(signal)
 
-        if len(temp.shape) == 4:
-            temp = np.expand_dims(temp,axis=0)
+    if len(signal.shape) == 4:
+        signal = np.expand_dims(signal,axis=0)
 
-        frames = int(temp.shape[0])
-        num_encodes = int(temp.shape[1])
+    frames = int(signal.shape[0])
+    num_encodes = int(signal.shape[1])
 
-        print(f' num of frames =  {frames}')
-        print(f' num of encodes = {num_encodes}')
-        #temp = np.reshape(temp,newshape=(5, frames,temp.shape[1],temp.shape[2],temp.shape[3]))
-        #temp = np.reshape(temp,newshape=(temp.shape[1], frames,temp.shape[2],temp.shape[3],temp.shape[4]))
+    print(f' num of frames =  {frames}')
+    print(f' num of encodes = {num_encodes}')
+    #signal = np.reshape(signal,newshape=(5, frames,signal.shape[1],signal.shape[2],signal.shape[3]))
+    #signal = np.reshape(signal,newshape=(signal.shape[1], frames,signal.shape[2],signal.shape[3],signal.shape[4]))
 
-        temp = np.moveaxis(temp,1,-1)
-        print(temp.shape)
+    signal = np.moveaxis(signal,1,-1)
+    print(signal.shape)
 
     if num_encodes == 5:
         encoding = "5pt"
@@ -411,28 +467,18 @@ if __name__ == "__main__":
         encoding = "4pt-referenced"
     elif num_encodes == 3:
         encoding = "3pt"
+    elif num_encodes == 2:
+        encoding = "2pt"
 
     print(f' encoding type is {encoding}')
 
     # Solve for Velocity
-    mri_flow = MRI_4DFlow(encode_type= encoding, venc=args.venc)
-    print(mri_flow.Venc)
-    mri_flow.signal = temp
+    mri_flow = MRI_4DFlow(encoding, signal=signal, venc=args.venc)
+    print(f'venc is {mri_flow.venc}')
     mri_flow.solve_for_velocity()
     mri_flow.update_angiogram()
     #mri_flow.background_phase_correct()
     #mri_flow.update_angiogram()
-
-    # Export to file
-    out_name = os.path.join(out_folder, args.out_filename)
-    try:
-        os.remove(out_name)
-    except OSError:
-        pass
-    with h5py.File(out_name, 'w') as hf:
-        hf.create_dataset("VX", data=mri_flow.velocity_estimate[..., 0])
-        hf.create_dataset("VY", data=mri_flow.velocity_estimate[..., 1])
-        hf.create_dataset("VZ", data=mri_flow.velocity_estimate[..., 2])
-
-        hf.create_dataset("ANGIO", data=mri_flow.angiogram)
-        hf.create_dataset("MAG", data=mri_flow.magnitude)
+    
+    print(f'Exporting flow data to {args.out_filename}')
+    export_flow_data(mri_flow, os.path.join(args.out_folder, args.out_filename), c_format=args.c_format)

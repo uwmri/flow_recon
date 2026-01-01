@@ -435,8 +435,8 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
 
     elif smap_type == "lowres":
         # Get a composite image
+        img_shape = sp.estimate_shape(coord)
         if sms_factor > 1:
-            img_shape = sp.estimate_shape(coord)
             image = store_device.xp.zeros([mri_rawdata.Num_Coils] + img_shape + [sms_factor], dtype=store_device.xp.complex64)
 
             #for e in range(mri_rawdata.Num_Encodings):
@@ -452,20 +452,13 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
                     for c in range(mri_rawdata.Num_Coils):
                         logger.info(f'Reconstructing encode, coil {e} , {c} ')
                         ksp = array_to_gpu(mri_rawdata.kdata[e][c, ...], op_device)
-                        ksp *= sp.to_device(np.conj(sms_blips[c, ..., s]), op_device)
+                        ksp *= sp.to_device(np.conj(sms_blips[:, s]), op_device)
                         ksp *= lpf
                         coords_temp = array_to_gpu(mri_rawdata.coords[e], op_device)
                         image_temp = sp.nufft_adjoint(ksp, coords_temp, img_shape)
                         image[c, ..., s] += sp.to_device(image_temp, store_device)
 
-            xp = store_device.xp
-            sos = xp.sqrt(xp.sum(xp.abs(image) **2, axis=0))
-            sos = xp.expand_dims(sos, axis=0)
-            sos = sos + xp.max(sos)*1e-5
-
-            smaps = image / sos
         else:
-            img_shape = sp.estimate_shape(coord)
             image = store_device.xp.zeros([mri_rawdata.Num_Coils] + img_shape, dtype=store_device.xp.complex64)
 
             #for e in range(mri_rawdata.Num_Encodings):
@@ -484,12 +477,12 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
                     image_temp = sp.nufft_adjoint(ksp, coords_temp, img_shape)
                     image[c] += sp.to_device(image_temp, store_device)
 
-            xp = store_device.xp
-            sos = xp.sqrt(xp.sum(xp.abs(image) **2, axis=0))
-            sos = xp.expand_dims(sos, axis=0)
-            sos = sos + xp.max(sos)*1e-5
+        xp = store_device.xp
+        sos = xp.sqrt(xp.sum(xp.abs(image) **2, axis=0))
+        sos = xp.expand_dims(sos, axis=0)
+        sos = sos + xp.max(sos)*1e-5
 
-            smaps = image / sos
+        smaps = image / sos
 
         print(f'Smaps Device = {sp.get_device(smaps)}')
     else:
@@ -781,7 +774,6 @@ def gate_kspace2d(mri_raw=None, num_frames=[10, 10], gate_type=['time', 'prep'],
     t_min0, t_max0, delta_time0 = get_gate_bins(gate_signal0, gate_type[0], num_frames[0], discrete_gates[0])
     t_min1, t_max1, delta_time1 = get_gate_bins(gate_signal1, gate_type[1], num_frames[1], discrete_gates[1])
 
-
     points_per_bin = []
     count = 0
     for t0 in range(num_frames[0]):
@@ -816,20 +808,15 @@ def gate_kspace2d(mri_raw=None, num_frames=[10, 10], gate_type=['time', 'prep'],
                 mri_rawG.resp.append(mri_raw.resp[e][idx])
                 mri_rawG.prep.append(mri_raw.prep[e][idx])
                 mri_rawG.ecg.append(mri_raw.ecg[e][idx])
-
-                coords_gated = []
-                for dim in range(mri_raw.coords[e].shape[-1]):
-                    coords_t = mri_raw.coords[e][..., dim]
-                    coords_gated.append(coords_t[idx])
-                coords_gated = np.stack( coords_gated, axis=-1)
-                mri_rawG.coords.append(coords_gated)
                 
-                kdata_gated = []
-                for coil in range(mri_raw.kdata[e].shape[0]):
-                    kdata_t = mri_raw.kdata[e][coil]
-                    kdata_gated.append(kdata_t[idx])
-                kdata_gated = np.stack( kdata_gated, axis=0)
-                mri_rawG.kdata.append(kdata_gated)
+                new_kdata = mri_raw.kdata[e][:, idx]
+                mri_rawG.kdata.append(new_kdata)
+
+                new_coords = mri_raw.coords[e][idx, :]
+                mri_rawG.coords.append(new_coords)
+                
+                new_sms_blips = mri_raw.sms_blips[e][idx, :]
+                mri_rawG.sms_blips.append(new_sms_blips)
 
                 count += 1
 
@@ -841,9 +828,9 @@ def gate_kspace2d(mri_raw=None, num_frames=[10, 10], gate_type=['time', 'prep'],
     logger.info(f'Standard deviation = {np.std(points_per_bin)}')
 
     mri_rawG.Num_Frames = num_frames
-    if gate_type[0] == "ecg"
+    if gate_type[0] == "ecg":
         mri_rawG.median_rr = t_max0
-    elif gate_type[1] == "ecg"
+    elif gate_type[1] == "ecg":
         mri_rawG.median_rr = t_max1
     else:
         mri_rawG.median_rr = mri_raw.median_rr
@@ -951,29 +938,16 @@ def gate_kspace(mri_raw=None, num_frames=10, gate_type='time', discrete_gates=Fa
             mri_rawG.resp.append(mri_raw.resp[e][idx])
             mri_rawG.prep.append(mri_raw.prep[e][idx])
             mri_rawG.ecg.append(mri_raw.ecg[e][idx])
+            
+            new_kdata = mri_raw.kdata[e][:, idx]
+            mri_rawG.kdata.append(new_kdata)
 
-            coords_gated = []
-            for dim in range(mri_raw.coords[e].shape[-1]):
-                coords_t = mri_raw.coords[e][..., dim]
-                coords_gated.append(coords_t[idx])
-            coords_gated = np.stack( coords_gated, axis=-1)
-            mri_rawG.coords.append(coords_gated)
+            new_coords = mri_raw.coords[e][idx, :]
+            mri_rawG.coords.append(new_coords)
             
-            kdata_gated = []
-            for coil in range(mri_raw.kdata[e].shape[0]):
-                kdata_t = mri_raw.kdata[e][coil]
-                kdata_gated.append(kdata_t[idx])
-            kdata_gated = np.stack( kdata_gated, axis=0)
-            mri_rawG.kdata.append(kdata_gated)
+            new_sms_blips = mri_raw.sms_blips[e][idx, :]
+            mri_rawG.sms_blips.append(new_sms_blips)
             
-            sms_blips_gated = []
-            for s in range(mri_raw.sms_factor):
-                tmp = []
-                for coil in range(mri_raw.sms_blips[e].shape[0]):
-                    sms_blip_t = mri_raw.sms_blips[e][coil,:,s]
-                    tmp.append(sms_blip_t[idx])
-                sms_blips_gated.append(np.stack(tmp, axis=0))
-            mri_rawG.sms_blips.append(np.stack(sms_blips_gated, axis=-1))
             count += 1
 
     max_points_per_bin = np.max(np.array(points_per_bin))
@@ -984,7 +958,7 @@ def gate_kspace(mri_raw=None, num_frames=10, gate_type='time', discrete_gates=Fa
     logger.info(f'Standard deviation = {np.std(points_per_bin)}')
 
     mri_rawG.Num_Frames = num_frames
-    if gate_type == "ecg"
+    if gate_type == "ecg":
         mri_rawG.median_rr = t_max
     else:
         mri_rawG.median_rr = mri_raw.median_rr
@@ -1010,7 +984,6 @@ def strided_encoding(mri_raw=None, stride=7, shots_per_frame=1):
     mri_rawG.ecg = []
     mri_rawG.prep = []
     mri_rawG.resp = []
-
 
     # Get the number of frames
     frames = math.floor( mri_raw.dcf[0].shape[-2] / stride / shots_per_frame)
@@ -1140,26 +1113,14 @@ def resp_gate(mri_raw=None, efficiency=0.5, resp_sign=1, resp_filter_window=10, 
     
         logger.info(f'Encode {e}, Points = {current_points}')
 
-        new_kdata = []
-        for coil in range(mri_raw.kdata[e].shape[0]):
-            old_kdata = mri_raw.kdata[e][coil]
-            new_kdata.append(old_kdata[idx])
-        mri_rawG.kdata.append(np.stack(new_kdata, axis=0))
+        new_kdata = mri_raw.kdata[e][:, idx]
+        mri_rawG.kdata.append(new_kdata)
 
-        new_coords = []
-        for dim in range(mri_raw.coords[e].shape[-1]):
-            old_coords = mri_raw.coords[e][...,dim]
-            new_coords.append(old_coords[idx])
-        mri_rawG.coords.append(np.stack(new_coords, axis=-1))
+        new_coords = mri_raw.coords[e][idx, :]
+        mri_rawG.coords.append(new_coords)
         
-        new_sms_blips = []
-        for s in range(mri_raw.sms_factor):
-            tmp = []
-            for coil in range(mri_raw.sms_blips[e].shape[0]):
-                sms_blip_t = mri_raw.sms_blips[e][coil,:,s]
-                tmp.append(sms_blip_t[idx])
-            new_sms_blips.append(np.stack(tmp, axis=0))
-        mri_rawG.sms_blips.append(np.stack(new_sms_blips, axis=-1))
+        new_sms_blips = mri_raw.sms_blips[e][idx, :]
+        mri_rawG.sms_blips.append(new_sms_blips)
 
         mri_rawG.dcf.append(mri_raw.dcf[e][idx])
         mri_rawG.time.append(mri_raw.time[e][idx])
@@ -1178,7 +1139,7 @@ def resp_gate(mri_raw=None, efficiency=0.5, resp_sign=1, resp_filter_window=10, 
     return mri_rawG
 
 def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None,
-                compress_coils=-1, scale_kdata=True):
+                compress_coils=-1, scale_kdata=True, sms_factor=None):
 
     with h5py.File(h5_filename, 'r') as hf:
 
@@ -1204,12 +1165,14 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None,
                 fov_flag = True
             except:
                 pass
-            try:
-                sms_factor = np.squeeze(hf['Kdata'].attrs['sms_factor'])
-                sms_fov = np.squeeze(hf['Kdata'].attrs['sms_fov'])
-                sms_flag = True
-            except:
-                pass
+            # try:
+            #     sms_factor = np.squeeze(hf['Kdata'].attrs['sms_factor'])
+            #     sms_fov = np.squeeze(hf['Kdata'].attrs['sms_fov'])
+            #     sms_flag = True
+            # except:
+            #     pass
+            sms_fov = 100
+            sms_flag = True
             try:
                 ix = np.squeeze(hf['Kdata'].attrs['ix'])
                 iy = np.squeeze(hf['Kdata'].attrs['iy'])
@@ -1237,12 +1200,12 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None,
             if sms_flag:
                 logging.info(f'SMS factor: {sms_factor}')
                 logging.info(f'SMS fov: {sms_fov}')
-            if rot_flag:
-                logging.info(f'Rotation matrix:')
-                logging.info(f'[{ix} {iy} {iz} 0]
-                               [{jx} {jy} {jz} 0]
-                               [{kx} {ky} {kz} 0]
-                               [{sx} {sy} {sz} 1]')
+            # if rot_flag:
+                # logging.info(f'Rotation matrix:')
+                # logging.info(f'''[{ix} {iy} {iz} 0]
+                #                  [{jx} {jy} {jz} 0]
+                #                  [{kx} {ky} {kz} 0]
+                #                  [{sx} {sy} {sz} 1]''')
 
         except Exception:
             logging.info('Missing header data')
@@ -1330,14 +1293,13 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None,
             
             if sms_factor > 1:
                 logging.info(f"Calculating phase blips for SMS acquisition with {sms_factor} slices")
-                coils, _, projs, readout = ksp.shape  # (coils, 1, projs, readout)
+                _, _, projs, readout = ksp.shape  # (coils, 1, projs, readout)
                 sms_phases = (2 * np.arange(sms_factor) - (sms_factor - 1)) * math.pi / sms_factor
                 proj_mod = np.arange(projs) % sms_factor
                 blips = np.exp(1j * np.outer(proj_mod, sms_phases)).astype(np.complex64)
-                sms_blips = np.broadcast_to(blips[None, None, :, None, :],
-                                            (coils, 1, projs, readout, sms_factor)).copy()
+                sms_blips = np.repeat(blips, readout, axis=0)
             else:
-                sms_blips = np.zeros((*ksp.shape[:4], 1), dtype=np.complex64)
+                sms_blips = np.zeros((projs*readout, 1), dtype=np.complex64)
 
             # Regrid the readout to reduce oversampling
             # coord, dcf, ksp = radial3d_regrid(coord, dcf, ksp)
@@ -1386,17 +1348,16 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None,
             # Append to lists and flatten
             
             logging.info("Reshaping data arrays...")
-            
             coords2 = coord.reshape(-1, coord.shape[-1])
             
             ksp2 = ksp.reshape(ksp.shape[0], -1)
 
-            sms_blips2 = sms_blips.reshape(sms_blips.shape[0], -1, sms_blips.shape[-1])
+            # sms_blips2 = sms_blips.reshape(sms_blips.shape[0], -1, sms_blips.shape[-1])
 
             mri_raw.dcf.append(dcf.flatten())
             mri_raw.coords.append(coords2)
             mri_raw.kdata.append(ksp2)
-            mri_raw.sms_blips.append(sms_blips2)
+            mri_raw.sms_blips.append(sms_blips)
 
             # mri_raw.coords.append(coord)
             # mri_raw.dcf.append(dcf)
@@ -1417,18 +1378,18 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None,
             if sms_factor > 1:
                 logging.info(f'MRI sms_blips {mri_raw.sms_blips[encode].shape}')
 
-        '''
-        try:
-            noise = hf['Kdata']['Noise']['real'] + 1j * hf['Kdata']['Noise']['imag']
+        
+        # try:
+        #     noise = hf['Kdata']['Noise']['real'] + 1j * hf['Kdata']['Noise']['imag']
 
-            logging.info('Whitening ksp.')
-            cov = mr.util.get_cov(noise)
-            ksp = mr.util.whiten(ksp, cov)
-        except Exception:
-            ksp /= np.abs(ksp).max()
-            logging.info('No noise data.')
-            pass
-        '''
+        #     logging.info('Whitening ksp.')
+        #     cov = mr.util.get_cov(noise)
+        #     ksp = mr.util.whiten(ksp, cov)
+        # except Exception:
+        #     ksp /= np.abs(ksp).max()
+        #     logging.info('No noise data.')
+        #     pass
+        
 
         if scale_kdata:
             # Scale k-space to max 1

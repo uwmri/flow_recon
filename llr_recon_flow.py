@@ -25,9 +25,10 @@ from gpu_ops import *
 
 
 if __name__ == "__main__":
+    
     logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger('main')
-
+    logger = logging.getLogger('main') 
+    
     # Parse Command Line
     parser = argparse.ArgumentParser()
     
@@ -100,6 +101,7 @@ if __name__ == "__main__":
 
     # Flow Processing
     parser.add_argument('--flow_processing', dest='flow_processing', action='store_true', default=False)
+    parser.add_argument('--c_format', dest='c_format', action='store_true', default=False, help='export flow HDF5 file in C++ recon format')
     parser.add_argument('--venc', type=int, default=1500) # mm/s
     parser.add_argument('--unwrap_lap', dest='unwrap_lap', action='store_true')
 
@@ -108,7 +110,9 @@ if __name__ == "__main__":
     parser.set_defaults(example_images=False)
 
     args = parser.parse_args()
-
+    
+    start_time = time.time()
+    
     # For tracking memory
     mempool = cupy.get_default_memory_pool()
 
@@ -122,6 +126,7 @@ if __name__ == "__main__":
     # Save to input raw data folder
     if args.out_folder is None:
         args.out_folder = os.path.dirname(args.filename)
+
 
     # Save to Folder    logger.info(f'Saving to {args.out_folder}')
 
@@ -193,34 +198,34 @@ if __name__ == "__main__":
 
 
     # Fake rotations
-    if False:
-        for i in range(mri_raw.Num_Frames*mri_raw.Num_Encodings):
-            print(f'Frame {i} ')
-            device = sp.get_device(mri_raw.coords[i])
-            kdata = sp.to_device(mri_raw.kdata[i], device)
-            dcf = sp.to_device(mri_raw.dcf[i], device)
-            coord = sp.to_device(mri_raw.coords[i], device)
+    # if False:
+    #     for i in range(mri_raw.Num_Frames*mri_raw.Num_Encodings):
+    #         print(f'Frame {i} ')
+    #         device = sp.get_device(mri_raw.coords[i])
+    #         kdata = sp.to_device(mri_raw.kdata[i], device)
+    #         dcf = sp.to_device(mri_raw.dcf[i], device)
+    #         coord = sp.to_device(mri_raw.coords[i], device)
 
-            psi = -float(i // mri_raw.Num_Encodings)*0.05
-            phi = 0
-            theta = float(i // mri_raw.Num_Encodings)*0.1
-            print(f'Rotation = {theta} {phi} {psi}')
+    #         psi = -float(i // mri_raw.Num_Encodings)*0.05
+    #         phi = 0
+    #         theta = float(i // mri_raw.Num_Encodings)*0.1
+    #         print(f'Rotation = {theta} {phi} {psi}')
 
-            tx = -float(i // mri_raw.Num_Encodings) * 0.01
-            ty =  float(i // mri_raw.Num_Encodings) * 0.02
-            tz = -float(i // mri_raw.Num_Encodings) * 0.005
-            mri_raw.kdata[i] *= device.xp.exp(1j*2.0*math.pi*tx*mri_raw.coords[i][...,0])
+    #         tx = -float(i // mri_raw.Num_Encodings) * 0.01
+    #         ty =  float(i // mri_raw.Num_Encodings) * 0.02
+    #         tz = -float(i // mri_raw.Num_Encodings) * 0.005
+    #         mri_raw.kdata[i] *= device.xp.exp(1j*2.0*math.pi*tx*mri_raw.coords[i][...,0])
 
-            # Build Rotation matrix
-            rot = build_rotation(theta, phi, psi)
-            rot = sp.to_device( rot, device)
+    #         # Build Rotation matrix
+    #         rot = build_rotation(theta, phi, psi)
+    #         rot = sp.to_device( rot, device)
 
-            coord_rot = coord
-            coord_rot = device.xp.expand_dims( coord_rot, -1)
-            coord_rot = device.xp.matmul(rot, coord_rot)
-            coord_rot = device.xp.squeeze( coord_rot)
+    #         coord_rot = coord
+    #         coord_rot = device.xp.expand_dims( coord_rot, -1)
+    #         coord_rot = device.xp.matmul(rot, coord_rot)
+    #         coord_rot = device.xp.squeeze( coord_rot)
 
-            mri_raw.coords[i] = coord_rot
+    #         mri_raw.coords[i] = coord_rot
 
     if args.reset_dens:
         for i in range(len(mri_raw.kdata)):
@@ -333,13 +338,22 @@ if __name__ == "__main__":
 
     elif args.recon_type == 'llr':
         logger.info(f'Reconstruct Images ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
-        img = BatchedSenseSMSRecon(mri_raw.kdata, mps=smaps,sms_factor=args.sms_factor, blips=mri_raw.sms_blips, weights=mri_raw.dcf, coord=mri_raw.coords,
-                                device=sp.Device(args.device), lamda=args.lamda, num_enc=mri_raw.Num_Encodings,
-                                coil_batch_size=None, max_iter=args.max_iter, batched_iter=args.max_iter,
-                                gate_type=args.gate_type, fast_maxeig=args.fast_maxeig,
-                                block_width=args.llr_block_width, log_folder=args.out_folder,
-                                composite_init=False
-                                ).run()
+        if args.sms_factor > 1:
+            img = BatchedSenseSMSRecon(mri_raw.kdata, mps=smaps,sms_factor=args.sms_factor, blips=mri_raw.sms_blips, weights=mri_raw.dcf, coord=mri_raw.coords,
+                                    device=sp.Device(args.device), lamda=args.lamda, num_enc=mri_raw.Num_Encodings,
+                                    coil_batch_size=None, max_iter=args.max_iter, batched_iter=args.max_iter,
+                                    gate_type=args.gate_type, fast_maxeig=args.fast_maxeig,
+                                    block_width=args.llr_block_width, log_folder=args.out_folder,
+                                    composite_init=False
+                                    ).run()
+        else:
+            img = BatchedSenseRecon(mri_raw.kdata, mps=smaps, weights=mri_raw.dcf, coord=mri_raw.coords,
+                                    device=sp.Device(args.device), lamda=args.lamda, num_enc=mri_raw.Num_Encodings,
+                                    coil_batch_size=args.coil_batch_size, max_iter=args.max_iter, batched_iter=args.max_iter,
+                                    gate_type=args.gate_type, fast_maxeig=args.fast_maxeig,
+                                    block_width=args.llr_block_width, log_folder=args.out_folder,
+                                    composite_init=False
+                                    ).run()
         logger.info(f'Image shape {img.shape}')
     elif args.recon_type == 'sense':
 
@@ -396,8 +410,6 @@ if __name__ == "__main__":
     elif args.recon_type == 'pils':
         logger.info('PILS Recon')
         img = []
-
-        import time
  
         for i in range(len(mri_raw.kdata)):
             t = time.time()
@@ -407,20 +419,20 @@ if __name__ == "__main__":
             dcf = array_to_gpu(mri_raw.dcf[i], args.device)
             coord = array_to_gpu(mri_raw.coords[i], args.device)
             
+            # Low resolution images
+            xp = sp.get_device(coord).xp
+            res = args.krad_cutoff
+            lpf = xp.sum(coord ** 2, axis=-1)
+            lpf = xp.exp(-lpf / (2.0 * res * res))
+            dcf = dcf * lpf
+            
             if args.sms_factor > 1:
-                blips = array_to_gpu(mri_raw.sms_blips[i], args.device)
                 slices = []
                 for sms_slice in range(args.sms_factor):
-                    kdata_slice = kdata * np.conj(blips[..., sms_slice])
-                
-                    # Low resolution images
-                    xp = sp.get_device(coord).xp
-                    res = args.krad_cutoff
-                    lpf = xp.sum(coord ** 2, axis=-1)
-                    lpf = xp.exp(-lpf / (2.0 * res * res))
-                    dcf = dcf * lpf
+                    blips = array_to_gpu(mri_raw.sms_blips[..., sms_slice], args.device)
+                    kdata_slice = kdata * np.conj(blips)
 
-                    E = sp.mri.linop.Sense(mps=smaps, coord=coord, weights=dcf ** 2, coil_batch_size=args.coil_batch_size)
+                    E = sp.mri.linop.Sense(mps=smaps[..., sms_slice], coord=coord, weights=dcf ** 2, coil_batch_size=args.coil_batch_size)
                     Eh = E.H
                     img_slice = sp.to_device(Eh * kdata_slice)
                     slices.append(img_slice)
@@ -428,12 +440,6 @@ if __name__ == "__main__":
                 img.append(np.stack(slices, axis=-1))
                 logger.info(f'Frame {i} took {time.time()-t}')
             else:
-                # Low resolution images
-                xp = sp.get_device(coord).xp
-                res = args.krad_cutoff
-                lpf = xp.sum(coord ** 2, axis=-1)
-                lpf = xp.exp(-lpf / (2.0 * res * res))
-                dcf = dcf * lpf
 
                 E = sp.mri.linop.Sense(mps=smaps, coord=coord, weights=dcf ** 2, coil_batch_size=args.coil_batch_size)
                 Eh = E.H
@@ -443,171 +449,101 @@ if __name__ == "__main__":
 
     else:
         print('Please input recon_type: llr, sense, pils, mslr')
+    
+    # bring data back to CPU
+    img = np.stack(img, axis=0)
+    img = sp.to_device(img, sp.cpu_device)
+    img = np.reshape(img, (args.frames*args.frames2, -1) + smaps.shape[1:])
+    if len(img.shape) == 4:
+        img = np.expand_dims(img, axis=0)
+    logger.info(f'Image shape {img.shape}')
 
-    # Copy to CPU and reshape
+    # header info for export
+    args_str = ";".join(f"{k}={v}" for k, v in vars(args).items() if v is not None)
+    header_info = {}
+    header_info['recon_params'] = args_str
+    header_info['fovx'] = int(mri_raw.fovx)
+    header_info['fovy'] = int(mri_raw.fovy)
+    header_info['fovz'] = int(mri_raw.fovz)
+    header_info['matrixx'] = int(img.shape[2])
+    header_info['matrixy'] = int(img.shape[3])
+    header_info["matrixz"] = int(img.shape[4])
+    header_info["frames"] = int(args.frames)
+    if args.gate_type == "ecg":
+        header_info["median_rr"] = float(mri_raw.median_rr)
+        header_info["timeres"] = float(mri_raw.median_rr/args.frames)
+    if args.time_range is not None and args.resp_gate:
+        header_info["time_range"] = args.time_range
     if args.sms_factor > 1:
-        split_lists = [[] for _ in range(args.sms_factor)]
-        for arr in img:  # loop over time
-            for sms_slice in range(args.sms_factor):  # loop over slices
-                split_lists[sms_slice].append(arr[...,sms_slice])
-                
-        for sms_slice in range(args.sms_factor):
-            img = split_lists[sms_slice]
+        header_info["sms_factor"] = int(args.sms_factor)
+
+    # export data
+    if args.flow_processing:
+        if args.out_filename == "FullRecon.h5":
+            args.out_filename = "Flow.h5"
+        
+        out_name = os.path.join(args.out_folder, args.out_filename)
+        
+        img = np.moveaxis(img, 1, -1)
+        
+        if mri_raw.Num_Encodings == 5:
+            encoding = "5pt"
+        elif mri_raw.Num_Encodings == 4:
+            encoding = "4pt-referenced"
+        elif mri_raw.Num_Encodings == 3:
+            encoding = "3pt"
+        elif mri_raw.Num_Encodings == 2:
+            encoding = "2pt"
+
+        logger.info(f' encoding type is {encoding}')
             
-            # logger.info(f'Image shape before reshape {img_slice.shape}')
-            img = np.stack(img,axis=0)
-            img = sp.to_device(img, sp.cpu_device)
-            img = np.reshape(img, (args.frames*args.frames2, -1) + smaps.shape[1:-1]) # added sms_factor dimension to smap
-            img = np.squeeze(img)
-            logger.info(f'Image shape {img.shape}')
-
-            img_mag = np.abs(img)
-            img_phase = np.angle(img)
-            img_phase_difference = np.angle( img * np.conj(np.expand_dims(img[:, 0, ...], axis=1)))
+        if args.sms_factor > 1:
+            all_slices = []
             
-            smaps = sp.to_device(smaps, sp.cpu_device)
-            smaps_mag = np.abs(smaps)
+            # do flow processing for each slice individually
+            for s in range(args.sms_factor):
+                logger.info(f'Flow processing for SMS slice {s}')
+                flow_slice = MRI_4DFlow(encoding, signal=np.squeeze(img[..., s, :]), venc=args.venc, unwrap_lap=args.unwrap_lap)
+                flow_slice.solve_for_velocity()
+                flow_slice.update_angiogram()
+                all_slices.append(flow_slice)
 
-            if args.flow_processing:
-                if mri_raw.Num_Encodings == 5:
-                    encoding = "5pt"
-                elif mri_raw.Num_Encodings == 4:
-                    encoding = "4pt-referenced"
-                elif mri_raw.Num_Encodings == 3:
-                    encoding = "3pt"
-                elif mri_raw.Num_Encodings == 2:
-                    encoding = "2pt"
+            # stack along z axis
+            combined = MRI_4DFlow(encoding, venc=args.venc, unwrap_lap=args.unwrap_lap)
+            combined.magnitude = np.stack([s.magnitude for s in all_slices], axis=-1)
+            combined.angiogram = np.stack([s.angiogram for s in all_slices], axis=-1)
+            combined.velocity_estimate = np.stack([s.velocity_estimate for s in all_slices], axis=-2) 
+            export_flow_data(combined, out_name, header_info=header_info, c_format=args.c_format)
+        
+        else:
+            mri_flow = MRI_4DFlow(encoding, signal=img, venc=args.venc, unwrap_lap=args.unwrap_lap)
+            mri_flow.solve_for_velocity()
+            mri_flow.update_angiogram()
+            export_flow_data(mri_flow, out_name, header_info=header_info, c_format=args.c_format)
 
-                print(f' encoding type is {encoding}')
-
-                # Solve for Velocity
-                mri_flow = MRI_4DFlow(encode_type=encoding, venc=args.venc, unwrap_lap=args.unwrap_lap)
-                mri_flow.signal = np.moveaxis(img, 1, -1)
-                mri_flow.solve_for_velocity()
-                # mri_flow.update_angiogram()
-                # mri_flow.background_phase_correct()
-                mri_flow.update_angiogram()
-
-            
-
-            # Export to file
-            out_name = os.path.join(args.out_folder, f"{args.out_filename}_slice{sms_slice}.h5")
-            logger.info('Saving images to ' + out_name)
-            try:
-                os.remove(out_name)
-            except OSError:
-                pass
-            with h5py.File(out_name, 'w') as hf:
-                header_group = hf.create_group("HEADER")
-                args_str = ";".join(f"{k}={v}" for k, v in vars(args).items() if v is not None)
-                header_group.attrs["recon_params"] = args_str
-                header_group.attrs["fovx"] = int(mri_raw.fovx)
-                header_group.attrs["fovy"] = int(mri_raw.fovy)
-                header_group.attrs["fovz"] = int(mri_raw.fovz)
-                header_group.attrs["matrixx"] = int(img.shape[2])
-                header_group.attrs["matrixy"] = int(img.shape[3])
-                if len(img.shape) > 4:
-                    header_group.attrs["matrixz"] = int(img.shape[4])
-                else:
-                    header_group.attrs["matrixz"] = 1
-                header_group.attrs["frames"] = int(args.frames)
-                if args.gate_type == "ecg":
-                    header_group.attrs["median_rr"] = float(mri_raw.median_rr)
-                    header_group.attrs["timeres"] = float(mri_raw.median_rr/args.frames)
-                if args.time_range is not None and args.resp_gate:
-                    header_group.attrs["time_range"] = args.time_range
-                    
-                    if args.sms_factor > 1:
-                        header_group.attrs["sms_factor"] = int(args.sms_factor)
-                
-                hf.create_dataset("IMAGE_REAL", data=np.real(img))
-                hf.create_dataset("IMAGE_IMAG", data=np.imag(img))
-                hf.create_dataset("IMAGE_PHASE_DIFFERENCE", data=img_phase_difference)
-                hf.create_dataset("SMAPS", data=smaps_mag)
-                if args.flow_processing:
-                    header_group.attrs["venc"] = mri_flow.venc
-                    header_group.attrs["encoding_matrix"] = mri_flow.EncodingMatrix
-                    hf.create_dataset("VX", data=mri_flow.velocity_estimate[..., 0])
-                    hf.create_dataset("VY", data=mri_flow.velocity_estimate[..., 1])
-                    hf.create_dataset("VZ", data=mri_flow.velocity_estimate[..., 2])
-                    hf.create_dataset("CD", data=mri_flow.angiogram)
-                    hf.create_dataset("MAG", data=mri_flow.magnitude)
     else:
-        # logger.info(f'Image shape before reshape {img.shape}')
-        img = np.stack(img,axis=0)
-        img = sp.to_device(img, sp.cpu_device)
-        img = np.reshape(img, (args.frames*args.frames2, -1) + smaps.shape[1:])
-        img = np.squeeze(img)
-        logger.info(f'Image shape {img.shape}')
-
         img_mag = np.abs(img)
         img_phase = np.angle(img)
-        img_phase_difference = np.angle( img * np.conj(np.expand_dims(img[:, 0, ...], axis=1)))
-        
-        smaps = sp.to_device(smaps, sp.cpu_device)
-        smaps_mag = np.abs(smaps)
-
-        if args.flow_processing:
-            if mri_raw.Num_Encodings == 5:
-                encoding = "5pt"
-            elif mri_raw.Num_Encodings == 4:
-                encoding = "4pt-referenced"
-            elif mri_raw.Num_Encodings == 3:
-                encoding = "3pt"
-            elif mri_raw.Num_Encodings == 2:
-                encoding = "2pt"
-
-            print(f' encoding type is {encoding}')
-
-            # Solve for Velocity
-            mri_flow = MRI_4DFlow(encode_type=encoding, venc=args.venc, unwrap_lap=args.unwrap_lap)
-            mri_flow.signal = np.moveaxis(img, 1, -1)
-            mri_flow.solve_for_velocity()
-            # mri_flow.update_angiogram()
-            # mri_flow.background_phase_correct()
-            mri_flow.update_angiogram()
-
-        
 
         # Export to file
-        out_name = os.path.join(args.out_folder, f"{args.out_filename}_slice{args.sms_slice}.h5")
-        logger.info('Saving images to ' + out_name)
+        out_name = os.path.join(args.out_folder, args.out_filename)
+        logger.info(f'Saving images to {out_name}')
         try:
             os.remove(out_name)
         except OSError:
             pass
         with h5py.File(out_name, 'w') as hf:
-            header_group = hf.create_group("HEADER")
-            args_str = ";".join(f"{k}={v}" for k, v in vars(args).items() if v is not None)
-            header_group.attrs["recon_params"] = args_str
-            header_group.attrs["fovx"] = int(mri_raw.fovx)
-            header_group.attrs["fovy"] = int(mri_raw.fovy)
-            header_group.attrs["fovz"] = int(mri_raw.fovz)
-            header_group.attrs["matrixx"] = int(img.shape[2])
-            header_group.attrs["matrixy"] = int(img.shape[3])
-            if len(img.shape) > 4:
-                header_group.attrs["matrixz"] = int(img.shape[4])
-            else:
-                header_group.attrs["matrixz"] = 1
-            header_group.attrs["frames"] = int(args.frames)
-            if args.gate_type == "ecg":
-                header_group.attrs["median_rr"] = float(mri_raw.median_rr)
-                header_group.attrs["timeres"] = float(mri_raw.median_rr/args.frames)
-            if args.time_range is not None and args.resp_gate:
-                header_group.attrs["time_range"] = args.time_range
+            hf.create_dataset("IMAGE", data=img)
+            hf.create_dataset("IMAGE_MAG", data=img_mag)
+            hf.create_dataset("IMAGE_PHASE", data=img_phase)
+            hf.create_dataset("SMAPS", data=sp.to_device(smaps, sp.cpu_device))
+            for attr in header_info.keys():
+                header_group = hf.create_group("Header")
+                header_group.attrs[attr] = header_info[attr]
                 
-            hf.create_dataset("IMAGE_REAL", data=np.real(img))
-            hf.create_dataset("IMAGE_IMAG", data=np.imag(img))
-            hf.create_dataset("IMAGE_PHASE_DIFFERENCE", data=img_phase_difference)
-            hf.create_dataset("SMAPS", data=smaps_mag)
-            if args.flow_processing:
-                header_group.attrs["venc"] = mri_flow.venc
-                header_group.attrs["encoding_matrix"] = mri_flow.EncodingMatrix
-                hf.create_dataset("VX", data=mri_flow.velocity_estimate[..., 0])
-                hf.create_dataset("VY", data=mri_flow.velocity_estimate[..., 1])
-                hf.create_dataset("VZ", data=mri_flow.velocity_estimate[..., 2])
-                hf.create_dataset("CD", data=mri_flow.angiogram)
-                hf.create_dataset("MAG", data=mri_flow.magnitude)
+    logger.info(f'Recon completed in {(time.time() - start_time):2f} seconds')
+
+       
     
 
 

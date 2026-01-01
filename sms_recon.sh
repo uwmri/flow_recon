@@ -116,8 +116,9 @@ else
 	TIME_FLAG=(--time_range "${TIME}")
 fi
 
-echo llr_recon_flow.py --filename "${FILENAME}" "${BASE_FLAGS[@]}" --frames "${RCFRAMES}" "${CR_FLAG[@]}" "${RESP_FLAG[@]}" "${TIME_FLAG[@]}" "${ADD_FLAGS[@]}" --out_filename "${OUT_NAME}"
-llr_recon_flow.py --filename "${FILENAME}" "${BASE_FLAGS[@]}" --frames "${RCFRAMES}" "${CR_FLAG[@]}" "${RESP_FLAG[@]}" "${TIME_FLAG[@]}" "${ADD_FLAGS[@]}" --out_filename "${OUT_NAME}" | tee "pyrecon_${OUT_NAME}.log"
+command=~/CODE/flow_recon/flow_recon.py --filename "${FILENAME}" "${BASE_FLAGS[@]}" --frames "${RCFRAMES}" "${CR_FLAG[@]}" "${RESP_FLAG[@]}" "${TIME_FLAG[@]}" "${ADD_FLAGS[@]}" --out_filename "${OUT_NAME}" | tee "pyrecon_${OUT_NAME}.log"
+echo "${command}"
+command
 # if [ "${SLICE}" == "all" ]; then
 # 	for i in $(seq 0 $((SMS_FACTOR-1))); do
 # 		SMS_FLAG=(--sms_slice "${i}")

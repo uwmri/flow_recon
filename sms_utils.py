@@ -6,7 +6,7 @@ from glob import glob
 import h5py
 import math
 from tkinter import Tk
-from tkinter.filedialog import askopenfilename
+
 
 # Load raw k-space data (MRI_Raw.h5)
 # NOTE: Raw k-space is output from C++ pcvipr_recon_binary with "-export_kdata" flag
@@ -65,26 +65,78 @@ def show_raw(sms_dir):
         plt.scatter(Kxa, Kya, s=0.1, marker='o')
         plt.show()
 
+class VolumeViewer(object):
+    def __init__(self, ax, X):
+        self.ax = ax
+        ax.set_title('Scroll to navigate images')
 
+        self.X = X
+        rows, cols, self.slices = X.shape
+        self.ind = self.slices // 2
 
-def show_images(sms_dir):
-    slice_list = glob(os.path.join(sms_dir, '*_slice*.h5'))
+        self.im = ax.imshow(self.X[:, :, self.ind], cmap="gray")
+        self.update()
 
-    # show reconstrued SMS images
-    fig, axs = plt.subplots(len(slice_list), 2, figsize=(10, 10))
-    for i, slice_file in enumerate(slice_list):
-        with h5py.File(slice_file, 'r') as hf:
-            mag = np.mean(hf['MAG'], 0) 
-            mag = np.rot90(mag, k=1, axes=(0, 1))
-            cd = np.mean(hf['CD'], 0)
-            cd = np.rot90(cd, k=1, axes=(0, 1))
-            
-            axs[i, 0].imshow(mag, cmap='gray')
-            axs[i, 0].set_title(f'Magnitude - {slice_file}')
-            axs[i, 1].imshow(cd, cmap='gray')
-            axs[i, 1].set_title(f'Phase - {slice_file}')
+    def onscroll(self, event):
+        print("%s %s" % (event.button, event.step))
+        if event.button == 'up':
+            self.ind = (self.ind + 1) % self.slices
+        else:
+            self.ind = (self.ind - 1) % self.slices
+        self.update()
+
+    def update(self):
+        self.im.set_data(self.X[:, :, self.ind])
+        self.ax.set_ylabel('slice %s' % self.ind)
+        self.im.axes.figure.canvas.draw()
+
+# def plot3d(image):
+#     fig, ax = plt.subplots(1, 1)
+#     tracker = VolumeViewer(ax, image)
+#     fig.canvas.mpl_connect('scroll_event', tracker.onscroll)
+#     plt.show()
+
+# show reconstructed SMS images
+def show_images(sms_dir, time_resolved=False):
+    sms_file = os.path.join(sms_dir, 'Flow.h5')
+    with h5py.File(sms_file, 'r') as hf:
+        frames = hf['Header'].attrs['frames']
+        sms_factor = hf['Header'].attrs['sms_factor']
+        comp_mag = hf['MAG']
+        comp_cd = hf['CD']
+        comp_vz = hf['comp_vd_3']
+        if time_resolved:
+            mag = np.zeros((comp_mag.shape)+(frames,))
+            cd = np.zeros((comp_mag.shape)+(frames,))
+            vz = np.zeros((comp_mag.shape)+(frames,))
+            for i in range(frames):
+                mag[..., i] = hf[f'ph_{i:03}_mag']
+                cd[..., i] = hf[f'ph_{i:03}_cd']
+                vz[..., i] = hf[f'ph_{i:03}_vd_3']
+                
+    # mag = np.rot90(mag, k=1, axes=(0, 1))
+    # cd = np.rot90(cd, k=1, axes=(0, 1))
+
+    fig, axs = plt.subplots(sms_factor, 3, figsize=(10, 10))
+    for i in range(sms_factor):
+        if time_resolved:
+            tracker = VolumeViewer(axs[i, 0], mag)
+            fig.canvas.mpl_connect('scroll_event', tracker.onscroll)
+            tracker2 = VolumeViewer(axs[i, 1], cd)
+            fig.canvas.mpl_connect('scroll_event', tracker2.onscroll)
+            tracker3 = VolumeViewer(axs[i, 2], vz)
+            fig.canvas.mpl_connect('scroll_event', tracker3.onscroll)
+        else:
+            axs[i, 0].imshow(comp_mag, cmap='gray')
+            axs[i, 0].set_title(f'Magnitude - slice {i}')
             axs[i, 0].axis('off')
+            axs[i, 1].imshow(comp_cd, cmap='gray')
+            axs[i, 1].set_title(f'Complex Difference - slice {i}')
             axs[i, 1].axis('off')
+            axs[i, 2].imshow(comp_vz, cmap='gray')
+            axs[i, 2].set_title(f'Velocity - slice {i}')
+            axs[i, 2].axis('off')
+            
 
     fig.tight_layout()
     plt.show()

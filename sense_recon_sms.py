@@ -227,7 +227,7 @@ def SenseSMS(
         ishape = mps.shape[1:]
         img_ndim = mps.ndim - 2 # - 1 for sms_factor 
     else:
-        img_ndim = len(ishape) - 1 # - 1 for sms_factor (fix later)
+        img_ndim = len(ishape) - 1 # - 1 for sms_factor
 
     # Serialize linop if coil_batch_size is smaller than num_coils.
     num_coils = len(mps)
@@ -241,7 +241,7 @@ def SenseSMS(
                 SenseSMS(
                     mps[c * coil_batch_size : ((c + 1) * coil_batch_size), ...],
                     sms_factor=sms_factor,
-                    blips=blips[c * coil_batch_size : ((c + 1) * coil_batch_size), ...],
+                    blips=blips,
                     coord=coord,
                     weights=weights,
                     ishape=ishape,
@@ -333,18 +333,15 @@ class SMS_NUFFT(sp.linop.Linop):
         device = sp.get_device(x)
         with device:
             coord = sp.to_device(self.coord, device)
-            output_list = []
+            output = sp.to_device(np.empty(self.oshape, dtype=x.dtype), device)
             for s in range(self.nslices):
                 # [ncoils, nx, ny] -> [ncoils, nprojs]
-                slice_output = sp.fourier.nufft(
+                output[..., s] = sp.fourier.nufft(
                     x[..., s], coord, 
                     oversamp=self.oversamp, 
                     width=self.width
                 )
-                output_list.append(slice_output)
-                
             # output = [ncoils, nprojs, nslices]
-            output = np.stack(output_list, axis=-1)
             return output
     
     def _adjoint_linop(self):
@@ -373,19 +370,17 @@ class SMS_NUFFTAdjoint(sp.linop.Linop):
         device = sp.get_device(x)
         with device:
             coord = sp.to_device(self.coord, device)
-            output_list = []
+            output = sp.to_device(np.empty(self.oshape, dtype=x.dtype), device)
             for s in range(self.nslices):
                 # [ncoils, nprojs] -> [ncoils, nx, ny]
-                slice_output = sp.fourier.nufft_adjoint(
+                output[..., s] = sp.fourier.nufft_adjoint(
                     x[..., s], coord, 
                     oshape=self.oshape[:-1],
                     oversamp=self.oversamp,
                     width=self.width
                 )
-                output_list.append(slice_output)
                 
             # output = [ncoils, nx, ny, nslices]
-            output = np.stack(output_list, axis=-1)
             return output
     
     def _adjoint_linop(self):
@@ -412,14 +407,15 @@ class SMSMultiply(sp.linop.Linop):
         # x = [ncoils, nprojs, nslices]
         device = sp.get_device(x)
         with device:
-            output = sp.to_device(np.zeros(self.oshape, dtype=np.complex64), device)
-            for s in range(self.sms_factor):
-                # Apply SMS phase modulation
-                modulated = x[..., s] * self.blips[..., s]
-                output += modulated 
-                
+            # output = sp.to_device(np.zeros(self.oshape, dtype=np.complex64), device)
+            # for s in range(self.sms_factor):
+            #     # Apply SMS phase modulation
+            #     modulated = x[..., s] * self.blips[np.newaxis,..., s]
+            #     output += modulated 
+            output = np.sum(x * self.blips[None, :, :], axis=-1)   
+        
         # output = [ncoils, nprojs]
-        return output
+        return sp.to_device(output, device)
     
     def _adjoint_linop(self):
         return SMSMultiplyAdjoint(self.oshape, self.ishape, self.blips, self.sms_factor)
@@ -440,15 +436,16 @@ class SMSMultiplyAdjoint(sp.linop.Linop):
         # x = [ncoils, nprojs]
         device = sp.get_device(x)
         with device:
-            slice_list = []
-            for s in range(self.sms_factor):
-                # Apply SMS phase demodulation (conjugate)
-                demodulated = x * np.conj(self.blips[..., s])
-                slice_list.append(demodulated)
+            # slice_list = []
+            # for s in range(self.sms_factor):
+            #     # Apply SMS phase demodulation (conjugate)
+            #     demodulated = x * np.conj(self.blips[np.newaxis,..., s])
+            #     slice_list.append(demodulated)
                 
-            # output = [ncoils, nx, ny, nslices]
-            output = sp.to_device(np.stack(slice_list, axis=-1), device)
-            return output
+            # # output = [ncoils, nx, ny, nslices]
+            # output = sp.to_device(np.stack(slice_list, axis=-1), device) 
+            output = x[..., None] * np.conj(self.blips)[None,:,:]
+            return sp.to_device(output, device)
     
     def _adjoint_linop(self):
         return SMSMultiply(self.oshape, self.ishape, self.blips, self.sms_factor)
