@@ -1,6 +1,5 @@
 import sigpy as sp
 import numpy as np
-import math
 
 def _estimate_weights(y, weights, coord):
     if weights is None and coord is None:

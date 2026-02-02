@@ -5,7 +5,7 @@ import sys
 from glob import glob
 import h5py
 import math
-from tkinter import Tk
+# from tkinter import Tk
 
 
 # Load raw k-space data (MRI_Raw.h5)
@@ -145,7 +145,7 @@ def show_images(sms_dir, time_resolved=False):
 def calc_rx(sms_factor, slice_locs):
     sms_factor = int(sms_factor)
     slice_locs = slice_locs.split(',')
-    slice_locs = np.array([float(i) for i in slice_locs]) 
+    slice_locs = [float(i) for i in slice_locs]
     slice_locs = np.sort(slice_locs)
     if len(slice_locs) < 2:
         raise ValueError("At least two slice locations are required.")
@@ -158,8 +158,8 @@ def calc_rx(sms_factor, slice_locs):
     sms_fov = scan_height * sms_factor/(sms_factor - 1.0)
     
     z_min = 2.0
-    z_max = 20.0
-    z_step = 1
+    z_max = 40.0
+    z_step = 0.1
     max_M = 100
     best_M = None
     best_z = None
@@ -176,11 +176,11 @@ def calc_rx(sms_factor, slice_locs):
                 best_M = M
                 best_z = z
     
-    all_slice_locs = [round(slice_locs[-1] - i * sms_gap, 1) for i in range(sms_factor)]
+    all_slice_locs = [float(round(slice_locs[-1] - i * sms_gap, 1)) for i in range(sms_factor)]
     results = [round(sms_fov, 2), all_slice_locs, round(best_M), round(best_z), round(min_error, 1)]
     print(f"SMS FOV: {results[0]} mm")
     print(f"Slice locations (mm S-I): {results[1]}")
-    print(f"Number of dummy slices: {results[2]} mm")
+    print(f"Number of dummy slices: {results[2]}")
     print(f"Dummy slice thickness: {results[3]} mm")
     print(f"Error (each side): {results[4]} mm")
 

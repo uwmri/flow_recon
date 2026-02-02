@@ -13,6 +13,7 @@ from mri_raw import *
 from multi_scale_low_rank_recon import *
 from sense_recon_sms import *
 from llr_recon import *
+from imoco import *
 from llr_recon_sms import *
 from flow_processing import *
 from svt import *
@@ -144,7 +145,7 @@ if __name__ == "__main__":
         crop_kspace(mri_rawdata=mri_raw, crop_factor=args.crop_factor)  # 2.5 (320/128)
 
     # Perform respiratory gating 
-    if args.resp_gate:
+    if args.resp_gate and args.recon_type != 'imoco':
         if args.time_range is not None:
             time_ranges = []
             ranges = args.time_range.split(',')
@@ -231,12 +232,11 @@ if __name__ == "__main__":
         for i in range(len(mri_raw.kdata)):
             mri_raw.dcf[i][:] = 1.0
 
-
-    if True:
-        for i in range(len(mri_raw.kdata)):
-            mri_raw.kdata[i] = sp.to_device(mri_raw.kdata[i], sp.Device(args.device))
-            mri_raw.coords[i] = sp.to_device(mri_raw.coords[i], sp.Device(args.device))
-            mri_raw.dcf[i] = sp.to_device(mri_raw.dcf[i], sp.Device(args.device))
+    # if False:
+    #     for i in range(len(mri_raw.kdata)):
+    #         mri_raw.kdata[i] = sp.to_device(mri_raw.kdata[i], sp.Device(args.device))
+    #         mri_raw.coords[i] = sp.to_device(mri_raw.coords[i], sp.Device(args.device))
+    #         mri_raw.dcf[i] = sp.to_device(mri_raw.dcf[i], sp.Device(args.device))
 
     # Put the maps on the GPU
     smaps = sp.to_device(smaps, sp.Device(args.device))
@@ -446,7 +446,16 @@ if __name__ == "__main__":
 
                 img.append(sp.to_device(Eh * kdata))
                 logger.info(f'Frame {i} took {time.time()-t}')
-
+    
+    elif args.recon_type == 'imoco':
+        logger.info('Iterative Motion Compensatation Recon')
+        img = iMoCoRecon(mri_raw, mps=smaps, device=sp.Device(args.device), lamda=args.lamda, 
+                         coil_batch_size=args.coil_batch_size, max_iter=args.max_iter, 
+                         batched_iter=args.max_iter, gate_type=args.gate_type, log_folder=args.out_folder,
+                         resp_filter_window=args.resp_filter_window,
+                        ).run()
+        
+        
     else:
         print('Please input recon_type: llr, sense, pils, mslr')
     
