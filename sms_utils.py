@@ -5,7 +5,7 @@ import sys
 from glob import glob
 import h5py
 import math
-from tkinter import Tk
+# from tkinter import Tk
 
 
 # Load raw k-space data (MRI_Raw.h5)
@@ -145,44 +145,60 @@ def show_images(sms_dir, time_resolved=False):
 def calc_rx(sms_factor, slice_locs):
     sms_factor = int(sms_factor)
     slice_locs = slice_locs.split(',')
-    slice_locs = np.array([float(i) for i in slice_locs]) 
-    slice_locs = np.sort(slice_locs)
+    slice_locs = [float(i) for i in slice_locs]
+    slice_locs = sorted(slice_locs, reverse=True)
     if len(slice_locs) < 2:
         raise ValueError("At least two slice locations are required.")
     if sms_factor < 2:
         raise ValueError("SMS factor must be at least 2.")
     
+    rad_height = 186
+    sms_height = 150
    
-    scan_height = slice_locs[-1] - slice_locs[0]
-    sms_gap = scan_height / (sms_factor - 1.0)
+    scan_height = slice_locs[0] - slice_locs[-1]
+    # sms_gap = scan_height / (sms_factor - 1.0)
     sms_fov = scan_height * sms_factor/(sms_factor - 1.0)
     
-    z_min = 2.0
-    z_max = 20.0
-    z_step = 1
-    max_M = 100
-    best_M = None
-    best_z = None
-    min_error = 99999
-    z_vals = np.arange(z_min, z_max + z_step, z_step)
+    aao_rad = [slice_locs[0] - rad_height/2, slice_locs[0] + rad_height/2]
+    tho_rad = [slice_locs[1] - rad_height/2, slice_locs[1] + rad_height/2]
+    abd_rad = [slice_locs[2] - rad_height/2, slice_locs[2] + rad_height/2]
     
-    for z in z_vals:
-        for M in range(2, max_M + 1, 2): 
-            dummy_height = M * z
-            error = abs(dummy_height - scan_height)
+    sms = [slice_locs[1] - sms_height/2, slice_locs[1] + sms_height/2]
+    
+    print(f"Slice locations (mm S-I): {slice_locs}")
+    print(f"AAo radial location: {aao_rad}")
+    print(f"Tho radial location: {tho_rad}")
+    print(f"Abd radial location: {abd_rad}")
+    print(f"SMS FOV: {sms_fov} mm")
+    print(f"SMS location: {sms}")
+    
+
+    # z_min = 2.0
+    # z_max = 20.0
+    # z_step = 1
+    # max_M = 100
+    # best_M = None
+    # best_z = None
+    # min_error = 99999
+    # z_vals = np.arange(z_min, z_max + z_step, z_step)
+    
+    # for z in z_vals:
+    #     for M in range(2, max_M + 1, 2): 
+    #         dummy_height = M * z
+    #         error = abs(dummy_height - scan_height)
             
-            if error < min_error:
-                min_error = error
-                best_M = M
-                best_z = z
+    #         if error < min_error:
+    #             min_error = error
+    #             best_M = M
+    #             best_z = z
     
-    all_slice_locs = [round(slice_locs[-1] - i * sms_gap, 1) for i in range(sms_factor)]
-    results = [round(sms_fov, 2), all_slice_locs, round(best_M), round(best_z), round(min_error, 1)]
-    print(f"SMS FOV: {results[0]} mm")
-    print(f"Slice locations (mm S-I): {results[1]}")
-    print(f"Number of dummy slices: {results[2]} mm")
-    print(f"Dummy slice thickness: {results[3]} mm")
-    print(f"Error (each side): {results[4]} mm")
+    # all_slice_locs = [round(slice_locs[-1] - i * sms_gap, 1) for i in range(sms_factor)]
+    # results = [round(sms_fov, 2), all_slice_locs, round(best_M), round(best_z), round(min_error, 1)]
+    # print(f"SMS FOV: {results[0]} mm")
+    # print(f"Slice locations (mm S-I): {results[1]}")
+    # print(f"Number of dummy slices: {results[2]} mm")
+    # print(f"Dummy slice thickness: {results[3]} mm")
+    # print(f"Error (each side): {results[4]} mm")
 
 if __name__ == "__main__":
 
