@@ -370,6 +370,13 @@ def export_flow_data(mri_flow, out_name, header_info=None, c_format=False):
     vy = mri_flow.velocity_estimate[..., 1].astype(np.int16)
     vz = mri_flow.velocity_estimate[..., 2].astype(np.int16)
     
+    if len(mri_flow.magnitude.shape) < 4:
+        mg = np.expand_dims(mg, axis=0)
+        cd =  np.expand_dims(cd, axis=0)
+        vx =  np.expand_dims(vx, axis=0)
+        vy =  np.expand_dims(vy, axis=0)
+        vz =  np.expand_dims(vz, axis=0)
+    
     print(f'Exporting flow data to {out_name}')
     with h5py.File(out_name, 'w') as hf:
         header_group = hf.create_group("Header")
@@ -381,10 +388,7 @@ def export_flow_data(mri_flow, out_name, header_info=None, c_format=False):
             header_group.attrs["venc"] = mri_flow.venc
             header_group.attrs["matrixx"] = mg.shape[0]
             header_group.attrs["matrixy"] = mg.shape[1]
-            if len(mg.shape) > 3:
-                header_group.attrs["matrixz"] = mg.shape[2]
-            else:
-                header_group.attrs["matrixz"] = 1
+            header_group.attrs["matrixz"] = mg.shape[2]
             header_group.attrs["frames"] = mg.shape[-1]
         
         if c_format:

@@ -29,6 +29,7 @@ class MRI_Raw:
     fovz = 0
     sms_factor = 1
     sms_fov = 100
+    
     trajectory_type = None
     dft_needed = None
     Num_Frames = None
@@ -42,18 +43,7 @@ class MRI_Raw:
     frame = None
     median_rr = 1
     target_image_size = [256, 256, 64]
-    ix = 0;
-    iy = 0;
-    iz = 0;
-    jx = 0;
-    jy = 0;
-    jz = 0;
-    kx = 0;
-    ky = 0;
-    kz = 0;
-    sx = 0;
-    sy = 0;
-    sz = 0;
+    rot_matrix = None
 
 def resample_arc(input, coord, oshape=None, oversamp=2, width=7):
     """Adjoint non-uniform Fast Fourier Transform.
@@ -722,6 +712,7 @@ def gate_kspace2d(mri_raw=None, num_frames=[10, 10], gate_type=['time', 'prep'],
     mri_rawG.fovz = mri_raw.fovz
     mri_rawG.sms_factor = mri_raw.sms_factor
     mri_rawG.sms_fov= mri_raw.sms_fov
+    mri_rawG.rot_matrix = mri_raw.rot_matrix
 
     # List array
     mri_rawG.coords = []
@@ -853,6 +844,7 @@ def gate_kspace(mri_raw=None, num_frames=10, gate_type='time', discrete_gates=Fa
     mri_rawG.fovz = mri_raw.fovz
     mri_rawG.sms_factor = mri_raw.sms_factor
     mri_rawG.sms_fov = mri_raw.sms_fov
+    mri_rawG.rot_matrix = mri_raw.rot_matrix
 
     # List array for the gated k-space
     mri_rawG.coords = []
@@ -975,6 +967,12 @@ def strided_encoding(mri_raw=None, stride=7, shots_per_frame=1):
     mri_rawG.Num_Encodings = mri_raw.Num_Encodings*stride
     mri_rawG.dft_needed = mri_raw.dft_needed
     mri_rawG.trajectory_type = mri_raw.trajectory_type
+    mri_rawG.fovx = mri_raw.fovx
+    mri_rawG.fovy = mri_raw.fovy
+    mri_rawG.fovz = mri_raw.fovz
+    mri_rawG.sms_factor = mri_raw.sms_factor
+    mri_rawG.sms_fov = mri_raw.sms_fov
+    mri_rawG.rot_matrix = mri_raw.rot_matrix
 
     # List array for the gated k-space
     mri_rawG.coords = []
@@ -1054,6 +1052,7 @@ def resp_gate(mri_raw=None, efficiency=0.5, resp_sign=1, resp_filter_window=10, 
     mri_rawG.fovz = mri_raw.fovz
     mri_rawG.sms_factor = mri_raw.sms_factor
     mri_rawG.sms_fov = mri_raw.sms_fov
+    mri_rawG.rot_matrix = mri_raw.rot_matrix
     mri_rawG.median_rr = mri_raw.median_rr
 
     # List array
@@ -1155,24 +1154,26 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None,
             dft_needed = [np.squeeze(hf['Kdata'].attrs['dft_neededX']), np.squeeze(hf['Kdata'].attrs['dft_neededY']),
                           np.squeeze(hf['Kdata'].attrs['dft_neededZ'])]
             
-            fov_flag = False
-            sms_flag = False
-            rot_flag = False
             try:
                 fovx = np.squeeze(hf['Kdata'].attrs['fovx'])
                 fovz = np.squeeze(hf['Kdata'].attrs['fovz'])
                 fovy = np.squeeze(hf['Kdata'].attrs['fovy'])
-                fov_flag = True
             except:
-                pass
-            # try:
-            #     sms_factor = np.squeeze(hf['Kdata'].attrs['sms_factor'])
-            #     sms_fov = np.squeeze(hf['Kdata'].attrs['sms_fov'])
-            #     sms_flag = True
-            # except:
-            #     pass
-            sms_fov = 100
-            sms_flag = True
+                fovx = 0
+                fovy = 0
+                fovz = 0
+            if sms_factor == 0:
+                try:
+                    with open(os.path.join(os.path.dirname(h5_filename), 'sms_params.txt'), 'r') as f:
+                        sms_params = f.readlines()
+                        sms_factor = int(sms_params[0].split(' ')[1])
+                        sms_fov = float(sms_params[1].split(' ')[1])
+                except:
+                    sms_factor = 1
+                    sms_fov = 0
+            else:
+                sms_factor = sms_factor
+                sms_fov = 0
             try:
                 ix = np.squeeze(hf['Kdata'].attrs['ix'])
                 iy = np.squeeze(hf['Kdata'].attrs['iy'])
@@ -1186,26 +1187,23 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None,
                 sx = np.squeeze(hf['Kdata'].attrs['sx'])
                 sy = np.squeeze(hf['Kdata'].attrs['sy'])
                 sz = np.squeeze(hf['Kdata'].attrs['sz'])
-                rot_flag = True
+                rot_matrix = [[ix, iy, iz, 0],
+                              [jx, jy, jz, 0],
+                              [kx, ky, kz, 0],
+                              [sx, sy, sz, 1]]
             except:
-                pass
+                rot_matrix = np.eye(4)
             
             logging.info(f'Frames {Num_Frames}')
             logging.info(f'Coils {Num_Coils}')
             logging.info(f'Encodings {Num_Encodings}')
             logging.info(f'Trajectory Type {trajectory_type}')
             logging.info(f'DFT Needed {dft_needed}')
-            if fov_flag:
-                logging.info(f'FOV x:{fovx} y:{fovy} z:{fovz}')
-            if sms_flag:
-                logging.info(f'SMS factor: {sms_factor}')
-                logging.info(f'SMS fov: {sms_fov}')
-            # if rot_flag:
-                # logging.info(f'Rotation matrix:')
-                # logging.info(f'''[{ix} {iy} {iz} 0]
-                #                  [{jx} {jy} {jz} 0]
-                #                  [{kx} {ky} {kz} 0]
-                #                  [{sx} {sy} {sz} 1]''')
+            logging.info(f'FOV x:{fovx} y:{fovy} z:{fovz}')
+            logging.info(f'SMS factor: {sms_factor}')
+            logging.info(f'SMS fov: {sms_fov}')
+            logging.info(f'Rotation matrix:')
+            logging.info(f'{rot_matrix}')
 
         except Exception:
             logging.info('Missing header data')
@@ -1224,14 +1222,12 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None,
         mri_raw.Num_Frames = int(Num_Frames)
         mri_raw.dft_needed = tuple(dft_needed)
         mri_raw.trajectory_type = tuple(trajectory_type)
-        if fov_flag:
-            mri_raw.fovx = float(fovx)
-            mri_raw.fovy = float(fovy)
-            mri_raw.fovz = float(fovz)
-        else:
-            print('FOV attributes not found')
+        mri_raw.fovx = float(fovx)
+        mri_raw.fovy = float(fovy)
+        mri_raw.fovz = float(fovz)
         mri_raw.sms_factor = sms_factor
         mri_raw.sms_fov = sms_fov
+        mri_raw.rot_matrix = np.array(rot_matrix)
         
         # List array
         mri_raw.coords = []

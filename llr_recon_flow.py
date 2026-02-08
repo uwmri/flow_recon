@@ -98,7 +98,7 @@ if __name__ == "__main__":
     parser.add_argument('--shots_per_frame', type=int, default=2)
 
     # SMS Reconstruction
-    parser.add_argument('--sms_factor', type=int, default=1)  # sms factor
+    parser.add_argument('--sms_factor', type=int, default=0)  # sms factor
 
     # Flow Processing
     parser.add_argument('--flow_processing', dest='flow_processing', action='store_true', default=False)
@@ -478,6 +478,7 @@ if __name__ == "__main__":
     header_info['matrixy'] = int(img.shape[3])
     header_info["matrixz"] = int(img.shape[4])
     header_info["frames"] = int(args.frames)
+    header_info["rot_matrix"] = mri_raw.rot_matrix.tolist()
     if args.gate_type == "ecg":
         header_info["median_rr"] = float(mri_raw.median_rr)
         header_info["timeres"] = float(mri_raw.median_rr/args.frames)
