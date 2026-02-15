@@ -141,35 +141,45 @@ def show_images(sms_dir, time_resolved=False):
     fig.tight_layout()
     plt.show()
     
-# SMS sequence has wonky prescription so need to use dummy prescription to match needed sms fov, enter top and bottom slice locations (S-I, where I is negative S)
+# SMS sequence has wonky prescription so need to calculate manually
+# enter sms factor and desired top and bottom slice locations (mm S-I, where I is negative)
 def calc_rx(sms_factor, slice_locs):
+    
     sms_factor = int(sms_factor)
     slice_locs = slice_locs.split(',')
     slice_locs = [float(i) for i in slice_locs]
     slice_locs = sorted(slice_locs, reverse=True)
     if len(slice_locs) < 2:
         raise ValueError("At least two slice locations are required.")
+    elif len(slice_locs) < sms_factor:
+        step = (slice_locs[0] - slice_locs[-1]) / (sms_factor - 1)
+        slice_locs = [round(slice_locs[0] - i * step, 1) for i in range(sms_factor)]
     if sms_factor < 2:
         raise ValueError("SMS factor must be at least 2.")
     
-    rad_height = 186
-    sms_height = 150
-   
     scan_height = slice_locs[0] - slice_locs[-1]
     # sms_gap = scan_height / (sms_factor - 1.0)
-    sms_fov = scan_height * sms_factor/(sms_factor - 1.0)
     
-    aao_rad = [slice_locs[0] - rad_height/2, slice_locs[0] + rad_height/2]
-    tho_rad = [slice_locs[1] - rad_height/2, slice_locs[1] + rad_height/2]
-    abd_rad = [slice_locs[2] - rad_height/2, slice_locs[2] + rad_height/2]
+    # set this value based on default scan prescription (end-start)
+    rad_height = 186
+
+    num_slices = round(2*scan_height / 4.0)
+    sms_height = num_slices * 2
     
-    sms = [slice_locs[1] - sms_height/2, slice_locs[1] + sms_height/2]
+    sms_fov = round(scan_height * sms_factor/(sms_factor - 1.0), 2)
+    
+    aao_rad = [round(slice_locs[0] - rad_height/2, 1), round(slice_locs[0] + rad_height/2, 1)]
+    tho_rad = [round(slice_locs[1] - rad_height/2, 1), round(slice_locs[1] + rad_height/2, 1)]
+    abd_rad = [round(slice_locs[2] - rad_height/2, 1), round(slice_locs[2] + rad_height/2, 1)]
+    
+    sms = [round(slice_locs[1] - sms_height/2, 1), round(slice_locs[1] + sms_height/2, 1)]
     
     print(f"Slice locations (mm S-I): {slice_locs}")
     print(f"AAo radial location: {aao_rad}")
     print(f"Tho radial location: {tho_rad}")
     print(f"Abd radial location: {abd_rad}")
     print(f"SMS FOV: {sms_fov} mm")
+    print(f"Number of slices: {num_slices}")
     print(f"SMS location: {sms}")
     
 

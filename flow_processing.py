@@ -333,7 +333,7 @@ class MRI_4DFlow:
     :return: Nt x Nz x Ny x Nx x Nencode x 1
     """
     def update_magnitude(self):
-        self.magnitude = np.sqrt( np.mean( np.abs(self.signal)**2 , -1))
+        self.magnitude = np.sqrt(np.sum(np.abs(self.signal)**2 , axis=-1))
 
     """
     :return: Nt x Nz x Ny x Nx x Nencode x 1
@@ -346,8 +346,11 @@ class MRI_4DFlow:
         if self.velocity_estimate is None:
             self.solve_for_velocity()
 
-        vmag = np.sqrt( np.mean( np.abs(self.velocity_estimate)**2 , -1))
-        self.angiogram = self.magnitude*np.sin(math.pi/2.0*vmag/self.venc)
+        # make consistent with C++ recon
+        vmag = np.sqrt(np.sum(self.velocity_estimate**2, axis=-1))
+        vmag = 2.0 * vmag / self.venc
+        vmag = np.minimum(vmag, 1.0)
+        self.angiogram = self.magnitude * np.sin(np.pi/2 * vmag)
 
         idx = np.where(vmag > self.venc )
         self.angiogram[idx] = self.magnitude[idx]
@@ -370,12 +373,13 @@ def export_flow_data(mri_flow, out_name, header_info=None, c_format=False):
     vy = mri_flow.velocity_estimate[..., 1].astype(np.int16)
     vz = mri_flow.velocity_estimate[..., 2].astype(np.int16)
     
+    # if time averaged, add time dimension
     if len(mri_flow.magnitude.shape) < 4:
         mg = np.expand_dims(mg, axis=0)
-        cd =  np.expand_dims(cd, axis=0)
-        vx =  np.expand_dims(vx, axis=0)
-        vy =  np.expand_dims(vy, axis=0)
-        vz =  np.expand_dims(vz, axis=0)
+        cd = np.expand_dims(cd, axis=0)
+        vx = np.expand_dims(vx, axis=0)
+        vy = np.expand_dims(vy, axis=0)
+        vz = np.expand_dims(vz, axis=0)
     
     print(f'Exporting flow data to {out_name}')
     with h5py.File(out_name, 'w') as hf:
@@ -386,13 +390,13 @@ def export_flow_data(mri_flow, out_name, header_info=None, c_format=False):
                 header_group.attrs[attr] = header_info[attr]
         else:
             header_group.attrs["venc"] = mri_flow.venc
-            header_group.attrs["matrixx"] = mg.shape[0]
-            header_group.attrs["matrixy"] = mg.shape[1]
-            header_group.attrs["matrixz"] = mg.shape[2]
-            header_group.attrs["frames"] = mg.shape[-1]
+            header_group.attrs["frames"] = mg.shape[0]
+            header_group.attrs["matrixx"] = mg.shape[1]
+            header_group.attrs["matrixy"] = mg.shape[2]
+            header_group.attrs["matrixz"] = mg.shape[3]
         
         if c_format:
-            frames = mri_flow.magnitude.shape[0]
+            frames = mg.shape[0]
             data_group.create_dataset("MAG", data=np.squeeze(np.mean(mg, axis=0)))
             data_group.create_dataset("CD", data=np.squeeze(np.mean(cd, axis=0)))
             data_group.create_dataset("comp_vd_1", data=np.squeeze(np.mean(vx, axis=0)))
