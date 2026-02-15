@@ -328,7 +328,6 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
     sms_factor = mri_rawdata.sms_factor
 
     if smap_type == 'espirit':
-
         # Low resolution images
         res = 64
         lpf = np.sum(coord ** 2, axis=-1)
@@ -350,11 +349,14 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
             ksp[c] = sp.nufft_adjoint(ksp_t, coord_t, img_shape)
 
         # Put onto CPU due to memory issues in ESPiRIT
-        ksp = sp.to_device(ksp, sp.cpu_device)
+        # ksp = sp.to_device(ksp, sp.cpu_device)
 
         # Espirit Cal
         smaps = sp.mri.app.EspiritCalib(ksp, calib_width=24, thresh=0.02, kernel_width=6, crop=0.0, max_iter=100,
-                                        device=sp.cpu_device, show_pbar=True).run()
+                                        device=sp.Device(args.device), show_pbar=True).run()
+        
+        if sms_factor > 1:
+            smaps = np.repeat(smaps[..., np.newaxis], sms_factor, -1)
 
     elif smap_type == 'walsh':
 
@@ -422,6 +424,9 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
         blocked_image = np.moveaxis(blocked_image, -1, 0)  # First axis is coil
 
         smaps = B.H*blocked_image
+        
+        if sms_factor > 1:
+            smaps = np.repeat(smaps[..., np.newaxis], sms_factor, -1)
 
     elif smap_type == "lowres":
         # Get a composite image

@@ -172,7 +172,7 @@ if __name__ == "__main__":
         xp = sp.Device(args.device).xp
         smaps = xp.ones([mri_raw.Num_Coils] + img_shape, dtype=xp.complex64)
     else:
-        smaps = get_smaps(mri_rawdata=mri_raw, args=args, thresh_maps=args.thresh_maps, smap_type=args.smap_type, log_dir=args.out_folder)
+        smaps = get_smaps(mri_rawdata=mri_raw, args=args, thresh_maps=args.thresh_maps, smap_type=args.smap_type, device=args.device, log_dir=args.out_folder)
 
     logger.info(f'Smaps shape {smaps.shape}')
     
