@@ -136,7 +136,7 @@ if __name__ == "__main__":
         mri_raw = load_MRI_raw(h5_filename=args.filename, max_coils=2, max_encodes=args.max_encodes, sms_factor=args.sms_factor)
     else:
         mri_raw = load_MRI_raw(h5_filename=args.filename, compress_coils=args.compress_coils, max_encodes=args.max_encodes, sms_factor=args.sms_factor)
-
+    args.sms_factor = mri_raw.sms_factor
     # Resample
     # radial3d_regrid(mri_raw)
 
@@ -361,9 +361,9 @@ if __name__ == "__main__":
         for i in range(len(mri_raw.kdata)):
             logger.info(f'Sense Recon : Frame {i}')
 
-            kdata = array_to_gpu(mri_raw.kdata[i], args.device)
-            dcf = array_to_gpu(mri_raw.dcf[i], args.device)
-            coord = array_to_gpu(mri_raw.coords[i], args.device)
+            kdata = array_to_gpu(mri_raw.kdata[i], sp.Device(args.device))
+            dcf = array_to_gpu(mri_raw.dcf[i], sp.Device(args.device))
+            coord = array_to_gpu(mri_raw.coords[i], sp.Device(args.device))
 
             # print(f'Smaps device = {sp.get_device(smaps)}')
             # print(f'Kdata = device = {sp.get_device(kdata)}')
@@ -371,11 +371,11 @@ if __name__ == "__main__":
             # print(f'Coord device = {sp.get_device(coord)}')
             
             if args.sms_factor > 1:
-                blips = array_to_gpu(mri_raw.sms_blips[i], args.device)
+                blips = array_to_gpu(mri_raw.sms_blips[i], sp.Device(args.device))
                 sense = SenseSMSRecon(kdata, smaps, sms_factor=args.sms_factor, blips=blips, lamda=args.lamda, weights=dcf, coord=coord, 
-                                  max_iter=args.max_iter, coil_batch_size=args.coil_batch_size, device=args.device)
+                                  max_iter=args.max_iter, coil_batch_size=args.coil_batch_size, device=sp.Device(args.device))
             else:
-                sense = sp.mri.linop.SenseRecon(kdata, smaps, lamda=args.lamda, weights=dcf, coord=coord, max_iter=args.max_iter, coil_batch_size=args.coil_batch_size, device=args.device)
+                sense = sp.mri.linop.SenseRecon(kdata, smaps, lamda=args.lamda, weights=dcf, coord=coord, max_iter=args.max_iter, coil_batch_size=args.coil_batch_size, device=sp.Device(args.device))
                 # sense = sp.mri.app.L1WaveletRecon(kdata, smaps, lamda=1e-1, weights=dcf, coord=coord, max_iter=50, coil_batch_size=1, device=args.device)
                 
             # print('Run Sense')

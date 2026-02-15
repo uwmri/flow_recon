@@ -1101,9 +1101,9 @@ def resp_gate(mri_raw=None, efficiency=0.5, resp_sign=1, resp_filter_window=10, 
                 time_mask |= np.logical_and(time > time_range[0], time < time_range[1])
             idx &= time_mask
             
-        # np.savetxt('resp_mask.txt', idx)
-        # np.savetxt('resp.txt', resp)
-        # np.savetxt('time.txt', time)
+        np.savetxt('TimeWeight.txt', idx)
+        np.savetxt('TimeResp.txt', resp)
+        np.savetxt('Time.txt', time)
             
         current_points = np.sum(idx)
         
