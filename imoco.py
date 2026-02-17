@@ -1,4 +1,4 @@
-import antspyx as ants
+import ants
 import numpy as np 
 import sigpy as sp
 import h5py
