@@ -1267,15 +1267,18 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None,
             
             ksp = []
             logging.info('Loading kspace...')
+            k0 = hf['Kdata'][f'KData_E{encode}_C0']
+            shape = k0.shape
+            ksp = np.empty((Num_Coils, *shape), dtype=np.complex64)
             for c in tqdm(range(Num_Coils)):
                 # logging.info(f'Loading kspace, coil {c + 1} / {Num_Coils}.')
-
                 k = hf['Kdata'][f'KData_E{encode}_C{c}']
                 try:
-                    ksp.append(np.array(k['real'] + 1j * k['imag']))
-                except:
-                    ksp.append(k)
-            ksp = np.stack(ksp, axis=0)
+                    ksp[c] = k['real'][:] + 1j * k['imag'][:]
+                except Exception:
+                    ksp[c] = k[:]
+            # ksp = np.stack(ksp, axis=0)
+            # logging.info(f'kspace loaded')
             
             # if sms_factor > 1:
             #     logging.info(f"Calculating phase blips for SMS acquisition with {sms_factor} slices")
@@ -1300,12 +1303,14 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None,
                 blips = np.exp(1j * np.outer(proj_mod, sms_phases)).astype(np.complex64)
                 sms_blips = np.repeat(blips, readout, axis=0)
             else:
+                _, _, projs, readout = ksp.shape  # (coils, 1, projs, readout)
                 sms_blips = np.zeros((projs*readout, 1), dtype=np.complex64)
 
             # Regrid the readout to reduce oversampling
             # coord, dcf, ksp = radial3d_regrid(coord, dcf, ksp)
 
             # Load time data
+            logging.info('Load gating data...')
             try:
                 time_readout = np.array(hf['Gating']['time'])
             except Exception:
@@ -1329,15 +1334,25 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None,
             if resp_readout.size != dcf.size:
 
                 # This assigns the same time to each point in the readout
-                time_readout = np.expand_dims(time_readout, -1)
-                ecg_readout = np.expand_dims(ecg_readout, -1)
-                resp_readout = np.expand_dims(resp_readout, -1)
-                prep_readout = np.expand_dims(prep_readout, -1)
+                # time_readout = np.expand_dims(time_readout, -1)
+                # ecg_readout = np.expand_dims(ecg_readout, -1)
+                # resp_readout = np.expand_dims(resp_readout, -1)
+                # prep_readout = np.expand_dims(prep_readout, -1)
 
-                time = np.tile(time_readout, (1, 1, dcf.shape[2]))
-                resp = np.tile(resp_readout, (1, 1, dcf.shape[2]))
-                ecg = np.tile(ecg_readout, (1, 1, dcf.shape[2]))
-                prep = np.tile(prep_readout, (1, 1, dcf.shape[2]))
+                # time = np.tile(time_readout, (1, 1, dcf.shape[2]))
+                # resp = np.tile(resp_readout, (1, 1, dcf.shape[2]))
+                # ecg = np.tile(ecg_readout, (1, 1, dcf.shape[2]))
+                # prep = np.tile(prep_readout, (1, 1, dcf.shape[2]))
+                
+                time = time_readout[..., None]
+                ecg  = ecg_readout[..., None]
+                resp = resp_readout[..., None]
+                prep = prep_readout[..., None]
+
+                time = np.broadcast_to(time, dcf.shape)
+                ecg  = np.broadcast_to(ecg,  dcf.shape)
+                resp = np.broadcast_to(resp, dcf.shape)
+                prep = np.broadcast_to(prep, dcf.shape)
 
                 logging.info(f'Min/max time (s) = {np.min(time)} {np.max(time)}')
             else:
@@ -1349,15 +1364,12 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None,
             # Append to lists and flatten
             
             logging.info("Reshaping data arrays...")
-            coords2 = coord.reshape(-1, coord.shape[-1])
-            
-            ksp2 = ksp.reshape(ksp.shape[0], -1)
 
             # sms_blips2 = sms_blips.reshape(sms_blips.shape[0], -1, sms_blips.shape[-1])
 
             mri_raw.dcf.append(dcf.flatten())
-            mri_raw.coords.append(coords2)
-            mri_raw.kdata.append(ksp2)
+            mri_raw.coords.append(coord.reshape(-1, coord.shape[-1]))
+            mri_raw.kdata.append(ksp.reshape(ksp.shape[0], -1))
             mri_raw.sms_blips.append(sms_blips)
 
             # mri_raw.coords.append(coord)

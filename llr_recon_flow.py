@@ -375,7 +375,7 @@ if __name__ == "__main__":
                 sense = SenseSMSRecon(kdata, smaps, sms_factor=args.sms_factor, blips=blips, lamda=args.lamda, weights=dcf, coord=coord, 
                                   max_iter=args.max_iter, coil_batch_size=args.coil_batch_size, device=sp.Device(args.device))
             else:
-                sense = sp.mri.linop.SenseRecon(kdata, smaps, lamda=args.lamda, weights=dcf, coord=coord, max_iter=args.max_iter, coil_batch_size=args.coil_batch_size, device=sp.Device(args.device))
+                sense = sp.mri.linop.Sense(kdata, smaps, lamda=args.lamda, weights=dcf, coord=coord, max_iter=args.max_iter, coil_batch_size=args.coil_batch_size, device=sp.Device(args.device))
                 # sense = sp.mri.app.L1WaveletRecon(kdata, smaps, lamda=1e-1, weights=dcf, coord=coord, max_iter=50, coil_batch_size=1, device=args.device)
                 
             # print('Run Sense')
@@ -397,7 +397,7 @@ if __name__ == "__main__":
             
             if args.sms_factor > 1:
                 blips = array_to_gpu(mri_raw.sms_blips[i], args.device)
-                sense = L1WaveletRecon(kdata, smaps, args.lamda, sms_factor=args.sms_factor, blips=blips, weights=dcf, coord=coord, 
+                sense = L1WaveletSMSRecon(kdata, smaps, args.lamda, sms_factor=args.sms_factor, blips=blips, weights=dcf, coord=coord, 
                                   max_iter=args.max_iter, coil_batch_size=args.coil_batch_size, device=args.device)
             else:
                 sense = sp.mri.app.L1WaveletRecon(kdata, smaps, args.lamda, weights=dcf, coord=coord, max_iter=args.max_iter, coil_batch_size=args.coil_batch_size, device=args.device)
@@ -471,12 +471,13 @@ if __name__ == "__main__":
     header_info["frames"] = int(args.frames)
     header_info["rot_matrix"] = mri_raw.rot_matrix.tolist()
     if args.gate_type == "ecg":
-        header_info["median_rr"] = float(mri_raw.median_rr)
-        header_info["timeres"] = float(mri_raw.median_rr/args.frames)
+        header_info["median_rr"] = float(mri_raw.median_rr) * 1000
+        header_info["timeres"] = float(mri_raw.median_rr/args.frames) * 1000
     if args.time_range is not None and args.resp_gate:
         header_info["time_range"] = args.time_range
     if args.sms_factor > 1:
         header_info["sms_factor"] = int(args.sms_factor)
+        header_info["sms_fov"] = int(mri_raw.sms_fov)
 
     # export data
     if args.flow_processing:

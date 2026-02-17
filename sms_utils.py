@@ -172,7 +172,7 @@ def calc_rx(sms_factor, slice_locs):
     tho_rad = [round(slice_locs[1] - rad_height/2, 1), round(slice_locs[1] + rad_height/2, 1)]
     abd_rad = [round(slice_locs[2] - rad_height/2, 1), round(slice_locs[2] + rad_height/2, 1)]
     
-    sms = [round(slice_locs[1] - sms_height/2, 1), round(slice_locs[1] + sms_height/2, 1)]
+    sms = [round(slice_locs[1] - sms_height/2+1, 1), round(slice_locs[1] + sms_height/2-1, 1)]
     
     print(f"Slice locations (mm S-I): {slice_locs}")
     print(f"AAo radial location: {aao_rad}")
