@@ -66,6 +66,7 @@ if __name__ == "__main__":
     parser.add_argument('--jsense_lamda', type=float, default=0.0)
     parser.add_argument('--smap_type', type=str, default='jsense', help='Sensitivity type jsense, lowres, walsh, espirit')
 
+    parser.add_argument('--lp_frac', type=float, default=1.0, help='Low pass filter')
     parser.add_argument('--krad_cutoff', type=float, default=999990)
     parser.add_argument('--max_encodes', type=int, default=None)
     parser.add_argument('--coil_batch_size', type=int, default=1)
@@ -75,6 +76,12 @@ if __name__ == "__main__":
     parser.add_argument('--prep_disdaqs', type=int, default=0)
     parser.add_argument('--crop_factor', type=float, default=1.0)
     parser.add_argument('--data_oversampling', type=float, default=2.0)
+    parser.add_argument('--fovx', type=float, default=None)
+    parser.add_argument('--fovy', type=float, default=None)
+    parser.add_argument('--fovz', type=float, default=None)
+    parser.add_argument('--rcxres', type=int, default=None)
+    parser.add_argument('--rcyres', type=int, default=None)
+    parser.add_argument('--rczres', type=int, default=None)
 
     parser.set_defaults(resp_gate=False)
     parser.add_argument('--resp_gate', dest='resp_gate', action='store_true')
@@ -135,7 +142,8 @@ if __name__ == "__main__":
     if args.test_run:
         mri_raw = load_MRI_raw(h5_filename=args.filename, max_coils=2, max_encodes=args.max_encodes, sms_factor=args.sms_factor)
     else:
-        mri_raw = load_MRI_raw(h5_filename=args.filename, compress_coils=args.compress_coils, max_encodes=args.max_encodes, sms_factor=args.sms_factor)
+        mri_raw = load_MRI_raw(h5_filename=args.filename, compress_coils=args.compress_coils, max_encodes=args.max_encodes, 
+                               lp_frac=args.lp_frac, sms_factor=args.sms_factor)
     args.sms_factor = mri_raw.sms_factor
     # Resample
     # radial3d_regrid(mri_raw)
@@ -154,6 +162,23 @@ if __name__ == "__main__":
             time_ranges = None
         mri_raw = resp_gate(mri_raw, efficiency=args.resp_efficiency, resp_sign=args.resp_sign, resp_filter_window=args.resp_filter_window, time_ranges=time_ranges)
 
+    # set custom recon resolution
+    if args.rcxres is not None and args.rcyres is not None and args.rczres is not None:
+        rcres = [args.rczres, args.rcyres, args.rcxres]
+    else:
+        rcres = None
+        
+    if args.fovx is not None and args.fovy is not None and args.fovz is not None:
+        rcfov = [args.fovx, args.fovy, args.fovz]
+        img_scale = [args.fovz/mri_raw.fovz, args.fovy/mri_raw.fovy, args.fovx/mri_raw.fovx]
+        for e in range(len(mri_raw.coords)):
+            mri_raw.coords[e] *= img_scale
+        mri_raw.fovz = args.fovz
+        mri_raw.fovy = args.fovy
+        mri_raw.fovx = args.fovx
+    else:
+        rcfov = None
+   
     # Reconstruct an low res image and get the field of view
     logger.info(f'Estimating FOV MRI ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
     if args.recon_type == 'llr':
@@ -161,18 +186,21 @@ if __name__ == "__main__":
     else:
         autofov_block_size = 8
 
-    if args.autofov:
+    if args.autofov and rcfov is None:
         autofov(mri_raw=mri_raw, thresh=args.thresh, scale=args.scale, oversample=args.data_oversampling,
-            square=False, block_size=autofov_block_size, logdir=args.out_folder)
+            square=False, block_size=autofov_block_size, logdir=args.out_folder, device=sp.Device(args.device))
 
     # Get sensitivity maps
     logger.info(f'Reconstruct sensitivity maps ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
     if mri_raw.Num_Coils == 1:
-        img_shape = sp.estimate_shape(mri_raw.coords[0])
+        if rcres is not None:
+            img_shape = rcres
+        else:
+            img_shape = sp.estimate_shape(mri_raw.coords[0])
         xp = sp.Device(args.device).xp
         smaps = xp.ones([mri_raw.Num_Coils] + img_shape, dtype=xp.complex64)
     else:
-        smaps = get_smaps(mri_rawdata=mri_raw, args=args, thresh_maps=args.thresh_maps, smap_type=args.smap_type, device=args.device, log_dir=args.out_folder)
+        smaps = get_smaps(mri_rawdata=mri_raw, args=args, thresh_maps=args.thresh_maps, smap_type=args.smap_type, img_shape=rcres, device=args.device, log_dir=args.out_folder)
 
     logger.info(f'Smaps shape {smaps.shape}')
     
@@ -375,7 +403,7 @@ if __name__ == "__main__":
                 sense = SenseSMSRecon(kdata, smaps, sms_factor=args.sms_factor, blips=blips, lamda=args.lamda, weights=dcf, coord=coord, 
                                   max_iter=args.max_iter, coil_batch_size=args.coil_batch_size, device=sp.Device(args.device))
             else:
-                sense = sp.mri.linop.Sense(kdata, smaps, lamda=args.lamda, weights=dcf, coord=coord, max_iter=args.max_iter, coil_batch_size=args.coil_batch_size, device=sp.Device(args.device))
+                sense = sp.mri.app.SenseRecon(kdata, smaps, lamda=args.lamda, weights=dcf, coord=coord, max_iter=args.max_iter, coil_batch_size=args.coil_batch_size, device=sp.Device(args.device))
                 # sense = sp.mri.app.L1WaveletRecon(kdata, smaps, lamda=1e-1, weights=dcf, coord=coord, max_iter=50, coil_batch_size=1, device=args.device)
                 
             # print('Run Sense')
@@ -515,12 +543,14 @@ if __name__ == "__main__":
             combined.magnitude = np.stack([s.magnitude for s in all_slices], axis=-1)
             combined.angiogram = np.stack([s.angiogram for s in all_slices], axis=-1)
             combined.velocity_estimate = np.stack([s.velocity_estimate for s in all_slices], axis=-2) 
+            header_info["venc"] = float(combined.venc)
             export_flow_data(combined, out_name, header_info=header_info, c_format=args.c_format)
         
         else:
             mri_flow = MRI_4DFlow(encoding, signal=img, venc=args.venc, unwrap_lap=args.unwrap_lap)
             mri_flow.solve_for_velocity()
             mri_flow.update_angiogram()
+            header_info["venc"] = float(mri_flow.venc)
             export_flow_data(mri_flow, out_name, header_info=header_info, c_format=args.c_format)
 
     else:

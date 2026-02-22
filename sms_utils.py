@@ -162,9 +162,12 @@ def calc_rx(sms_factor, slice_locs):
     
     # set this value based on default scan prescription (end-start)
     rad_height = 186
+    slice_thickness = 2.0
 
-    num_slices = round(2*scan_height / 4.0)
-    sms_height = num_slices * 2
+    num_slices = round(scan_height / 2)
+    if num_slices % 2 != 0:
+        num_slices += 1
+    sms_height = num_slices * slice_thickness - slice_thickness
     
     sms_fov = round(scan_height * sms_factor/(sms_factor - 1.0), 2)
     
@@ -172,7 +175,7 @@ def calc_rx(sms_factor, slice_locs):
     tho_rad = [round(slice_locs[1] - rad_height/2, 1), round(slice_locs[1] + rad_height/2, 1)]
     abd_rad = [round(slice_locs[2] - rad_height/2, 1), round(slice_locs[2] + rad_height/2, 1)]
     
-    sms = [round(slice_locs[1] - sms_height/2+1, 1), round(slice_locs[1] + sms_height/2-1, 1)]
+    sms = [round(slice_locs[1] - sms_height/2, 1), round(slice_locs[1] + sms_height/2, 1)]
     
     print(f"Slice locations (mm S-I): {slice_locs}")
     print(f"AAo radial location: {aao_rad}")
