@@ -207,7 +207,7 @@ class MRI_4DFlow:
         signal2 = np.expand_dims( signal2,-1)
 
         # Get subtracted decoding matrix
-        diffMatrix = self.EncodingMatrix
+        diffMatrix = self.EncodingMatrix.copy()
         diffMatrix -= diffMatrix[0,:]
         self.DecodingMatrix = np.linalg.pinv(diffMatrix)
 
@@ -247,7 +247,7 @@ class MRI_4DFlow:
         #   Nt x Nz x Ny x Nx x 3
         self.velocity_estimate = np.squeeze( self.velocity_estimate, axis=-1)
 
-    def background_phase_correct(self,mag_thresh=0.08, angiogram_thresh=0.3,fit_order=2):
+    def background_phase_correct(self,mag_thresh=0.08, angiogram_thresh=0.3,fit_order=3):
 
         # Average time frames
         magnitude_avg = np.mean(self.magnitude, 0)
@@ -352,8 +352,8 @@ class MRI_4DFlow:
         vmag = np.minimum(vmag, 1.0)
         self.angiogram = self.magnitude * np.sin(np.pi/2 * vmag)
 
-        idx = np.where(vmag > self.venc )
-        self.angiogram[idx] = self.magnitude[idx]
+        # idx = np.where(vmag > self.venc )
+        # self.angiogram[idx] = self.magnitude[idx]
         
 
 def export_flow_data(mri_flow, out_name, header_info=None, c_format=False):

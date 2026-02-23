@@ -284,7 +284,7 @@ def pca_coil_compression(kdata=None, axis=0, target_channels=None):
             kdata[e] = np.moveaxis(kdata[e], axis, -1)
             kdata[e] = np.expand_dims(kdata[e], -1)
             logger.info(f'Shape = {kdata[e].shape}')
-            kdata[e] = np.matmul(u, kdata[e])
+            kdata[e] = np.matmul(np.conj(u.T), kdata[e])
             kdata[e] = np.squeeze(kdata[e], axis=-1)
             kdata[e] = kdata[e][..., :target_channels]
             kdata[e] = np.moveaxis(kdata[e], -1, axis)
@@ -1040,7 +1040,7 @@ def bounded_medfilt(signal, window):
   return filtered 
 
 
-def resp_gate(mri_raw=None, efficiency=0.5, resp_sign=1, resp_filter_window=10, time_ranges=None):
+def resp_gate(mri_raw=None, efficiency=0.5, resp_sign=1, resp_filter_window=10, time_ranges=None, debug_folder=None):
     from scipy.ndimage import minimum_filter1d, maximum_filter1d
     logger = logging.getLogger('Resp Gate k-space')
 
@@ -1104,10 +1104,15 @@ def resp_gate(mri_raw=None, efficiency=0.5, resp_sign=1, resp_filter_window=10, 
                 logger.info(f'{time_range[0]} to {time_range[1]} s')
                 time_mask |= np.logical_and(time > time_range[0], time < time_range[1])
             idx &= time_mask
-            
-        np.savetxt('TimeWeight.txt', idx)
-        np.savetxt('TimeResp.txt', resp)
-        np.savetxt('Time.txt', time)
+        
+        if debug_folder is None:
+            np.savetxt('TimeWeight.txt', idx)
+            np.savetxt('TimeResp.txt', resp)
+            np.savetxt('Time.txt', time)
+        else:
+            np.savetxt(os.path.join(debug_folder, 'TimeWeight.txt'), idx)
+            np.savetxt(os.path.join(debug_folder, 'TimeResp.txt'), resp)
+            np.savetxt(os.path.join(debug_folder, 'Time.txt'), time)
             
         current_points = np.sum(idx)
         
@@ -1811,9 +1816,14 @@ def autofov(mri_raw=None, device=None,
     for e in range(len(mri_raw.coords)):
         mri_raw.coords[e] *= img_scale
     
-    mri_raw.fovz *= img_scale[0]
-    mri_raw.fovy *= img_scale[1]
-    mri_raw.fovx *= img_scale[2]
+    if ndim == 2:
+        mri_raw.fovz = 1
+        mri_raw.fovy *= img_scale[0]
+        mri_raw.fovx *= img_scale[1]
+    else:
+        mri_raw.fovz *= img_scale[0]
+        mri_raw.fovy *= img_scale[1]
+        mri_raw.fovx *= img_scale[2]
 
     new_img_shape = sp.estimate_shape(mri_raw.coords[0])
     print(sp.estimate_shape(mri_raw.coords[0]))

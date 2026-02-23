@@ -8,6 +8,7 @@ import sigpy as sp
 import cupy
 import time
 import math
+import sys
 
 from mri_raw import *
 from multi_scale_low_rank_recon import *
@@ -110,7 +111,7 @@ if __name__ == "__main__":
     parser.add_argument('--flow_processing', dest='flow_processing', action='store_true', default=False)
     parser.add_argument('--c_format', dest='c_format', action='store_true', default=False, help='export flow HDF5 file in C++ recon format')
     parser.add_argument('--venc', type=int, default=1500) # mm/s
-    parser.add_argument('--unwrap_lap', dest='unwrap_lap', action='store_true')
+    parser.add_argument('--unwrap_lap', dest='unwrap_lap', action='store_true', default=False, help='4D Laplacian phase unwrapping')
 
     # Debugging / mslr mag and example images
     parser.add_argument('--example_images', dest='example_images', action='store_true')
@@ -160,22 +161,31 @@ if __name__ == "__main__":
                 time_ranges.append([float(x) for x in trange.split('-')])
         else:
             time_ranges = None
-        mri_raw = resp_gate(mri_raw, efficiency=args.resp_efficiency, resp_sign=args.resp_sign, resp_filter_window=args.resp_filter_window, time_ranges=time_ranges)
+        mri_raw = resp_gate(mri_raw, efficiency=args.resp_efficiency, resp_sign=args.resp_sign, resp_filter_window=args.resp_filter_window, time_ranges=time_ranges, debug_folder=args.out_folder)
 
     # set custom recon resolution
-    if args.rcxres is not None and args.rcyres is not None and args.rczres is not None:
-        rcres = [args.rczres, args.rcyres, args.rcxres]
+    if args.rcxres is not None and args.rcyres is not None:
+        if mri_raw.coord[0].shape[-1] == 2:
+            rcres = [args.rcyres, args.rcxres]
+        else:
+            rcres = [args.rczres, args.rcyres, args.rcxres]
     else:
         rcres = None
         
-    if args.fovx is not None and args.fovy is not None and args.fovz is not None:
-        rcfov = [args.fovx, args.fovy, args.fovz]
-        img_scale = [args.fovz/mri_raw.fovz, args.fovy/mri_raw.fovy, args.fovx/mri_raw.fovx]
-        for e in range(len(mri_raw.coords)):
-            mri_raw.coords[e] *= img_scale
-        mri_raw.fovz = args.fovz
+    if args.fovx is not None and args.fovy is not None:
+        if mri_raw.coord[0].shape[-1] == 2:
+            rcfov = [args.fovy, args.fovx]
+            img_scale = [args.fovy/mri_raw.fovy, args.fovx/mri_raw.fovx]
+        else:
+            rcfov = [args.fovx, args.fovy, args.fovz]
+            img_scale = [args.fovz/mri_raw.fovz, args.fovy/mri_raw.fovy, args.fovx/mri_raw.fovx]
+            mri_raw.fovz = args.fovz
         mri_raw.fovy = args.fovy
         mri_raw.fovx = args.fovx
+        
+        for e in range(len(mri_raw.coords)):    
+            mri_raw.coords[e] *= img_scale
+
     else:
         rcfov = None
    
@@ -401,9 +411,10 @@ if __name__ == "__main__":
             if args.sms_factor > 1:
                 blips = array_to_gpu(mri_raw.sms_blips[i], sp.Device(args.device))
                 sense = SenseSMSRecon(kdata, smaps, sms_factor=args.sms_factor, blips=blips, lamda=args.lamda, weights=dcf, coord=coord, 
-                                  max_iter=args.max_iter, coil_batch_size=args.coil_batch_size, device=sp.Device(args.device))
+                                  max_iter=args.max_iter, coil_batch_size=args.coil_batch_size, device=sp.Device(args.device), solver="ConjugateGradient")
             else:
-                sense = sp.mri.app.SenseRecon(kdata, smaps, lamda=args.lamda, weights=dcf, coord=coord, max_iter=args.max_iter, coil_batch_size=args.coil_batch_size, device=sp.Device(args.device))
+                sense = sp.mri.app.SenseRecon(kdata, smaps, lamda=args.lamda, weights=dcf, coord=coord, max_iter=args.max_iter, 
+                                coil_batch_size=args.coil_batch_size, device=sp.Device(args.device), solver="ConjugateGradient")
                 # sense = sp.mri.app.L1WaveletRecon(kdata, smaps, lamda=1e-1, weights=dcf, coord=coord, max_iter=50, coil_batch_size=1, device=args.device)
                 
             # print('Run Sense')
