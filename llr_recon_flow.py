@@ -8,6 +8,7 @@ import sigpy as sp
 import cupy
 import time
 import math
+import sys
 
 from mri_raw import *
 from multi_scale_low_rank_recon import *
@@ -27,8 +28,13 @@ from gpu_ops import *
 
 if __name__ == "__main__":
     
-    logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger('main') 
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(levelname)s:%(name)s:%(message)s')
+    console = logging.StreamHandler()
+    console.setLevel(logging.INFO)
+    console.setFormatter(formatter)
+    logger.addHandler(console)
     
     # Parse Command Line
     parser = argparse.ArgumentParser()
@@ -67,19 +73,28 @@ if __name__ == "__main__":
     parser.add_argument('--jsense_lamda', type=float, default=0.0)
     parser.add_argument('--smap_type', type=str, default='jsense', help='Sensitivity type jsense, lowres, walsh, espirit')
 
+    parser.add_argument('--lp_frac', type=float, default=1.0, help='Low pass filter')
     parser.add_argument('--krad_cutoff', type=float, default=999990)
     parser.add_argument('--max_encodes', type=int, default=None)
     parser.add_argument('--coil_batch_size', type=int, default=1)
+    parser.add_argument('--compress_coils', type=int, dest='compress_coils', default=-1, help='Number of coils to compress to')
     
     parser.add_argument('--gate_type', type=str, default='time')  # recon type
     parser.add_argument('--gate_type2', type=str, default='prep')  # recon type
     parser.add_argument('--prep_disdaqs', type=int, default=0)
     parser.add_argument('--crop_factor', type=float, default=1.0)
     parser.add_argument('--data_oversampling', type=float, default=2.0)
+    parser.add_argument('--fovx', type=float, default=None)
+    parser.add_argument('--fovy', type=float, default=None)
+    parser.add_argument('--fovz', type=float, default=None)
+    parser.add_argument('--rcxres', type=int, default=None)
+    parser.add_argument('--rcyres', type=int, default=None)
+    parser.add_argument('--rczres', type=int, default=None)
 
     parser.set_defaults(resp_gate=False)
     parser.add_argument('--resp_gate', dest='resp_gate', action='store_true')
-    parser.add_argument('--resp_efficiency', type=float, default=0.5)
+    parser.add_argument('--resp_upper', type=float, default=0.5, help='upper threshold for resp gating')
+    parser.add_argument('--resp_lower', type=float, default=0.0, help='lower threshold for resp gating')
     parser.add_argument('--resp_sign', type=int, help='flip the respiratory waveform', default=1)
     parser.add_argument('--resp_filter_window', type=float, default=10)
     parser.add_argument('--time_range', type=str, help='specify ranges as start1-end1,start2-end2,... in seconds (Ex: 50-100,220-340)', default=None)
@@ -87,24 +102,24 @@ if __name__ == "__main__":
     parser.add_argument('--discrete_gates', dest='discrete_gates', action='store_true')
     parser.set_defaults(discrete_gates2=False)
     parser.add_argument('--discrete_gates2', dest='discrete_gates2', action='store_true')
+    parser.add_argument('--random_undersample', type=float, default=1.0, help='factor by which to randomly undersample kspace')
     
     parser.set_defaults(fast_maxeig=False)
     parser.add_argument('--test_run', dest='test_run', action='store_true')
     parser.set_defaults(test_run=False)
-    parser.add_argument('--compress_coils', type=int, dest='compress_coils', default=-1, help='Number of coils to compress to')
 
     parser.set_defaults(strided_gate=False)
     parser.add_argument('--strided_gate', dest='strided_gate', action='store_true')
     parser.add_argument('--shots_per_frame', type=int, default=2)
 
     # SMS Reconstruction
-    parser.add_argument('--sms_factor', type=int, default=0)  # sms factor
+    parser.add_argument('--sms_factor', type=int, default=-1)  # sms factor
 
     # Flow Processing
     parser.add_argument('--flow_processing', dest='flow_processing', action='store_true', default=False)
     parser.add_argument('--c_format', dest='c_format', action='store_true', default=False, help='export flow HDF5 file in C++ recon format')
     parser.add_argument('--venc', type=int, default=1500) # mm/s
-    parser.add_argument('--unwrap_lap', dest='unwrap_lap', action='store_true')
+    parser.add_argument('--unwrap_lap', dest='unwrap_lap', action='store_true', default=False, help='4D Laplacian phase unwrapping')
 
     # Debugging / mslr mag and example images
     parser.add_argument('--example_images', dest='example_images', action='store_true')
@@ -127,16 +142,23 @@ if __name__ == "__main__":
     # Save to input raw data folder
     if args.out_folder is None:
         args.out_folder = os.path.dirname(args.filename)
+    else:
+        os.makedirs(args.out_folder, exist_ok=True)
 
+    logfile = logging.FileHandler(os.path.join(args.out_folder, 'pyrecon.log'), mode='a')
+    logfile.setLevel(logging.INFO)
+    logfile.setFormatter(formatter)
+    logger.addHandler(logfile)
 
     # Save to Folder    logger.info(f'Saving to {args.out_folder}')
 
     # Load Data
     logger.info(f'Load MRI from {args.filename}')
     if args.test_run:
-        mri_raw = load_MRI_raw(h5_filename=args.filename, max_coils=2, max_encodes=args.max_encodes, sms_factor=args.sms_factor)
+        mri_raw = load_MRI_raw(h5_filename=args.filename, max_coils=2, max_encodes=args.max_encodes)
     else:
-        mri_raw = load_MRI_raw(h5_filename=args.filename, compress_coils=args.compress_coils, max_encodes=args.max_encodes, sms_factor=args.sms_factor)
+        mri_raw = load_MRI_raw(h5_filename=args.filename, compress_coils=args.compress_coils, max_encodes=args.max_encodes, 
+                               lp_frac=args.lp_frac, random_undersample=args.random_undersample, sms_factor=args.sms_factor)
     args.sms_factor = mri_raw.sms_factor
     # Resample
     # radial3d_regrid(mri_raw)
@@ -153,8 +175,34 @@ if __name__ == "__main__":
                 time_ranges.append([float(x) for x in trange.split('-')])
         else:
             time_ranges = None
-        mri_raw = resp_gate(mri_raw, efficiency=args.resp_efficiency, resp_sign=args.resp_sign, resp_filter_window=args.resp_filter_window, time_ranges=time_ranges)
+        mri_raw = resp_gate(mri_raw, resp_upper=args.resp_upper, resp_lower=args.resp_lower, resp_sign=args.resp_sign, resp_filter_window=args.resp_filter_window, time_ranges=time_ranges, debug_folder=args.out_folder)
 
+    # set custom recon resolution
+    if args.rcxres is not None and args.rcyres is not None:
+        if mri_raw.coords[0].shape[-1] == 2:
+            rcres = [args.rcyres, args.rcxres]
+        else:
+            rcres = [args.rczres, args.rcyres, args.rcxres]
+    else:
+        rcres = None
+        
+    if args.fovx is not None and args.fovy is not None:
+        if mri_raw.coords[0].shape[-1] == 2:
+            rcfov = [args.fovy, args.fovx]
+            img_scale = [args.fovy/mri_raw.fovy, args.fovx/mri_raw.fovx]
+        else:
+            rcfov = [args.fovx, args.fovy, args.fovz]
+            img_scale = [args.fovz/mri_raw.fovz, args.fovy/mri_raw.fovy, args.fovx/mri_raw.fovx]
+            mri_raw.fovz = args.fovz
+        mri_raw.fovy = args.fovy
+        mri_raw.fovx = args.fovx
+        
+        for e in range(len(mri_raw.coords)):    
+            mri_raw.coords[e] *= img_scale
+
+    else:
+        rcfov = None
+   
     # Reconstruct an low res image and get the field of view
     logger.info(f'Estimating FOV MRI ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
     if args.recon_type == 'llr':
@@ -162,18 +210,21 @@ if __name__ == "__main__":
     else:
         autofov_block_size = 8
 
-    if args.autofov:
+    if args.autofov and rcfov is None:
         autofov(mri_raw=mri_raw, thresh=args.thresh, scale=args.scale, oversample=args.data_oversampling,
-            square=False, block_size=autofov_block_size, logdir=args.out_folder)
+            square=False, block_size=autofov_block_size, logdir=args.out_folder, device=sp.Device(args.device))
 
     # Get sensitivity maps
     logger.info(f'Reconstruct sensitivity maps ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
     if mri_raw.Num_Coils == 1:
-        img_shape = sp.estimate_shape(mri_raw.coords[0])
+        if rcres is not None:
+            img_shape = rcres
+        else:
+            img_shape = sp.estimate_shape(mri_raw.coords[0])
         xp = sp.Device(args.device).xp
         smaps = xp.ones([mri_raw.Num_Coils] + img_shape, dtype=xp.complex64)
     else:
-        smaps = get_smaps(mri_rawdata=mri_raw, args=args, thresh_maps=args.thresh_maps, smap_type=args.smap_type, log_dir=args.out_folder)
+        smaps = get_smaps(mri_rawdata=mri_raw, args=args, thresh_maps=args.thresh_maps, smap_type=args.smap_type, img_shape=rcres, device=args.device, log_dir=args.out_folder)
 
     logger.info(f'Smaps shape {smaps.shape}')
     
@@ -373,9 +424,10 @@ if __name__ == "__main__":
             if args.sms_factor > 1:
                 blips = array_to_gpu(mri_raw.sms_blips[i], sp.Device(args.device))
                 sense = SenseSMSRecon(kdata, smaps, sms_factor=args.sms_factor, blips=blips, lamda=args.lamda, weights=dcf, coord=coord, 
-                                  max_iter=args.max_iter, coil_batch_size=args.coil_batch_size, device=sp.Device(args.device))
+                                  max_iter=args.max_iter, coil_batch_size=args.coil_batch_size, device=sp.Device(args.device), solver="ConjugateGradient")
             else:
-                sense = sp.mri.linop.SenseRecon(kdata, smaps, lamda=args.lamda, weights=dcf, coord=coord, max_iter=args.max_iter, coil_batch_size=args.coil_batch_size, device=sp.Device(args.device))
+                sense = sp.mri.app.SenseRecon(kdata, smaps, lamda=args.lamda, weights=dcf, coord=coord, max_iter=args.max_iter, 
+                                coil_batch_size=args.coil_batch_size, device=sp.Device(args.device), solver="ConjugateGradient")
                 # sense = sp.mri.app.L1WaveletRecon(kdata, smaps, lamda=1e-1, weights=dcf, coord=coord, max_iter=50, coil_batch_size=1, device=args.device)
                 
             # print('Run Sense')
@@ -397,7 +449,7 @@ if __name__ == "__main__":
             
             if args.sms_factor > 1:
                 blips = array_to_gpu(mri_raw.sms_blips[i], args.device)
-                sense = L1WaveletRecon(kdata, smaps, args.lamda, sms_factor=args.sms_factor, blips=blips, weights=dcf, coord=coord, 
+                sense = L1WaveletSMSRecon(kdata, smaps, args.lamda, sms_factor=args.sms_factor, blips=blips, weights=dcf, coord=coord, 
                                   max_iter=args.max_iter, coil_batch_size=args.coil_batch_size, device=args.device)
             else:
                 sense = sp.mri.app.L1WaveletRecon(kdata, smaps, args.lamda, weights=dcf, coord=coord, max_iter=args.max_iter, coil_batch_size=args.coil_batch_size, device=args.device)
@@ -480,12 +532,13 @@ if __name__ == "__main__":
     header_info["frames"] = int(args.frames)
     header_info["rot_matrix"] = mri_raw.rot_matrix.tolist()
     if args.gate_type == "ecg":
-        header_info["median_rr"] = float(mri_raw.median_rr)
-        header_info["timeres"] = float(mri_raw.median_rr/args.frames)
+        header_info["median_rr"] = float(mri_raw.median_rr) * 1000
+        header_info["timeres"] = float(mri_raw.median_rr/args.frames) * 1000
     if args.time_range is not None and args.resp_gate:
         header_info["time_range"] = args.time_range
     if args.sms_factor > 1:
         header_info["sms_factor"] = int(args.sms_factor)
+        header_info["sms_fov"] = int(mri_raw.sms_fov)
 
     # export data
     if args.flow_processing:
@@ -523,12 +576,14 @@ if __name__ == "__main__":
             combined.magnitude = np.stack([s.magnitude for s in all_slices], axis=-1)
             combined.angiogram = np.stack([s.angiogram for s in all_slices], axis=-1)
             combined.velocity_estimate = np.stack([s.velocity_estimate for s in all_slices], axis=-2) 
+            header_info["venc"] = float(combined.venc)
             export_flow_data(combined, out_name, header_info=header_info, c_format=args.c_format)
         
         else:
             mri_flow = MRI_4DFlow(encoding, signal=img, venc=args.venc, unwrap_lap=args.unwrap_lap)
             mri_flow.solve_for_velocity()
             mri_flow.update_angiogram()
+            header_info["venc"] = float(mri_flow.venc)
             export_flow_data(mri_flow, out_name, header_info=header_info, c_format=args.c_format)
 
     else:

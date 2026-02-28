@@ -8,7 +8,7 @@ def _estimate_weights(y, weights, coord):
 
     return weights
 
-class L1WaveletRecon(sp.app.LinearLeastSquares):
+class L1WaveletSMSRecon(sp.app.LinearLeastSquares):
     r"""L1 Wavelet regularized reconstruction.
 
     Considers the problem

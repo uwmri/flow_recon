@@ -162,9 +162,12 @@ def calc_rx(sms_factor, slice_locs):
     
     # set this value based on default scan prescription (end-start)
     rad_height = 186
+    slice_thickness = 2.0
 
-    num_slices = round(2*scan_height / 4.0)
-    sms_height = num_slices * 2
+    num_slices = round(scan_height / 2)
+    if num_slices % 2 != 0:
+        num_slices += 1
+    sms_height = num_slices * slice_thickness - slice_thickness
     
     sms_fov = round(scan_height * sms_factor/(sms_factor - 1.0), 2)
     

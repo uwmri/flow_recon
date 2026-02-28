@@ -45,46 +45,46 @@ class MRI_Raw:
     target_image_size = [256, 256, 64]
     rot_matrix = None
 
-def resample_arc(input, coord, oshape=None, oversamp=2, width=7):
-    """Adjoint non-uniform Fast Fourier Transform.
+# def resample_arc(input, coord, oshape=None, oversamp=2, width=7):
+#     """Adjoint non-uniform Fast Fourier Transform.
 
-    Args:
+#     Args:
 
-    Returns:
-        array: signal domain array with shape specified by oshape.
+#     Returns:
+#         array: signal domain array with shape specified by oshape.
 
-    See Also:
-        :func:`sigpy.nufft.nufft`
+#     See Also:
+#         :func:`sigpy.nufft.nufft`
 
-    """
+#     """
 
-    # Get the image dimensions
-    ndim = coord.shape[-1]
-    beta = np.pi * (((width / oversamp) * (oversamp - 0.5))**2 - 0.8)**0.5
-    if oshape is None:
-        oshape = list(input.shape[:-coord.ndim + 1]) + estimate_shape(coord)
-    else:
-        oshape = list(oshape)
+#     # Get the image dimensions
+#     ndim = coord.shape[-1]
+#     beta = np.pi * (((width / oversamp) * (oversamp - 0.5))**2 - 0.8)**0.5
+#     if oshape is None:
+#         oshape = list(input.shape[:-coord.ndim + 1]) + estimate_shape(coord)
+#     else:
+#         oshape = list(oshape)
 
-    os_shape = _get_oversamp_shape(oshape, ndim, oversamp)
+#     os_shape = _get_oversamp_shape(oshape, ndim, oversamp)
 
-    # Gridding
-    coord = _scale_coord(coord, oshape, oversamp)
-    output = interp.gridding(input, coord, os_shape,
-                             kernel='kaiser_bessel', width=width, param=beta)
-    output /= width**ndim
+#     # Gridding
+#     coord = _scale_coord(coord, oshape, oversamp)
+#     output = interp.gridding(input, coord, os_shape,
+#                              kernel='kaiser_bessel', width=width, param=beta)
+#     output /= width**ndim
 
-    # IFFT
-    output = ifft(output, axes=range(-ndim, 0), norm=None)
+#     # IFFT
+#     output = ifft(output, axes=range(-ndim, 0), norm=None)
 
-    # Crop
-    output = util.resize(output, oshape)
-    output *= util.prod(os_shape[-ndim:]) / util.prod(oshape[-ndim:])**0.5
+#     # Crop
+#     output = util.resize(output, oshape)
+#     output *= util.prod(os_shape[-ndim:]) / util.prod(oshape[-ndim:])**0.5
 
-    # Apodize
-    _apodize(output, ndim, oversamp, width, beta)
+#     # Apodize
+#     _apodize(output, ndim, oversamp, width, beta)
 
-    return output
+#     return output
 
 
 def radial3d_regrid(coord_regrid, dcf, kdata, new_dk=0.5):
@@ -284,7 +284,7 @@ def pca_coil_compression(kdata=None, axis=0, target_channels=None):
             kdata[e] = np.moveaxis(kdata[e], axis, -1)
             kdata[e] = np.expand_dims(kdata[e], -1)
             logger.info(f'Shape = {kdata[e].shape}')
-            kdata[e] = np.matmul(u, kdata[e])
+            kdata[e] = np.matmul(np.conj(u.T), kdata[e])
             kdata[e] = np.squeeze(kdata[e], axis=-1)
             kdata[e] = kdata[e][..., :target_channels]
             kdata[e] = np.moveaxis(kdata[e], -1, axis)
@@ -309,14 +309,14 @@ def pca_coil_compression(kdata=None, axis=0, target_channels=None):
     return kdata
 
 
-def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thresh_maps=True, log_dir=''):
+def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', img_shape=None, device=None, thresh_maps=True, log_dir=''):
     logger = logging.getLogger('Get sensitivity maps')
 
     # Set to GPU
     if device is None:
         device = sp.Device(0)
 
-    op_device = device
+    op_device = sp.Device(device)
     store_device = sp.cpu_device
     xp = sp.Device(args.device).xp
 
@@ -326,15 +326,15 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
     kdata = mri_rawdata.kdata[0]
     sms_blips = mri_rawdata.sms_blips[0]
     sms_factor = mri_rawdata.sms_factor
+    
+    if img_shape is None:
+        img_shape = sp.estimate_shape(coord)
 
     if smap_type == 'espirit':
-
         # Low resolution images
         res = 64
         lpf = np.sum(coord ** 2, axis=-1)
         lpf = np.exp(-lpf / (2.0 * res * res))
-
-        img_shape = sp.estimate_shape(coord)
 
         ksp = xp.ones([mri_rawdata.Num_Coils] + img_shape, dtype=xp.complex64)
 
@@ -350,18 +350,20 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
             ksp[c] = sp.nufft_adjoint(ksp_t, coord_t, img_shape)
 
         # Put onto CPU due to memory issues in ESPiRIT
-        ksp = sp.to_device(ksp, sp.cpu_device)
+        # ksp = sp.to_device(ksp, sp.cpu_device)
 
         # Espirit Cal
         smaps = sp.mri.app.EspiritCalib(ksp, calib_width=24, thresh=0.02, kernel_width=6, crop=0.0, max_iter=100,
-                                        device=sp.cpu_device, show_pbar=True).run()
+                                        device=sp.Device(args.device), show_pbar=True).run()
+        
+        if sms_factor > 1:
+            smaps = np.repeat(smaps[..., np.newaxis], sms_factor, -1)
 
     elif smap_type == 'walsh':
 
         logger = logging.getLogger('walsh')
 
         # Get a composite image
-        img_shape = sp.estimate_shape(coord)
         image = xp.zeros([mri_rawdata.Num_Coils] + img_shape, dtype=xp.complex64)
 
         for e in range(mri_rawdata.Num_Encodings):
@@ -422,10 +424,12 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
         blocked_image = np.moveaxis(blocked_image, -1, 0)  # First axis is coil
 
         smaps = B.H*blocked_image
+        
+        if sms_factor > 1:
+            smaps = np.repeat(smaps[..., np.newaxis], sms_factor, -1)
 
     elif smap_type == "lowres":
         # Get a composite image
-        img_shape = sp.estimate_shape(coord)
         if sms_factor > 1:
             image = store_device.xp.zeros([mri_rawdata.Num_Coils] + img_shape + [sms_factor], dtype=store_device.xp.complex64)
 
@@ -492,7 +496,7 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
                                    max_inner_iter=args.jsense_max_inner_iter).run()
 
         # Get a composite image
-        img_shape = sp.estimate_shape(coord)
+        
         image = 0
         for e in range(mri_rawdata.Num_Encodings):
             kr = sp.get_device(mri_rawdata.coords[e]).xp.sum(mri_rawdata.coords[e] ** 2, axis=-1)
@@ -1036,8 +1040,7 @@ def bounded_medfilt(signal, window):
   return filtered 
 
 
-def resp_gate(mri_raw=None, efficiency=0.5, resp_sign=1, resp_filter_window=10, time_ranges=None):
-    from scipy.ndimage import minimum_filter1d, maximum_filter1d
+def resp_gate(mri_raw=None, resp_upper=0.5, resp_lower=0.0, resp_sign=1, resp_filter_window=10, time_ranges=None, debug_folder=None):
     logger = logging.getLogger('Resp Gate k-space')
 
     # Get the MRI Raw structure setup
@@ -1080,17 +1083,21 @@ def resp_gate(mri_raw=None, efficiency=0.5, resp_sign=1, resp_filter_window=10, 
         logger.info(f'Estimated TR = {dt} based on {np.max(time)} s acquisition with {len(time)} points')
         logger.info(f'Using a filter window of {resp_filter_window} s')
         
-        mins = minimum_filter1d(resp, resp_filter_width) 
-        maxs = maximum_filter1d(resp, resp_filter_width)
+        mins = ndimage.minimum_filter1d(resp, resp_filter_width) 
+        maxs = ndimage.maximum_filter1d(resp, resp_filter_width)
         
-        logger.info(f'Thresholding based on resp efficiency of {efficiency}')
-        threshes = mins + (1.0 - efficiency) * (maxs - mins) # resp waveform is flipped by default
+        logger.info(f'Thresholding based on upper and lower thresholds of {resp_upper} and {resp_lower}')
+        
+        # resp waveform is flipped by default
+        ranges = maxs - mins
+        upper = mins + (1.0 - resp_upper) * ranges
+        lower = mins + (1.0 - resp_lower) * ranges
         
         if resp_sign == -1:
             logger.info(f'Flipping the respiratory window')
-            idx = resp < threshes
+            idx = (resp < lower) & (resp > upper)
         else:
-            idx = resp > threshes
+            idx = (resp > upper) & (resp < lower)
         
         # Find index where value is held within time range
         if time_ranges is not None:
@@ -1100,10 +1107,15 @@ def resp_gate(mri_raw=None, efficiency=0.5, resp_sign=1, resp_filter_window=10, 
                 logger.info(f'{time_range[0]} to {time_range[1]} s')
                 time_mask |= np.logical_and(time > time_range[0], time < time_range[1])
             idx &= time_mask
-            
-        np.savetxt('TimeWeight.txt', idx)
-        np.savetxt('TimeResp.txt', resp)
-        np.savetxt('Time.txt', time)
+        
+        if debug_folder is None:
+            np.savetxt('TimeWeight.txt', idx)
+            np.savetxt('TimeResp.txt', resp)
+            np.savetxt('Time.txt', time)
+        else:
+            np.savetxt(os.path.join(debug_folder, 'TimeWeight.txt'), idx)
+            np.savetxt(os.path.join(debug_folder, 'TimeResp.txt'), resp)
+            np.savetxt(os.path.join(debug_folder, 'Time.txt'), time)
             
         current_points = np.sum(idx)
         
@@ -1137,9 +1149,9 @@ def resp_gate(mri_raw=None, efficiency=0.5, resp_sign=1, resp_filter_window=10, 
 
     return mri_rawG
 
-def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None,
-                compress_coils=-1, scale_kdata=True, sms_factor=None):
-
+def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_coils=-1, 
+                 lp_frac=1.0, random_undersample=1.0, scale_kdata=True, sms_factor=-1):
+    logger = logging.getLogger('Load MRI data')
     with h5py.File(h5_filename, 'r') as hf:
 
         try:
@@ -1159,10 +1171,10 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None,
                 fovz = np.squeeze(hf['Kdata'].attrs['fovz'])
                 fovy = np.squeeze(hf['Kdata'].attrs['fovy'])
             except:
-                fovx = 0
-                fovy = 0
-                fovz = 0
-            if sms_factor == 0:
+                fovx = 1
+                fovy = 1
+                fovz = 1
+            if sms_factor == -1:
                 try:
                     with open(os.path.join(os.path.dirname(h5_filename), 'sms_params.txt'), 'r') as f:
                         sms_params = f.readlines()
@@ -1255,22 +1267,25 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None,
                     krange = np.max(kcoord) - np.min(kcoord)
                     if krange < 1e-3:
                         continue
-                coord.append(np.array(hf['Kdata'][f'K{i}_E{encode}'])) #.flatten())
+                coord.append(kcoord) #.flatten())
             coord = np.stack(coord, axis=-1)
 
             dcf = np.array(hf['Kdata'][f'KW_E{encode}'])
             
             ksp = []
             logging.info('Loading kspace...')
+            k0 = hf['Kdata'][f'KData_E{encode}_C0']
+            shape = k0.shape
+            ksp = np.empty((Num_Coils, *shape), dtype=np.complex64)
             for c in tqdm(range(Num_Coils)):
                 # logging.info(f'Loading kspace, coil {c + 1} / {Num_Coils}.')
-
                 k = hf['Kdata'][f'KData_E{encode}_C{c}']
                 try:
-                    ksp.append(np.array(k['real'] + 1j * k['imag']))
-                except:
-                    ksp.append(k)
-            ksp = np.stack(ksp, axis=0)
+                    ksp[c] = k['real'][:] + 1j * k['imag'][:]
+                except Exception:
+                    ksp[c] = k[:]
+            # ksp = np.stack(ksp, axis=0)
+            # logging.info(f'kspace loaded')
             
             # if sms_factor > 1:
             #     logging.info(f"Calculating phase blips for SMS acquisition with {sms_factor} slices")
@@ -1295,12 +1310,14 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None,
                 blips = np.exp(1j * np.outer(proj_mod, sms_phases)).astype(np.complex64)
                 sms_blips = np.repeat(blips, readout, axis=0)
             else:
+                _, _, projs, readout = ksp.shape  # (coils, 1, projs, readout)
                 sms_blips = np.zeros((projs*readout, 1), dtype=np.complex64)
 
             # Regrid the readout to reduce oversampling
             # coord, dcf, ksp = radial3d_regrid(coord, dcf, ksp)
 
             # Load time data
+            logging.info('Load gating data...')
             try:
                 time_readout = np.array(hf['Gating']['time'])
             except Exception:
@@ -1324,15 +1341,25 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None,
             if resp_readout.size != dcf.size:
 
                 # This assigns the same time to each point in the readout
-                time_readout = np.expand_dims(time_readout, -1)
-                ecg_readout = np.expand_dims(ecg_readout, -1)
-                resp_readout = np.expand_dims(resp_readout, -1)
-                prep_readout = np.expand_dims(prep_readout, -1)
+                # time_readout = np.expand_dims(time_readout, -1)
+                # ecg_readout = np.expand_dims(ecg_readout, -1)
+                # resp_readout = np.expand_dims(resp_readout, -1)
+                # prep_readout = np.expand_dims(prep_readout, -1)
 
-                time = np.tile(time_readout, (1, 1, dcf.shape[2]))
-                resp = np.tile(resp_readout, (1, 1, dcf.shape[2]))
-                ecg = np.tile(ecg_readout, (1, 1, dcf.shape[2]))
-                prep = np.tile(prep_readout, (1, 1, dcf.shape[2]))
+                # time = np.tile(time_readout, (1, 1, dcf.shape[2]))
+                # resp = np.tile(resp_readout, (1, 1, dcf.shape[2]))
+                # ecg = np.tile(ecg_readout, (1, 1, dcf.shape[2]))
+                # prep = np.tile(prep_readout, (1, 1, dcf.shape[2]))
+                
+                time = time_readout[..., None]
+                ecg  = ecg_readout[..., None]
+                resp = resp_readout[..., None]
+                prep = prep_readout[..., None]
+
+                time = np.broadcast_to(time, dcf.shape)
+                ecg  = np.broadcast_to(ecg,  dcf.shape)
+                resp = np.broadcast_to(resp, dcf.shape)
+                prep = np.broadcast_to(prep, dcf.shape)
 
                 logging.info(f'Min/max time (s) = {np.min(time)} {np.max(time)}')
             else:
@@ -1344,15 +1371,12 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None,
             # Append to lists and flatten
             
             logging.info("Reshaping data arrays...")
-            coords2 = coord.reshape(-1, coord.shape[-1])
-            
-            ksp2 = ksp.reshape(ksp.shape[0], -1)
 
             # sms_blips2 = sms_blips.reshape(sms_blips.shape[0], -1, sms_blips.shape[-1])
 
             mri_raw.dcf.append(dcf.flatten())
-            mri_raw.coords.append(coords2)
-            mri_raw.kdata.append(ksp2)
+            mri_raw.coords.append(coord.reshape(-1, coord.shape[-1]))
+            mri_raw.kdata.append(ksp.reshape(ksp.shape[0], -1))
             mri_raw.sms_blips.append(sms_blips)
 
             # mri_raw.coords.append(coord)
@@ -1386,6 +1410,40 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None,
         #     logging.info('No noise data.')
         #     pass
         
+        if random_undersample > 1:
+            # Randomly undersample k-space
+            logging.info(f'Randomly undersampling k-space by {random_undersample}')
+            num_projs = mri_raw.kdata[0].shape[-1]
+            idx = np.random.choice(int(num_projs), int(num_projs // random_undersample), replace=False)
+            for e in range(len(mri_raw.kdata)):
+                mri_raw.kdata[e] = mri_raw.kdata[e][..., idx]
+                mri_raw.coords[e] = mri_raw.coords[e][idx, :]
+                mri_raw.dcf[e] = mri_raw.dcf[e][idx]
+                mri_raw.time[e] = mri_raw.time[e][idx]
+                mri_raw.ecg[e] = mri_raw.ecg[e][idx]
+                mri_raw.prep[e] = mri_raw.prep[e][idx]
+                mri_raw.resp[e] = mri_raw.resp[e][idx]
+                if sms_factor > 1:
+                    mri_raw.sms_blips[e] = mri_raw.sms_blips[e][idx, :]
+            logging.info(f'Undersampled MRI coords {mri_raw.coords[0].shape}')
+            logging.info(f'Undersampled MRI dcf {mri_raw.dcf[0].shape}')
+            logging.info(f'Undersampled MRI kdata {mri_raw.kdata[0].shape}')
+            logging.info(f'Undersampled MRI time {mri_raw.time[0].shape}')
+            logging.info(f'Undersampled MRI ecg {mri_raw.ecg[0].shape}')
+            logging.info(f'Undersampled MRI resp {mri_raw.resp[0].shape}')
+            logging.info(f'Undersampled MRI prep {mri_raw.prep[0].shape}')
+            if sms_factor > 1:
+                logging.info(f'Undersampled MRI sms_blips {mri_raw.sms_blips[0].shape}')
+        
+        if lp_frac < 1:
+            # low pass filter k-space
+            logging.info(f'Applying low pass filter {lp_frac}')
+            for e in range(len(mri_raw.kdata)):
+                res = 256
+                r = np.linalg.norm(mri_raw.coords[e], axis=-1)
+                lp_sig = (lp_frac**2 * res**2) /2.0
+                filt = np.exp(-(r**2)/ lp_sig)
+                mri_raw.kdata[e] *= filt
 
         if scale_kdata:
             # Scale k-space to max 1
@@ -1451,225 +1509,225 @@ def save_MRI_raw(mri_raw, h5_filename=None):
 
 
 
-def load_MRI_raw_ou(h5_filename=None, max_coils=None, compress_coils=False):
+# def load_MRI_raw_ou(h5_filename=None, max_coils=None, compress_coils=False):
 
 
-    proj = 688*12
-    prep = np.arange(688*12) % 688
-    idx = np.where( (prep < 320) & (prep%2==0) )
+#     proj = 688*12
+#     prep = np.arange(688*12) % 688
+#     idx = np.where( (prep < 320) & (prep%2==0) )
 
-    with h5py.File(h5_filename, 'r') as hf:
+#     with h5py.File(h5_filename, 'r') as hf:
 
-        try:
-            Num_Encodings = np.squeeze(hf['Kdata'].attrs['Num_Encodings'])
-            Num_Coils = np.squeeze(hf['Kdata'].attrs['Num_Coils'])
-            Num_Frames = np.squeeze(hf['Kdata'].attrs['Num_Frames'])
+#         try:
+#             Num_Encodings = np.squeeze(hf['Kdata'].attrs['Num_Encodings'])
+#             Num_Coils = np.squeeze(hf['Kdata'].attrs['Num_Coils'])
+#             Num_Frames = np.squeeze(hf['Kdata'].attrs['Num_Frames'])
 
-            trajectory_type = [np.squeeze(hf['Kdata'].attrs['trajectory_typeX']),
-                               np.squeeze(hf['Kdata'].attrs['trajectory_typeY']),
-                               np.squeeze(hf['Kdata'].attrs['trajectory_typeZ'])]
+#             trajectory_type = [np.squeeze(hf['Kdata'].attrs['trajectory_typeX']),
+#                                np.squeeze(hf['Kdata'].attrs['trajectory_typeY']),
+#                                np.squeeze(hf['Kdata'].attrs['trajectory_typeZ'])]
 
-            dft_needed = [np.squeeze(hf['Kdata'].attrs['dft_neededX']), np.squeeze(hf['Kdata'].attrs['dft_neededY']),
-                          np.squeeze(hf['Kdata'].attrs['dft_neededZ'])]
+#             dft_needed = [np.squeeze(hf['Kdata'].attrs['dft_neededX']), np.squeeze(hf['Kdata'].attrs['dft_neededY']),
+#                           np.squeeze(hf['Kdata'].attrs['dft_neededZ'])]
 
-            logging.info(f'Frames {Num_Frames}')
-            logging.info(f'Coils {Num_Coils}')
-            logging.info(f'Encodings {Num_Encodings}')
-            logging.info(f'Trajectory Type {trajectory_type}')
-            logging.info(f'DFT Needed {dft_needed}')
+#             logging.info(f'Frames {Num_Frames}')
+#             logging.info(f'Coils {Num_Coils}')
+#             logging.info(f'Encodings {Num_Encodings}')
+#             logging.info(f'Trajectory Type {trajectory_type}')
+#             logging.info(f'DFT Needed {dft_needed}')
 
-        except Exception:
-            logging.info('Missing header data')
-            pass
+#         except Exception:
+#             logging.info('Missing header data')
+#             pass
 
-        if max_coils is not None:
-            Num_Coils = min(max_coils, Num_Coils)
+#         if max_coils is not None:
+#             Num_Coils = min(max_coils, Num_Coils)
 
-        # Get the MRI Raw structure setup
-        mri_raw = MRI_Raw()
-        mri_raw.Num_Coils = int(Num_Coils)
-        mri_raw.Num_Encodings = int(Num_Encodings*Num_Frames)
-        mri_raw.dft_needed = tuple(dft_needed)
-        mri_raw.trajectory_type = tuple(trajectory_type)
+#         # Get the MRI Raw structure setup
+#         mri_raw = MRI_Raw()
+#         mri_raw.Num_Coils = int(Num_Coils)
+#         mri_raw.Num_Encodings = int(Num_Encodings*Num_Frames)
+#         mri_raw.dft_needed = tuple(dft_needed)
+#         mri_raw.trajectory_type = tuple(trajectory_type)
 
-        # List array
-        mri_raw.coords = []
-        mri_raw.dcf = []
-        mri_raw.kdata = []
-        mri_raw.time = []
-        mri_raw.prep = []
-        mri_raw.ecg = []
-        mri_raw.resp = []
+#         # List array
+#         mri_raw.coords = []
+#         mri_raw.dcf = []
+#         mri_raw.kdata = []
+#         mri_raw.time = []
+#         mri_raw.prep = []
+#         mri_raw.ecg = []
+#         mri_raw.resp = []
 
-        for encode in range(Num_Encodings):
+#         for encode in range(Num_Encodings):
 
-            logging.info(f'Loading encode {encode}')
+#             logging.info(f'Loading encode {encode}')
 
-            # Get the coordinates
-            coord = []
-            for i in ['Z', 'Y', 'X']:
-                logging.info(f'Loading {i} coord.')
+#             # Get the coordinates
+#             coord = []
+#             for i in ['Z', 'Y', 'X']:
+#                 logging.info(f'Loading {i} coord.')
 
-                kcoord = np.array(hf['Kdata'][f'K{i}_E{encode}'])[:,idx,...]
+#                 kcoord = np.array(hf['Kdata'][f'K{i}_E{encode}'])[:,idx,...]
 
-                # Check range to distinguish 2D from 3D
-                if i == 'Z':
-                    krange = np.max(kcoord) - np.min(kcoord)
-                    if krange < 1e-3:
-                        continue
-                coord.append(kcoord)
-            coord = np.stack(coord, axis=-1)
+#                 # Check range to distinguish 2D from 3D
+#                 if i == 'Z':
+#                     krange = np.max(kcoord) - np.min(kcoord)
+#                     if krange < 1e-3:
+#                         continue
+#                 coord.append(kcoord)
+#             coord = np.stack(coord, axis=-1)
 
-            ##Rotate the image
-            #coordR =  math.cos(math.pi*37/180)*coord[...,0] + math.sin(math.pi*37/180)*coord[...,1]
-            #coordI = -math.sin(math.pi*37/180)*coord[...,0] + math.cos(math.pi*37/180)*coord[...,1]
-            #coord = np.stack([coordR, coordI], axis=-1)
+#             ##Rotate the image
+#             #coordR =  math.cos(math.pi*37/180)*coord[...,0] + math.sin(math.pi*37/180)*coord[...,1]
+#             #coordI = -math.sin(math.pi*37/180)*coord[...,0] + math.cos(math.pi*37/180)*coord[...,1]
+#             #coord = np.stack([coordR, coordI], axis=-1)
 
-            dcf = np.array(hf['Kdata'][f'KW_E{encode}'])[:,idx,...]
-            #dcf = np.ones_like(dcf)
+#             dcf = np.array(hf['Kdata'][f'KW_E{encode}'])[:,idx,...]
+#             #dcf = np.ones_like(dcf)
 
-            # Load time data
-            try:
-                time_readout = np.array(hf['Gating']['time'])[:,idx,...]
-            except Exception:
-                time_readout = np.array(hf['Gating'][f'TIME_E{encode}'])[:,idx,...]
+#             # Load time data
+#             try:
+#                 time_readout = np.array(hf['Gating']['time'])[:,idx,...]
+#             except Exception:
+#                 time_readout = np.array(hf['Gating'][f'TIME_E{encode}'])[:,idx,...]
 
-            temp = np.array(hf['Gating'][f'TIME_E{encode}'])
+#             temp = np.array(hf['Gating'][f'TIME_E{encode}'])
 
-            print(temp.shape)
+#             print(temp.shape)
 
-            try:
-                ecg_readout = np.array(hf['Gating']['ecg'])[:,idx,...]
-            except Exception:
-                ecg_readout = np.array(hf['Gating'][f'ECG_E{encode}'])[:,idx,...]
+#             try:
+#                 ecg_readout = np.array(hf['Gating']['ecg'])[:,idx,...]
+#             except Exception:
+#                 ecg_readout = np.array(hf['Gating'][f'ECG_E{encode}'])[:,idx,...]
 
-            '''
-            import matplotlib.pyplot as plt
-            plt.figure()
-            plt.hist( ecg_readout.flatten(), bins=100)
-            plt.show()
-            '''
+#             '''
+#             import matplotlib.pyplot as plt
+#             plt.figure()
+#             plt.hist( ecg_readout.flatten(), bins=100)
+#             plt.show()
+#             '''
 
-            try:
-                prep_readout = np.array(hf['Gating']['prep'])[:,idx,...]
-            except Exception:
-                prep_readout = np.array(hf['Gating'][f'PREP_E{encode}'])[:,idx,...]
+#             try:
+#                 prep_readout = np.array(hf['Gating']['prep'])[:,idx,...]
+#             except Exception:
+#                 prep_readout = np.array(hf['Gating'][f'PREP_E{encode}'])[:,idx,...]
 
-            try:
-                resp_readout = np.array(hf['Gating']['resp'])[:,idx,...]
-            except Exception:
-                resp_readout = np.array(hf['Gating'][f'RESP_E{encode}'])[:,idx,...]
+#             try:
+#                 resp_readout = np.array(hf['Gating']['resp'])[:,idx,...]
+#             except Exception:
+#                 resp_readout = np.array(hf['Gating'][f'RESP_E{encode}'])[:,idx,...]
 
-            # This assigns the same time to each point in the readout
-            time_readout = np.expand_dims(time_readout, -1)
-            ecg_readout = np.expand_dims(ecg_readout, -1)
-            resp_readout = np.expand_dims(resp_readout, -1)
-            prep_readout = np.expand_dims(prep_readout, -1)
+#             # This assigns the same time to each point in the readout
+#             time_readout = np.expand_dims(time_readout, -1)
+#             ecg_readout = np.expand_dims(ecg_readout, -1)
+#             resp_readout = np.expand_dims(resp_readout, -1)
+#             prep_readout = np.expand_dims(prep_readout, -1)
 
-            print(f'DCF shape = {dcf.shape}')
-            print(f'Time shape = {time_readout.shape}')
-            time = np.tile(time_readout, (1, 1, dcf.shape[-1]))
-            resp = np.tile(resp_readout, (1, 1, dcf.shape[-1]))
-            ecg = np.tile(ecg_readout, (1, 1, dcf.shape[-1]))
-            prep = np.tile(prep_readout, (1, 1, dcf.shape[-1]))
+#             print(f'DCF shape = {dcf.shape}')
+#             print(f'Time shape = {time_readout.shape}')
+#             time = np.tile(time_readout, (1, 1, dcf.shape[-1]))
+#             resp = np.tile(resp_readout, (1, 1, dcf.shape[-1]))
+#             ecg = np.tile(ecg_readout, (1, 1, dcf.shape[-1]))
+#             prep = np.tile(prep_readout, (1, 1, dcf.shape[-1]))
 
-            print(f'Time shape = {time.shape}')
+#             print(f'Time shape = {time.shape}')
 
-            prep = prep
-            resp = resp
-            ecg = ecg
-            dcf = dcf
-            time = time
+#             prep = prep
+#             resp = resp
+#             ecg = ecg
+#             dcf = dcf
+#             time = time
 
-            # Get k-space
-            ksp = []
-            mri_raw.Num_Coils -= 3
+#             # Get k-space
+#             ksp = []
+#             mri_raw.Num_Coils -= 3
 
-            for c in range(Num_Coils):
-                logging.info(f'Loading kspace, coil {c + 1} / {Num_Coils}.')
+#             for c in range(Num_Coils):
+#                 logging.info(f'Loading kspace, coil {c + 1} / {Num_Coils}.')
 
-                k = hf['Kdata'][f'KData_E{encode}_C{c}']
-                ksp.append(np.array(k['real'] + 1j * k['imag'])[:,idx,...])
-            ksp = np.stack(ksp, axis=0)
+#                 k = hf['Kdata'][f'KData_E{encode}_C{c}']
+#                 ksp.append(np.array(k['real'] + 1j * k['imag'])[:,idx,...])
+#             ksp = np.stack(ksp, axis=0)
 
-            # Append to list
-            mri_raw.coords.append(coord)
-            mri_raw.dcf.append(dcf)
-            mri_raw.kdata.append(ksp)
-            mri_raw.time.append(time)
-            mri_raw.prep.append(prep)
-            mri_raw.ecg.append(ecg)
-            mri_raw.resp.append(resp)
+#             # Append to list
+#             mri_raw.coords.append(coord)
+#             mri_raw.dcf.append(dcf)
+#             mri_raw.kdata.append(ksp)
+#             mri_raw.time.append(time)
+#             mri_raw.prep.append(prep)
+#             mri_raw.ecg.append(ecg)
+#             mri_raw.resp.append(resp)
 
-            # Log the data
-            logging.info(f'MRI coords {mri_raw.coords[encode].shape}')
-            logging.info(f'MRI dcf {mri_raw.dcf[encode].shape}')
-            logging.info(f'MRI kdata {mri_raw.kdata[encode].shape}')
-            logging.info(f'MRI time {mri_raw.time[encode].shape}')
-            logging.info(f'MRI ecg {mri_raw.ecg[encode].shape}')
-            logging.info(f'MRI resp {mri_raw.resp[encode].shape}')
-            logging.info(f'MRI prep {mri_raw.prep[encode].shape}')
+#             # Log the data
+#             logging.info(f'MRI coords {mri_raw.coords[encode].shape}')
+#             logging.info(f'MRI dcf {mri_raw.dcf[encode].shape}')
+#             logging.info(f'MRI kdata {mri_raw.kdata[encode].shape}')
+#             logging.info(f'MRI time {mri_raw.time[encode].shape}')
+#             logging.info(f'MRI ecg {mri_raw.ecg[encode].shape}')
+#             logging.info(f'MRI resp {mri_raw.resp[encode].shape}')
+#             logging.info(f'MRI prep {mri_raw.prep[encode].shape}')
 
-        '''
-        try:
-            noise = hf['Kdata']['Noise']['real'] + 1j * hf['Kdata']['Noise']['imag']
+#         '''
+#         try:
+#             noise = hf['Kdata']['Noise']['real'] + 1j * hf['Kdata']['Noise']['imag']
 
-            logging.info('Whitening ksp.')
-            cov = mr.util.get_cov(noise)
-            ksp = mr.util.whiten(ksp, cov)
-        except Exception:
-            ksp /= np.abs(ksp).max()
-            logging.info('No noise data.')
-            pass
-        '''
+#             logging.info('Whitening ksp.')
+#             cov = mr.util.get_cov(noise)
+#             ksp = mr.util.whiten(ksp, cov)
+#         except Exception:
+#             ksp /= np.abs(ksp).max()
+#             logging.info('No noise data.')
+#             pass
+#         '''
 
-        # Scale k-space to max 1
-        kdata_max = [np.abs(ksp).max() for ksp in mri_raw.kdata]
-        print(f'Max kdata {kdata_max}')
-        kdata_max = np.max(np.array(kdata_max))
-        for ksp in mri_raw.kdata:
-            ksp /= kdata_max
+#         # Scale k-space to max 1
+#         kdata_max = [np.abs(ksp).max() for ksp in mri_raw.kdata]
+#         print(f'Max kdata {kdata_max}')
+#         kdata_max = np.max(np.array(kdata_max))
+#         for ksp in mri_raw.kdata:
+#             ksp /= kdata_max
 
-        kdata_max = [np.abs(ksp).max() for ksp in mri_raw.kdata]
-        print(f'Max kdata {kdata_max}')
+#         kdata_max = [np.abs(ksp).max() for ksp in mri_raw.kdata]
+#         print(f'Max kdata {kdata_max}')
 
-        if compress_coils:
-            # Compress Coils
-            if 18 < Num_Coils <= 32:
-                mri_raw.kdata = pca_coil_compression(kdata=mri_raw.kdata, axis=0, target_channels=20)
-                mri_raw.Num_Coils = 20
+#         if compress_coils:
+#             # Compress Coils
+#             if 18 < Num_Coils <= 32:
+#                 mri_raw.kdata = pca_coil_compression(kdata=mri_raw.kdata, axis=0, target_channels=20)
+#                 mri_raw.Num_Coils = 20
 
-            if Num_Coils > 32:
-                mri_raw.kdata = pca_coil_compression(kdata=mri_raw.kdata, axis=0, target_channels=28)
-                mri_raw.Num_Coils = 28
-                mri_raw.Num_Coils = 20
-
-
-        return mri_raw
+#             if Num_Coils > 32:
+#                 mri_raw.kdata = pca_coil_compression(kdata=mri_raw.kdata, axis=0, target_channels=28)
+#                 mri_raw.Num_Coils = 28
+#                 mri_raw.Num_Coils = 20
 
 
-def spatial_shift(mri_raw: MRI_Raw, shifts: list):
+#         return mri_raw
 
-    logger = logging.getLogger('spatial_shift')
 
-    # Set to GPU
-    device = sp.get_device(mri_raw.coords[0])
-    xp = device.xp
+# def spatial_shift(mri_raw: MRI_Raw, shifts: list):
 
-    # For encode
-    for encode in range(mri_raw.Num_Encodings):
-        coord = mri_raw.coords[encode]
+#     logger = logging.getLogger('spatial_shift')
 
-        # Get a shifts
-        shifter = xp.ones_like(mri_raw.kdata[encode][0] )
-        for dim, shift in enumerate(shifts):
-            shifter *= xp.exp(2j*math.pi*coord[..., dim]*shift)
+#     # Set to GPU
+#     device = sp.get_device(mri_raw.coords[0])
+#     xp = device.xp
 
-        # Multiply all data
-        for c in range(mri_raw.Num_Coils):
-            mri_raw.kdata[encode][c] *= shifter
+#     # For encode
+#     for encode in range(mri_raw.Num_Encodings):
+#         coord = mri_raw.coords[encode]
 
-    return
+#         # Get a shifts
+#         shifter = xp.ones_like(mri_raw.kdata[encode][0] )
+#         for dim, shift in enumerate(shifts):
+#             shifter *= xp.exp(2j*math.pi*coord[..., dim]*shift)
+
+#         # Multiply all data
+#         for c in range(mri_raw.Num_Coils):
+#             mri_raw.kdata[encode][c] *= shifter
+
+#     return
 
 def autofov(mri_raw=None, device=None,
             thresh=0.05, scale=1, oversample=2.0, square=True, block_size=8, logdir=None):
@@ -1785,6 +1843,15 @@ def autofov(mri_raw=None, device=None,
 
     for e in range(len(mri_raw.coords)):
         mri_raw.coords[e] *= img_scale
+    
+    if ndim == 2:
+        mri_raw.fovz = 1
+        mri_raw.fovy *= img_scale[0]
+        mri_raw.fovx *= img_scale[1]
+    else:
+        mri_raw.fovz *= img_scale[0]
+        mri_raw.fovy *= img_scale[1]
+        mri_raw.fovx *= img_scale[2]
 
     new_img_shape = sp.estimate_shape(mri_raw.coords[0])
     print(sp.estimate_shape(mri_raw.coords[0]))
