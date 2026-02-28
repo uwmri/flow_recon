@@ -27,8 +27,13 @@ from gpu_ops import *
 
 if __name__ == "__main__":
     
-    logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger('main') 
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(levelname)s:%(name)s:%(message)s')
+    console = logging.StreamHandler()
+    console.setLevel(logging.INFO)
+    console.setFormatter(formatter)
+    logger.addHandler(console)
     
     # Parse Command Line
     parser = argparse.ArgumentParser()
@@ -71,6 +76,7 @@ if __name__ == "__main__":
     parser.add_argument('--krad_cutoff', type=float, default=999990)
     parser.add_argument('--max_encodes', type=int, default=None)
     parser.add_argument('--coil_batch_size', type=int, default=1)
+    parser.add_argument('--compress_coils', type=int, dest='compress_coils', default=-1, help='Number of coils to compress to')
     
     parser.add_argument('--gate_type', type=str, default='time')  # recon type
     parser.add_argument('--gate_type2', type=str, default='prep')  # recon type
@@ -86,7 +92,8 @@ if __name__ == "__main__":
 
     parser.set_defaults(resp_gate=False)
     parser.add_argument('--resp_gate', dest='resp_gate', action='store_true')
-    parser.add_argument('--resp_efficiency', type=float, default=0.5)
+    parser.add_argument('--resp_upper', type=float, default=0.5, help='upper threshold for resp gating')
+    parser.add_argument('--resp_lower', type=float, default=0.0, help='lower threshold for resp gating')
     parser.add_argument('--resp_sign', type=int, help='flip the respiratory waveform', default=1)
     parser.add_argument('--resp_filter_window', type=float, default=10)
     parser.add_argument('--time_range', type=str, help='specify ranges as start1-end1,start2-end2,... in seconds (Ex: 50-100,220-340)', default=None)
@@ -94,18 +101,18 @@ if __name__ == "__main__":
     parser.add_argument('--discrete_gates', dest='discrete_gates', action='store_true')
     parser.set_defaults(discrete_gates2=False)
     parser.add_argument('--discrete_gates2', dest='discrete_gates2', action='store_true')
+    parser.add_argument('--random_undersample', type=float, default=1.0, help='factor by which to randomly undersample kspace')
     
     parser.set_defaults(fast_maxeig=False)
     parser.add_argument('--test_run', dest='test_run', action='store_true')
     parser.set_defaults(test_run=False)
-    parser.add_argument('--compress_coils', type=int, dest='compress_coils', default=-1, help='Number of coils to compress to')
 
     parser.set_defaults(strided_gate=False)
     parser.add_argument('--strided_gate', dest='strided_gate', action='store_true')
     parser.add_argument('--shots_per_frame', type=int, default=2)
 
     # SMS Reconstruction
-    parser.add_argument('--sms_factor', type=int, default=0)  # sms factor
+    parser.add_argument('--sms_factor', type=int, default=-1)  # sms factor
 
     # Flow Processing
     parser.add_argument('--flow_processing', dest='flow_processing', action='store_true', default=False)
@@ -134,17 +141,23 @@ if __name__ == "__main__":
     # Save to input raw data folder
     if args.out_folder is None:
         args.out_folder = os.path.dirname(args.filename)
+    else:
+        os.makedirs(args.out_folder, exist_ok=True)
 
+    logfile = logging.FileHandler(os.path.join(args.out_folder, 'pyrecon.log'), mode='a')
+    logfile.setLevel(logging.INFO)
+    logfile.setFormatter(formatter)
+    logger.addHandler(logfile)
 
     # Save to Folder    logger.info(f'Saving to {args.out_folder}')
 
     # Load Data
     logger.info(f'Load MRI from {args.filename}')
     if args.test_run:
-        mri_raw = load_MRI_raw(h5_filename=args.filename, max_coils=2, max_encodes=args.max_encodes, sms_factor=args.sms_factor)
+        mri_raw = load_MRI_raw(h5_filename=args.filename, max_coils=2, max_encodes=args.max_encodes)
     else:
         mri_raw = load_MRI_raw(h5_filename=args.filename, compress_coils=args.compress_coils, max_encodes=args.max_encodes, 
-                               lp_frac=args.lp_frac, sms_factor=args.sms_factor)
+                               lp_frac=args.lp_frac, random_undersample=args.random_undersample, sms_factor=args.sms_factor)
     args.sms_factor = mri_raw.sms_factor
     # Resample
     # radial3d_regrid(mri_raw)
@@ -161,11 +174,11 @@ if __name__ == "__main__":
                 time_ranges.append([float(x) for x in trange.split('-')])
         else:
             time_ranges = None
-        mri_raw = resp_gate(mri_raw, efficiency=args.resp_efficiency, resp_sign=args.resp_sign, resp_filter_window=args.resp_filter_window, time_ranges=time_ranges, debug_folder=args.out_folder)
+        mri_raw = resp_gate(mri_raw, resp_upper=args.resp_upper, resp_lower=args.resp_lower, resp_sign=args.resp_sign, resp_filter_window=args.resp_filter_window, time_ranges=time_ranges, debug_folder=args.out_folder)
 
     # set custom recon resolution
     if args.rcxres is not None and args.rcyres is not None:
-        if mri_raw.coord[0].shape[-1] == 2:
+        if mri_raw.coords[0].shape[-1] == 2:
             rcres = [args.rcyres, args.rcxres]
         else:
             rcres = [args.rczres, args.rcyres, args.rcxres]
@@ -173,7 +186,7 @@ if __name__ == "__main__":
         rcres = None
         
     if args.fovx is not None and args.fovy is not None:
-        if mri_raw.coord[0].shape[-1] == 2:
+        if mri_raw.coords[0].shape[-1] == 2:
             rcfov = [args.fovy, args.fovx]
             img_scale = [args.fovy/mri_raw.fovy, args.fovx/mri_raw.fovx]
         else:

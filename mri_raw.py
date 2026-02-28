@@ -1040,8 +1040,7 @@ def bounded_medfilt(signal, window):
   return filtered 
 
 
-def resp_gate(mri_raw=None, efficiency=0.5, resp_sign=1, resp_filter_window=10, time_ranges=None, debug_folder=None):
-    from scipy.ndimage import minimum_filter1d, maximum_filter1d
+def resp_gate(mri_raw=None, resp_upper=0.5, resp_lower=0.0, resp_sign=1, resp_filter_window=10, time_ranges=None, debug_folder=None):
     logger = logging.getLogger('Resp Gate k-space')
 
     # Get the MRI Raw structure setup
@@ -1084,17 +1083,21 @@ def resp_gate(mri_raw=None, efficiency=0.5, resp_sign=1, resp_filter_window=10, 
         logger.info(f'Estimated TR = {dt} based on {np.max(time)} s acquisition with {len(time)} points')
         logger.info(f'Using a filter window of {resp_filter_window} s')
         
-        mins = minimum_filter1d(resp, resp_filter_width) 
-        maxs = maximum_filter1d(resp, resp_filter_width)
+        mins = ndimage.minimum_filter1d(resp, resp_filter_width) 
+        maxs = ndimage.maximum_filter1d(resp, resp_filter_width)
         
-        logger.info(f'Thresholding based on resp efficiency of {efficiency}')
-        threshes = mins + (1.0 - efficiency) * (maxs - mins) # resp waveform is flipped by default
+        logger.info(f'Thresholding based on upper and lower thresholds of {resp_upper} and {resp_lower}')
+        
+        # resp waveform is flipped by default
+        ranges = maxs - mins
+        upper = mins + (1.0 - resp_upper) * ranges
+        lower = mins + (1.0 - resp_lower) * ranges
         
         if resp_sign == -1:
             logger.info(f'Flipping the respiratory window')
-            idx = resp < threshes
+            idx = (resp < lower) & (resp > upper)
         else:
-            idx = resp > threshes
+            idx = (resp > upper) & (resp < lower)
         
         # Find index where value is held within time range
         if time_ranges is not None:
@@ -1146,9 +1149,9 @@ def resp_gate(mri_raw=None, efficiency=0.5, resp_sign=1, resp_filter_window=10, 
 
     return mri_rawG
 
-def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None,
-                compress_coils=-1, lp_frac=1.0, scale_kdata=True, sms_factor=None):
-
+def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_coils=-1, 
+                 lp_frac=1.0, random_undersample=1.0, scale_kdata=True, sms_factor=-1):
+    logger = logging.getLogger('Load MRI data')
     with h5py.File(h5_filename, 'r') as hf:
 
         try:
@@ -1171,7 +1174,7 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None,
                 fovx = 1
                 fovy = 1
                 fovz = 1
-            if sms_factor == 0:
+            if sms_factor == -1:
                 try:
                     with open(os.path.join(os.path.dirname(h5_filename), 'sms_params.txt'), 'r') as f:
                         sms_params = f.readlines()
@@ -1406,6 +1409,31 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None,
         #     ksp /= np.abs(ksp).max()
         #     logging.info('No noise data.')
         #     pass
+        
+        if random_undersample > 1:
+            # Randomly undersample k-space
+            logging.info(f'Randomly undersampling k-space by {random_undersample}')
+            num_projs = mri_raw.kdata[0].shape[-1]
+            idx = np.random.choice(int(num_projs), int(num_projs // random_undersample), replace=False)
+            for e in range(len(mri_raw.kdata)):
+                mri_raw.kdata[e] = mri_raw.kdata[e][..., idx]
+                mri_raw.coords[e] = mri_raw.coords[e][idx, :]
+                mri_raw.dcf[e] = mri_raw.dcf[e][idx]
+                mri_raw.time[e] = mri_raw.time[e][idx]
+                mri_raw.ecg[e] = mri_raw.ecg[e][idx]
+                mri_raw.prep[e] = mri_raw.prep[e][idx]
+                mri_raw.resp[e] = mri_raw.resp[e][idx]
+                if sms_factor > 1:
+                    mri_raw.sms_blips[e] = mri_raw.sms_blips[e][idx, :]
+            logging.info(f'Undersampled MRI coords {mri_raw.coords[0].shape}')
+            logging.info(f'Undersampled MRI dcf {mri_raw.dcf[0].shape}')
+            logging.info(f'Undersampled MRI kdata {mri_raw.kdata[0].shape}')
+            logging.info(f'Undersampled MRI time {mri_raw.time[0].shape}')
+            logging.info(f'Undersampled MRI ecg {mri_raw.ecg[0].shape}')
+            logging.info(f'Undersampled MRI resp {mri_raw.resp[0].shape}')
+            logging.info(f'Undersampled MRI prep {mri_raw.prep[0].shape}')
+            if sms_factor > 1:
+                logging.info(f'Undersampled MRI sms_blips {mri_raw.sms_blips[0].shape}')
         
         if lp_frac < 1:
             # low pass filter k-space
