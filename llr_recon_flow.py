@@ -165,8 +165,57 @@ if __name__ == "__main__":
     if args.crop_factor > 1.0:
         crop_kspace(mri_rawdata=mri_raw, crop_factor=args.crop_factor)  # 2.5 (320/128)
 
+    # set custom recon resolution
+    if args.rcxres is not None or args.rcyres is not None or args.rczres is not None:
+        orig_shape = sp.estimate_shape(mri_raw.coords[0])
+        if args.rcxres is None:
+            args.rcxres = orig_shape[-1]
+        if args.rcyres is None:
+            args.rcyres = orig_shape[-2]
+        if len(orig_shape) == 3 and args.rczres is None:
+            args.rczres = orig_shape[-3]
+            
+        if mri_raw.coords[0].shape[-1] == 2:
+            mri_raw.tshape = [args.rcyres, args.rcxres]
+            logger.info(f'Set reconstructed resolution to X = {mri_raw.tshape[-1]}, Y = {mri_raw.tshape[-2]}')
+        else:
+            mri_raw.tshape = [args.rczres, args.rcyres, args.rcxres]
+            logger.info(f'Set reconstructed resolution to X = {mri_raw.tshape[-1]}, Y = {mri_raw.tshape[-2]}, Z = {mri_raw.tshape[-3]}')
+    
+    if args.autofov:
+        # Reconstruct an low res image and get the field of view
+    
+        logger.info(f'Estimating FOV MRI ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
+        if args.recon_type == 'llr':
+            autofov_block_size = args.llr_block_width
+        else:
+            autofov_block_size = 8
+        autofov(mri_raw=mri_raw, thresh=args.thresh, scale=args.scale, oversample=args.data_oversampling,
+            square=False, block_size=autofov_block_size, logdir=args.out_folder, device=sp.Device(args.device))
+    else:
+        # set custom recon FOV
+        if args.fovx is None:
+            args.fovx = mri_raw.fovx
+        if args.fovy is None:
+            args.fovy = mri_raw.fovy
+        if args.fovz is None:
+            args.fovz = mri_raw.fovz
+        
+        mri_raw.fovz = args.fovz
+        mri_raw.fovy = args.fovy
+        mri_raw.fovx = args.fovx
+        logger.info(f'Set FOV to X = {args.fovx}, Y  = {args.fovy}, Z = {args.fovz}')
+        
+        if mri_raw.coords[0].shape[-1] == 2:
+            img_scale = [args.fovy/mri_raw.fovy, args.fovx/mri_raw.fovx]
+        else:
+            img_scale = [args.fovz/mri_raw.fovz, args.fovy/mri_raw.fovy, args.fovx/mri_raw.fovx]
+        
+        for e in range(len(mri_raw.coords)):    
+            mri_raw.coords[e] *= img_scale
+            
     # Perform respiratory gating 
-    if args.resp_gate:
+    if args.resp_gate and args.recon_type != 'imoco':
         if args.time_range is not None:
             time_ranges = []
             ranges = args.time_range.split(',')
@@ -174,61 +223,26 @@ if __name__ == "__main__":
                 time_ranges.append([float(x) for x in trange.split('-')])
         else:
             time_ranges = None
-        mri_raw = resp_gate(mri_raw, resp_upper=args.resp_upper, resp_lower=args.resp_lower, resp_sign=args.resp_sign, resp_filter_window=args.resp_filter_window, time_ranges=time_ranges, debug_folder=args.out_folder)
-
-    # set custom recon resolution
-    if args.rcxres is not None and args.rcyres is not None:
-        if mri_raw.coords[0].shape[-1] == 2:
-            rcres = [args.rcyres, args.rcxres]
-        else:
-            rcres = [args.rczres, args.rcyres, args.rcxres]
-    else:
-        rcres = None
-        
-    if args.fovx is not None and args.fovy is not None:
-        if mri_raw.coords[0].shape[-1] == 2:
-            rcfov = [args.fovy, args.fovx]
-            img_scale = [args.fovy/mri_raw.fovy, args.fovx/mri_raw.fovx]
-        else:
-            rcfov = [args.fovx, args.fovy, args.fovz]
-            img_scale = [args.fovz/mri_raw.fovz, args.fovy/mri_raw.fovy, args.fovx/mri_raw.fovx]
-            mri_raw.fovz = args.fovz
-        mri_raw.fovy = args.fovy
-        mri_raw.fovx = args.fovx
-        
-        for e in range(len(mri_raw.coords)):    
-            mri_raw.coords[e] *= img_scale
-
-    else:
-        rcfov = None
-   
-    # Reconstruct an low res image and get the field of view
-    logger.info(f'Estimating FOV MRI ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
-    if args.recon_type == 'llr':
-        autofov_block_size = args.llr_block_width
-    else:
-        autofov_block_size = 8
-
-    if args.autofov and rcfov is None:
-        autofov(mri_raw=mri_raw, thresh=args.thresh, scale=args.scale, oversample=args.data_oversampling,
-            square=False, block_size=autofov_block_size, logdir=args.out_folder, device=sp.Device(args.device))
-
+        mri_raw = resp_gate(mri_raw, resp_upper=args.resp_upper, resp_lower=args.resp_lower, resp_sign=args.resp_sign, 
+                        resp_filter_window=args.resp_filter_window, time_ranges=time_ranges, debug_folder=args.out_folder)
+    
     # Get sensitivity maps
     logger.info(f'Reconstruct sensitivity maps ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
     if mri_raw.Num_Coils == 1:
-        if rcres is not None:
-            img_shape = rcres
+        if mri_raw.tshape is not None:
+            img_shape = mri_raw.tshape
         else:
             img_shape = sp.estimate_shape(mri_raw.coords[0])
         xp = sp.Device(args.device).xp
         smaps = xp.ones([mri_raw.Num_Coils] + img_shape, dtype=xp.complex64)
     else:
-        smaps = get_smaps(mri_rawdata=mri_raw, args=args, thresh_maps=args.thresh_maps, smap_type=args.smap_type, img_shape=rcres, device=args.device, log_dir=args.out_folder)
+        smaps = get_smaps(mri_rawdata=mri_raw, args=args, thresh_maps=args.thresh_maps, smap_type=args.smap_type, img_shape=mri_raw.tshape, device=args.device, log_dir=args.out_folder)
 
     logger.info(f'Smaps shape {smaps.shape}')
     
-    # For the spiral flow situation with interleaved encodings
+    # Gate kspace
     if args.strided_gate:
+        # For the spiral flow situation with interleaved encodings
         logger.info(f'Strided gating for spiral with interleaved encodes')
         # Hardcoded frames per cardiac bin. 
         mri_raw = strided_encoding(mri_raw, stride=1, shots_per_frame=args.shots_per_frame)
@@ -293,6 +307,8 @@ if __name__ == "__main__":
     smaps = sp.to_device(smaps, sp.Device(args.device))
 
     # Reconstruct the image
+    
+    ###### MULTI-SCALE LOW RANK RECONSTRUCTION ######
     if args.recon_type == 'mslr':
         comm = sp.Communicator()
         #blk_widths = (128, 64, 48, 32, 24, 16)
@@ -386,7 +402,8 @@ if __name__ == "__main__":
                 hf.create_dataset('Frame0', data=np.abs(Im0))
                 hf.create_dataset('aFrame0', data=np.angle(Im0))
                 pass
-
+            
+    ###### LOCAL LOW RANK RECONSTRUCTION ######
     elif args.recon_type == 'llr':
         logger.info(f'Reconstruct Images ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
         if args.sms_factor > 1:
@@ -406,6 +423,8 @@ if __name__ == "__main__":
                                     composite_init=False
                                     ).run()
         logger.info(f'Image shape {img.shape}')
+        
+    ###### SENSE RECONSTRUCTION ######
     elif args.recon_type == 'sense':
 
         img = []
@@ -433,6 +452,8 @@ if __name__ == "__main__":
             # print('Run Sense')
             frame = sp.to_device(sense.run(), sp.cpu_device)
             img.append(frame)
+            
+    ###### WAVELET RECONSTRUCTION ######
     elif args.recon_type == 'wavelet':
         img = []
         for i in range(len(mri_raw.kdata)):
@@ -458,7 +479,8 @@ if __name__ == "__main__":
             # print('Run Sense')
             frame = sp.to_device(sense.run(), sp.cpu_device)
             img.append(frame)
-        
+    
+    ###### PILS RECONSTRUCTION ######
     elif args.recon_type == 'pils':
         logger.info('PILS Recon')
         img = []
