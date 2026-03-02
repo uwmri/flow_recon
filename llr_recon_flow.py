@@ -95,7 +95,6 @@ if __name__ == "__main__":
     parser.add_argument('--resp_gate', dest='resp_gate', action='store_true')
     parser.add_argument('--resp_upper', type=float, default=0.5, help='upper threshold for resp gating')
     parser.add_argument('--resp_lower', type=float, default=0.0, help='lower threshold for resp gating')
-    parser.add_argument('--resp_sign', type=int, help='flip the respiratory waveform', default=1)
     parser.add_argument('--resp_filter_window', type=float, default=10)
     parser.add_argument('--time_range', type=str, help='specify ranges as start1-end1,start2-end2,... in seconds (Ex: 50-100,220-340)', default=None)
     parser.set_defaults(discrete_gates=False)
@@ -111,6 +110,9 @@ if __name__ == "__main__":
     parser.set_defaults(strided_gate=False)
     parser.add_argument('--strided_gate', dest='strided_gate', action='store_true')
     parser.add_argument('--shots_per_frame', type=int, default=2)
+    
+    # iMoCo Reconstruction
+    parser.add_argument('--res_scale', type=float, default=2.0, help='Downsampling factor for low-res XD-GRASP recon for iMoCo')
 
     # SMS Reconstruction
     parser.add_argument('--sms_factor', type=int, default=-1)  # sms factor
@@ -249,7 +251,7 @@ if __name__ == "__main__":
         mri_raw = strided_encoding(mri_raw, stride=1, shots_per_frame=args.shots_per_frame)
         args.frames = mri_raw.Num_Frames
     else:
-        if args.frames > 1:
+        if args.frames > 1 and args.recon_type != 'imoco':
             if args.frames2 > 1:
                 mri_raw = gate_kspace2d(mri_raw=mri_raw,
                                         num_frames=[args.frames, args.frames2],
@@ -521,12 +523,12 @@ if __name__ == "__main__":
                 img.append(sp.to_device(Eh * kdata))
                 logger.info(f'Frame {i} took {time.time()-t}')
     
+    ###### IMOCO RECONSTRUCTION ######
     elif args.recon_type == 'imoco':
-        logger.info('Iterative Motion Compensatation Recon')
-        img = iMoCoRecon(mri_raw, mps=smaps, device=sp.Device(args.device), lamda=args.lamda, 
-                         coil_batch_size=args.coil_batch_size, max_iter=args.max_iter, 
-                         batched_iter=args.max_iter, gate_type=args.gate_type, log_folder=args.out_folder,
-                         resp_filter_window=args.resp_filter_window,
+        logger.info('Iterative Motion Compensation Recon')
+        img = iMoCoRecon(mri_raw, mps=smaps, device=sp.Device(args.device), lamda=args.lamda, coil_batch_size=args.coil_batch_size, 
+                         gate_type=args.gate_type, card_frames=args.frames, resp_frames=args.frames2, resp_filter_window=args.resp_filter_window, 
+                         res_scale=args.res_scale, max_iter=args.max_iter, out_folder=args.out_folder,
                         ).run()
         
         
@@ -536,7 +538,10 @@ if __name__ == "__main__":
     # bring data back to CPU
     img = np.stack(img, axis=0)
     img = sp.to_device(img, sp.cpu_device)
-    img = np.reshape(img, (args.frames*args.frames2, -1) + smaps.shape[1:])
+    if args.recon_type == "imoco":
+        img = np.reshape(img,(args.frames, -1) + smaps.shape[1:])
+    else:
+        img = np.reshape(img, (args.frames*args.frames2, -1) + smaps.shape[1:])
     if len(img.shape) == 4:
         img = np.expand_dims(img, axis=0)
     logger.info(f'Image shape {img.shape}')

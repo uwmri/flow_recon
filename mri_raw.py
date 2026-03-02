@@ -660,9 +660,7 @@ def crop_kspace(mri_rawdata=None, crop_factor=2, crop_type='radius'):
     logger = logging.getLogger('Recon images')
 
     # Get initial shape
-    if mri_rawdata.tshape is not None:
-        img_shape = mri_rawdata.tshape
-    elif isinstance(mri_rawdata.coords, list):
+    if isinstance(mri_rawdata.coords, list):
         img_shape = sp.estimate_shape(mri_rawdata.coords[0])
     else:
         img_shape = sp.estimate_shape(mri_rawdata.coords)
@@ -675,12 +673,10 @@ def crop_kspace(mri_rawdata=None, crop_factor=2, crop_type='radius'):
 
         # Find values where kspace is within bounds (square crop)
         if crop_type == 'radius':
-            
-            # radius = np.sum(np.array(mri_rawdata.coords[e]) ** 2, -1)
-            radius = np.sqrt(np.sum(mri_rawdata.coords[e]**2, axis=-1))
 
-            # idx = np.argwhere(np.logical_and.reduce([radius < (img_shape_new[0] / 2) ** 2]))
-            idx = np.argwhere(radius < np.max(radius)/crop_factor)
+            radius = np.sum(np.array(mri_rawdata.coords[e]) ** 2, -1)
+
+            idx = np.argwhere(np.logical_and.reduce([radius < (img_shape_new[0] / 2) ** 2]))
         else:
             idx = np.argwhere(np.logical_and.reduce([np.abs(mri_rawdata.coords[e][..., 0]) < img_shape_new[0] / 2,
                                                      np.abs(mri_rawdata.coords[e][..., 1]) < img_shape_new[1] / 2,
@@ -697,7 +693,7 @@ def crop_kspace(mri_rawdata=None, crop_factor=2, crop_type='radius'):
         mri_rawdata.sms_blips[e] = mri_rawdata.sms_blips[e][idx[:, 0]]
 
         logger.info(f'New shape = {sp.estimate_shape(mri_rawdata.coords[e])}')
-    mri_rawdata.tshape = img_shape_new
+
 
 def get_gate_bins(gate_signal, gate_type, num_frames, discrete_gates=False, prep_disdaqs=0):
     logger = logging.getLogger('Get Gate bins')
@@ -1032,7 +1028,6 @@ def bounded_medfilt(signal, window):
 
   return filtered 
 
-
 def sliding_percentile(signal, window, lower, upper):
     
     thresh1 = ndimage.percentile_filter(signal,
@@ -1046,7 +1041,6 @@ def sliding_percentile(signal, window, lower, upper):
                                 mode='nearest')
 
     return (signal >= thresh1) & (signal < thresh2)
-
 
 def resp_gate(mri_raw=None, resp_lower=0.0, resp_upper=0.5, resp_filter_window=10, time_ranges=None, debug_folder=None):
     logger = logging.getLogger('Resp Gate k-space')
@@ -1322,25 +1316,25 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_co
             if resp_readout.size != dcf.size:
 
                 # This assigns the same time to each point in the readout
-                time_readout = np.expand_dims(time_readout, -1)
-                ecg_readout = np.expand_dims(ecg_readout, -1)
-                resp_readout = np.expand_dims(resp_readout, -1)
-                prep_readout = np.expand_dims(prep_readout, -1)
+                # time_readout = np.expand_dims(time_readout, -1)
+                # ecg_readout = np.expand_dims(ecg_readout, -1)
+                # resp_readout = np.expand_dims(resp_readout, -1)
+                # prep_readout = np.expand_dims(prep_readout, -1)
 
-                time = np.tile(time_readout, (1, 1, dcf.shape[2]))
-                resp = np.tile(resp_readout, (1, 1, dcf.shape[2]))
-                ecg = np.tile(ecg_readout, (1, 1, dcf.shape[2]))
-                prep = np.tile(prep_readout, (1, 1, dcf.shape[2]))
+                # time = np.tile(time_readout, (1, 1, dcf.shape[2]))
+                # resp = np.tile(resp_readout, (1, 1, dcf.shape[2]))
+                # ecg = np.tile(ecg_readout, (1, 1, dcf.shape[2]))
+                # prep = np.tile(prep_readout, (1, 1, dcf.shape[2]))
                 
-                # time = time_readout[..., None]
-                # ecg  = ecg_readout[..., None]
-                # resp = resp_readout[..., None]
-                # prep = prep_readout[..., None]
+                time = time_readout[..., None]
+                ecg  = ecg_readout[..., None]
+                resp = resp_readout[..., None]
+                prep = prep_readout[..., None]
 
-                # time = np.broadcast_to(time, dcf.shape)
-                # ecg  = np.broadcast_to(ecg,  dcf.shape)
-                # resp = np.broadcast_to(resp, dcf.shape)
-                # prep = np.broadcast_to(prep, dcf.shape)
+                time = np.broadcast_to(time, dcf.shape)
+                ecg  = np.broadcast_to(ecg,  dcf.shape)
+                resp = np.broadcast_to(resp, dcf.shape)
+                prep = np.broadcast_to(prep, dcf.shape)
 
                 logging.info(f'Min/max time (s) = {np.min(time)} {np.max(time)}')
             else:
