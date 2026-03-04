@@ -361,8 +361,9 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', img_shape=None, d
     # Set to GPU
     if device is None:
         device = sp.Device(0)
+    else:
+        device = sp.Device(device)
 
-    op_device = sp.Device(device)
     store_device = sp.cpu_device
     xp = sp.Device(args.device).xp
 
@@ -491,10 +492,10 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', img_shape=None, d
 
                     for c in range(mri_rawdata.Num_Coils):
                         logger.info(f'Reconstructing encode, coil {e} , {c} ')
-                        ksp = array_to_gpu(mri_rawdata.kdata[e][c, ...], op_device)
-                        ksp *= sp.to_device(np.conj(sms_blips[:, s]), op_device)
+                        ksp = array_to_gpu(mri_rawdata.kdata[e][c, ...], device)
+                        ksp *= sp.to_device(np.conj(sms_blips[:, s]), device)
                         ksp *= lpf
-                        coords_temp = array_to_gpu(mri_rawdata.coords[e], op_device)
+                        coords_temp = array_to_gpu(mri_rawdata.coords[e], device)
                         image_temp = sp.nufft_adjoint(ksp, coords_temp, img_shape)
                         image[c, ..., s] += sp.to_device(image_temp, store_device)
 
@@ -511,9 +512,9 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', img_shape=None, d
 
                 for c in range(mri_rawdata.Num_Coils):
                     logger.info(f'Reconstructing encode, coil {e} , {c} ')
-                    ksp = array_to_gpu(mri_rawdata.kdata[e][c, ...], op_device)
+                    ksp = array_to_gpu(mri_rawdata.kdata[e][c, ...], device)
                     ksp *= lpf
-                    coords_temp = array_to_gpu(mri_rawdata.coords[e], op_device)
+                    coords_temp = array_to_gpu(mri_rawdata.coords[e], device)
                     image_temp = sp.nufft_adjoint(ksp, coords_temp, img_shape)
                     image[c] += sp.to_device(image_temp, store_device)
 
@@ -1042,7 +1043,7 @@ def sliding_percentile(signal, window, lower, upper):
 
     return (signal >= thresh1) & (signal < thresh2)
 
-def resp_gate(mri_raw=None, resp_lower=0.0, resp_upper=0.5, resp_filter_window=10, time_ranges=None, debug_folder=None):
+def resp_gate(mri_raw=None, resp_lower=0.0, resp_upper=0.5, resp_filter_window=10, time_ranges=None, debug_folder=None, debug_name=''):
     logger = logging.getLogger('Resp Gate k-space')
 
     # Get the MRI Raw structure setup
@@ -1080,39 +1081,39 @@ def resp_gate(mri_raw=None, resp_lower=0.0, resp_upper=0.5, resp_filter_window=1
                 time_mask |= np.logical_and(time_sort > time_range[0], time_sort < time_range[1])
             idx &= time_mask
         
-        if debug_folder is None:
-            np.savetxt('TimeWeight.txt', idx)
-            np.savetxt('TimeResp.txt', resp_sort)
-            np.savetxt('Time.txt', time)
-        else:
-            np.savetxt(os.path.join(debug_folder, 'TimeWeight.txt'), idx)
-            np.savetxt(os.path.join(debug_folder, 'TimeResp.txt'), resp_sort)
-            np.savetxt(os.path.join(debug_folder, 'Time.txt'), time)
-        
         # undo sorting for indexing  
-        idx[inv_tidx] = idx
+        new_idx = idx[inv_tidx]
         
-        current_points = np.sum(idx)
+        if debug_folder is None:
+            np.savetxt(f'TimeWeight{debug_name}.txt', new_idx)
+            np.savetxt(f'TimeResp{debug_name}.txt', resp)
+            np.savetxt(f'Time{debug_name}.txt', time)
+        else:
+            np.savetxt(os.path.join(debug_folder, f'TimeWeight{debug_name}.txt'), new_idx)
+            np.savetxt(os.path.join(debug_folder, f'TimeResp{debug_name}.txt'), resp)
+            np.savetxt(os.path.join(debug_folder, f'Time{debug_name}.txt'), time)
+        
+        current_points = np.sum(new_idx)
         
         # Gate the data
         points_per_bin.append(current_points)
     
         logger.info(f'Encode {e}, Points = {current_points}')
 
-        new_kdata = mri_raw.kdata[e][:, idx]
+        new_kdata = mri_raw.kdata[e][:, new_idx]
         mri_rawG.kdata.append(new_kdata)
 
-        new_coords = mri_raw.coords[e][idx, :]
+        new_coords = mri_raw.coords[e][new_idx, :]
         mri_rawG.coords.append(new_coords)
         
-        new_sms_blips = mri_raw.sms_blips[e][idx, :]
+        new_sms_blips = mri_raw.sms_blips[e][new_idx, :]
         mri_rawG.sms_blips.append(new_sms_blips)
 
-        mri_rawG.dcf.append(mri_raw.dcf[e][idx])
-        mri_rawG.time.append(mri_raw.time[e][idx])
-        mri_rawG.resp.append(mri_raw.resp[e][idx])
-        mri_rawG.prep.append(mri_raw.prep[e][idx])
-        mri_rawG.ecg.append(mri_raw.ecg[e][idx])
+        mri_rawG.dcf.append(mri_raw.dcf[e][new_idx])
+        mri_rawG.time.append(mri_raw.time[e][new_idx])
+        mri_rawG.resp.append(mri_raw.resp[e][new_idx])
+        mri_rawG.prep.append(mri_raw.prep[e][new_idx])
+        mri_rawG.ecg.append(mri_raw.ecg[e][new_idx])
 
         count += 1
 

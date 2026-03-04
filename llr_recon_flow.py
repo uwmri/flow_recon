@@ -106,6 +106,7 @@ if __name__ == "__main__":
     parser.set_defaults(fast_maxeig=False)
     parser.add_argument('--test_run', dest='test_run', action='store_true')
     parser.set_defaults(test_run=False)
+    parser.add_argument('--debug', dest='debug', action='store_true')
 
     parser.set_defaults(strided_gate=False)
     parser.add_argument('--strided_gate', dest='strided_gate', action='store_true')
@@ -204,9 +205,6 @@ if __name__ == "__main__":
         if args.fovz is None:
             args.fovz = mri_raw.fovz
         
-        mri_raw.fovz = args.fovz
-        mri_raw.fovy = args.fovy
-        mri_raw.fovx = args.fovx
         logger.info(f'Set FOV to X = {args.fovx}, Y  = {args.fovy}, Z = {args.fovz}')
         
         if mri_raw.coords[0].shape[-1] == 2:
@@ -217,17 +215,22 @@ if __name__ == "__main__":
         for e in range(len(mri_raw.coords)):    
             mri_raw.coords[e] *= img_scale
             
+        mri_raw.fovz = args.fovz
+        mri_raw.fovy = args.fovy
+        mri_raw.fovx = args.fovx
+        
+    if args.time_range is not None:
+        time_ranges = []
+        ranges = args.time_range.split(',')
+        for trange in ranges:
+            time_ranges.append([float(x) for x in trange.split('-')])
+    else:
+        time_ranges = None
+            
     # Perform respiratory gating 
     if args.resp_gate and args.recon_type != 'imoco':
-        if args.time_range is not None:
-            time_ranges = []
-            ranges = args.time_range.split(',')
-            for trange in ranges:
-                time_ranges.append([float(x) for x in trange.split('-')])
-        else:
-            time_ranges = None
-        mri_raw = resp_gate(mri_raw, resp_upper=args.resp_upper, resp_lower=args.resp_lower, resp_sign=args.resp_sign, 
-                        resp_filter_window=args.resp_filter_window, time_ranges=time_ranges, debug_folder=args.out_folder)
+        mri_raw = resp_gate(mri_raw, resp_upper=args.resp_upper, resp_lower=args.resp_lower, 
+                            resp_filter_window=args.resp_filter_window, time_ranges=time_ranges, debug_folder=args.out_folder)
     
     # Get sensitivity maps
     logger.info(f'Reconstruct sensitivity maps ( Memory used = {mempool.used_bytes()} of {mempool.total_bytes()} )')
@@ -527,8 +530,9 @@ if __name__ == "__main__":
     elif args.recon_type == 'imoco':
         logger.info('Iterative Motion Compensation Recon')
         img = iMoCoRecon(mri_raw, mps=smaps, device=sp.Device(args.device), lamda=args.lamda, coil_batch_size=args.coil_batch_size, 
-                         gate_type=args.gate_type, card_frames=args.frames, resp_frames=args.frames2, resp_filter_window=args.resp_filter_window, 
-                         res_scale=args.res_scale, max_iter=args.max_iter, out_folder=args.out_folder,
+                         gate_type=args.gate_type, card_frames=args.frames, resp_frames=args.frames2, time_ranges=time_ranges,
+                         resp_filter_window=args.resp_filter_window, res_scale=args.res_scale, max_iter=args.max_iter, 
+                         out_folder=args.out_folder, debug=args.debug
                         ).run()
         
         
