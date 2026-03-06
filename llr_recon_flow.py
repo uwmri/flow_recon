@@ -113,7 +113,7 @@ if __name__ == "__main__":
     parser.add_argument('--shots_per_frame', type=int, default=2)
     
     # iMoCo Reconstruction
-    parser.add_argument('--res_scale', type=float, default=2.0, help='Downsampling factor for low-res XD-GRASP recon for iMoCo')
+    parser.add_argument('--res_scale', type=float, default=1.0, help='Downsampling factor for low-res XD-GRASP recon for iMoCo')
 
     # SMS Reconstruction
     parser.add_argument('--sms_factor', type=int, default=-1)  # sms factor
@@ -569,7 +569,7 @@ if __name__ == "__main__":
         header_info["time_range"] = args.time_range
     if args.sms_factor > 1:
         header_info["sms_factor"] = int(args.sms_factor)
-        header_info["sms_fov"] = int(mri_raw.sms_fov)
+        header_info["sms_fov"] = float(mri_raw.sms_fov)
 
     # export data
     if args.flow_processing:

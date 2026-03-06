@@ -793,7 +793,7 @@ def gate_kspace2d(mri_raw=None, num_frames=[10, 10], gate_type=['time', 'prep'],
     #        gate_signal[e] = np.reshape(ecg_shifted[idx_inverse], time[e].shape)
 
 
-    print(f'Gating off of {gate_type}')
+    logger.info(f'Gating off of {gate_type}')
 
     t_min0, t_max0, delta_time0 = get_gate_bins(gate_signal0, gate_type[0], num_frames[0], discrete_gates[0])
     t_min1, t_max1, delta_time1 = get_gate_bins(gate_signal1, gate_type[1], num_frames[1], discrete_gates[1])
@@ -891,19 +891,19 @@ def gate_kspace(mri_raw=None, num_frames=10, gate_type='time', discrete_gates=Fa
 
            # Estimate the delay
            if e == 0:
-               print(f'Time max {time_encode.max()}')
-               print(f'Time size {time_encode.size}')
-               print(f'Time ecg delay {ecg_delay}')
+               logger.info(f'Time max {time_encode.max()}')
+               logger.info(f'Time size {time_encode.size}')
+               logger.info(f'Time ecg delay {ecg_delay}')
                
                ecg_shift = int(ecg_delay / time_encode.max() * time_encode.size)
-               print(f'Shifting by {ecg_shift}')
+               logger.info(f'Shifting by {ecg_shift}')
 
            #Using circular shift for now. This should be fixed
            ecg_sorted = ecg_encode[idx]
            ecg_shifted = np.roll( ecg_sorted, -ecg_shift)
            gate_signal[e] = np.reshape(ecg_shifted[idx_inverse], time[e].shape)
 
-    print(f'Gating off of {gate_type}')
+    logger.info(f'Gating off of {gate_type}')
 
     t_min, t_max, delta_time = get_gate_bins(gate_signal, gate_type, num_frames, discrete_gates)
 
