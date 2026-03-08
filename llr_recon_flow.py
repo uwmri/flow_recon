@@ -553,7 +553,7 @@ if __name__ == "__main__":
         header_info["time_range"] = args.time_range
     if args.sms_factor > 1:
         header_info["sms_factor"] = int(args.sms_factor)
-        header_info["sms_fov"] = int(mri_raw.sms_fov)
+        header_info["sms_fov"] = float(mri_raw.sms_fov)
 
     # export data
     if args.flow_processing:
