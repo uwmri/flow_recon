@@ -46,15 +46,15 @@ class iMoCoRecon:
         self.debug = debug
                 
         
-    def register(self, fixed, moving):
+    def register(self, fixed, moving, r):
         fixed = ants.from_numpy(fixed)
         moving = ants.from_numpy(moving)
         
-        reg = ants.registration(fixed, moving, type_of_transform='SyNOnly', initial_transform="identity",\
+        reg = ants.registration(fixed, moving, type_of_transform='SyNAggro', initial_transform="identity",\
                                 syn_metric='demons', syn_sampling=4, \
                                 grad_step=0.1, flow_sigma=5, total_sigma=3,\
-                                reg_iterations=(100,100,40,20,10), \
-                                verbose=False, outprefix=self.out_folder, \
+                                reg_iterations=(200,200,150,50,10), \
+                                verbose=False, outprefix=f"{self.out_folder}/{r}", \
                                 w='[0.1,1]', write_composite_transform=False)
         
         M = nibabel.load(reg['fwdtransforms'][0])
@@ -118,6 +118,7 @@ class iMoCoRecon:
             self.logger.info(f'Estimated TR = {dt} based on {cp.max(time)} s acquisition with {len(time)} points')
             self.logger.info(f'Using a filter window of {self.resp_filter_window} s')
             
+            self.logger.info(f'Finding mins and maxes...')
             resp_max = cndimage.maximum_filter(resp, size=resp_filter_width)
             resp_min = cndimage.minimum_filter(resp, size=resp_filter_width)
             
@@ -129,6 +130,7 @@ class iMoCoRecon:
             lower_bound = signal_m - 0.8 * signal_s
             eff_index = index[(resp < upper_bound) & (resp > lower_bound)]
             
+            self.logger.info(f'Correcting respiratory drift...')
             exhale_th = cp.asnumpy(signal_m + 0.2 * signal_s)
             exhale_pos, ex_dict = csignal.find_peaks(resp[eff_index], distance=resp_filter_width, height = exhale_th)
             ex_signal = ex_dict['peak_heights']
@@ -228,21 +230,9 @@ class iMoCoRecon:
                         np.abs(gate_signal[e]) < t_stop])
                     current_points = np.sum(idx)
 
-                    # post_gate = gate_signal[e][idx]
-                    #print(f'Post gate min = {np.min(post_gate)}')
-                    #print(f'Post gate max = {np.max(post_gate)}')
-                    #print(f'Size of gate = {gate_signal[e].shape}')
-
-                    # ecg = mri_raw.ecg[e][idx]
-                    #print(f'Post ecg min = {np.min(ecg)}')
-                    #print(f'Post ecg max = {np.max(ecg)}')
-                    #print(f'Size of ecg = {mri_raw.ecg[e].shape}')
-
-
                     # Gate the data
                     points_per_bin.append(current_points)
 
-                    #print('(t_start,t_stop) = (', t_start, ',', t_stop, ')')
                     logger.info(f'Frame {t} [{t_start} to {t_stop} ] | {e}, Points = {current_points}')
 
                     # Coords and K-space have extra dimensions (coils, directions)
@@ -280,8 +270,8 @@ class iMoCoRecon:
 
         return gated_data
         
-    def xd_grasp_recon(self):
-        self.logger.info(f'Performing XD-GRASP recon with {self.resp_frames} respiratory phases')
+    def motion_recon(self):
+        self.logger.info(f'Performing motion-resolved recon with {self.resp_frames} respiratory phases')
 
         # scale down
         # if self.res_scale > 1:
@@ -308,10 +298,10 @@ class iMoCoRecon:
                 
                 '''
                 Note: sigpy has an issue with holding onto items in memory when running the pre-packaged apps.
-                Will cause this code to eventually run out of GPU memory if enough respiratory phases are run,
-                regardless if you delete the variables. Only fix for right now is to modify the 
-                LinearLeastSquares function in sigpy/app.py file (if using conda it's probably located in 
-                ~/$USER/.conda/envs/<env name>/lib/python<version>/site-packages)
+                It'll cause this code to eventually run out of GPU memory if enough respiratory phases are run,
+                regardless of whether you derefernce the variables after each loop. Only fix for right now is 
+                to modify the LinearLeastSquares function in sigpy/app.py file (if using conda it's probably 
+                located in ~/$USER/.conda/envs/<env name>/lib/python<version>/site-packages/sigpy)
                 and replace this:
                 
                 def _output(self):
@@ -324,12 +314,16 @@ class iMoCoRecon:
                     del self.x
                     del self.alg
                     return x
+                
+                https://github.com/mikgroup/sigpy/issues/49
                 '''
                 
-                # recon = sp.mri.app.SenseRecon(kdata, mps, lamda=self.lamda, weights=dcf, coord=coord, max_iter=self.max_iter//2, 
-                #             coil_batch_size=self.coil_batch_size, device=sp.Device(self.device), solver="ConjugateGradient")
-                recon = sp.mri.app.TotalVariationRecon(kdata, mps, lamda=self.lamda, weights=dcf, coord=coord, max_iter=self.max_iter//5,
-                            coil_batch_size=self.coil_batch_size, device=sp.Device(self.device), solver="ADMM", save_objective_values=True)
+                recon = sp.mri.app.SenseRecon(kdata, mps, lamda=self.lamda, weights=dcf, coord=coord, max_iter=self.max_iter, 
+                            coil_batch_size=self.coil_batch_size, device=sp.Device(self.device), solver="ConjugateGradient")
+                # recon = sp.mri.app.L1WaveletRecon(kdata, mps, lamda=self.lamda*100, weights=dcf, coord=coord, max_iter=self.max_iter, 
+                #             coil_batch_size=self.coil_batch_size, device=sp.Device(self.device))
+                # recon = sp.mri.app.TotalVariationRecon(kdata, mps, lamda=self.lamda*10, weights=dcf, coord=coord, max_iter=1,
+                #             coil_batch_size=self.coil_batch_size, device=sp.Device(self.device), solver="ADMM", save_objective_values=True)
                 
                 X = sp.to_device(recon.run(), sp.cpu_device)
                 resp_img.append(X)
@@ -354,7 +348,11 @@ class iMoCoRecon:
         Ms = []
         for i in range(self.resp_frames):
             M = interp_op(tuple(self.mri_data.tshape), M_fields[i], iM_fields[i])
+            M = interp_op(tuple(self.mri_data.tshape), M_fields[i])
             Ms.append(M)
+            
+        mps_list = [self.mps for r in range(self.resp_frames)]
+        mps = np.stack(mps_list, axis=0)
         
         recon_image = []
         for e in range(self.card_frames*self.mri_data.Num_Encodings):
@@ -367,15 +365,15 @@ class iMoCoRecon:
             kdata = np.stack(kdata_list, axis=0)
             dcf = np.stack(dcf_list, axis=0)
             coords = np.stack(coords_list, axis=0)
-
-            A = iMoCo_operator(kdata, self.mps, coords, dcf, Ms, tuple(self.mri_data.tshape), self.coil_batch_size)
+            
+            A = iMoCo_operator(kdata, mps, coords, dcf, Ms, tuple(self.mri_data.tshape), self.coil_batch_size)
             G = sp.linop.FiniteDifference(A.ishape)
             proxg = sp.prox.L1Reg(G.oshape, self.lamda)
             
             y = array_to_gpu(kdata * dcf[:,np.newaxis,...]**0.5, sp.Device(self.device))
             
-            # recon = sp.app.LinearLeastSquares(A, y, max_iter=self.max_iter, lamda=self.lamda, solver="ConjugateGradient")
-            recon = sp.app.LinearLeastSquares(A, y, proxg=proxg, G=G, g=g, max_iter=self.max_iter, lamda=self.lamda, solver="ADMM", save_objective_values=True)
+            recon = sp.app.LinearLeastSquares(A, y, max_iter=self.max_iter, lamda=self.lamda, solver="ConjugateGradient")
+            # recon = sp.app.LinearLeastSquares(A, y, proxg=proxg, G=G, g=g, max_iter=self.max_iter, lamda=self.lamda, solver="ADMM", save_objective_values=True)
             
             X = recon.run()
             recon_image.append(sp.to_device(X, sp.cpu_device))
@@ -389,7 +387,7 @@ class iMoCoRecon:
         # XD-GRASP recon
         if not self.debug:
             if self.resp_frames > 1:
-                motion_images, resp_kdata = self.xd_grasp_recon()
+                motion_images, resp_kdata = self.motion_recon()
             else:
                 motion_images = [np.zeros(tuple(self.mri_data.tshape))]
                 resp_kdata = [resp_gate(self.mri_data, resp_lower=0, resp_upper=0.5,
@@ -416,7 +414,7 @@ class iMoCoRecon:
                         iM_field = np.zeros(tuple(self.mri_data.tshape)+(3,))
                     else:
                         self.logger.info(f'Registering phase {r} to phase 0')
-                        M_field, iM_field = self.register(motion_images[0], motion_images[r])
+                        M_field, iM_field = self.register(motion_images[0], motion_images[r], r)
                     M_fields.append(M_field)
                     iM_fields.append(iM_field)
             
@@ -428,11 +426,15 @@ class iMoCoRecon:
             else:
                 M_fields = [np.zeros(tuple(self.mri_data.tshape)+(3,))]
                 iM_fields = [np.zeros(tuple(self.mri_data.tshape)+(3,))]
+                
+            # remove to save memory
+            del motion_images
         else:
-            motion_images = []
+            resp_kdata = self.resp_gate_all()
+            # motion_images = []
             with h5py.File(out_name, 'r') as hf:
-                for r in range(self.resp_frames):
-                    motion_images.append(hf[f"MAG_RESP{r}"][:])
+                # for r in range(self.resp_frames):
+                #     motion_images.append(hf[f"MAG_RESP{r}"][:])
                 M_fields = hf[f"M_fields"][:]
                 iM_fields = hf[f"iM_fields"][:]
             M_fields = [M_fields[...,i] for i in range(M_fields.shape[-1])]
@@ -443,15 +445,9 @@ class iMoCoRecon:
             M_fields = [self.M_scale(M, tuple(self.mri_data.tshape)) for M in M_fields]
             iM_fields = [self.M_scale(M, tuple(self.mri_data.tshape)) for M in iM_fields]
         
-        # remove to save memory
-        del motion_images
-        
-        # gated_data = []
+        gated_data = []
         if self.card_frames > 1:
             gated_data = self.cardiac_gate_all(resp_kdata)
-            # for r in range(self.resp_frames):
-            #     card_data = gate_kspace(mri_raw=resp_kdata[r], num_frames=self.card_frames, gate_type=self.gate_type)
-            #     gated_data.append(card_data)
         else:
             gated_data = resp_kdata
 
@@ -471,45 +467,63 @@ def iMoCo_operator(
 ):
     
     if ishape is None:
-        ishape = mps.shape[1:]
+        ishape = mps.shape[2:]
     resp_frames = kdata.shape[0]
 
     # batch coils
-    num_coils = len(mps)
+    num_coils = mps.shape[1]
     if coil_batch_size is None:
         coil_batch_size = num_coils
-
-    if coil_batch_size < len(mps):
-        num_coil_batches = (num_coils + coil_batch_size - 1) // coil_batch_size
-        A = sp.linop.Vstack(
-            [
-                iMoCo_operator(
-                    kdata[c * coil_batch_size : ((c + 1) * coil_batch_size), ...],
-                    mps[c * coil_batch_size : ((c + 1) * coil_batch_size), ...],
-                    coord,
-                    weights,
-                    motion_fields,
-                    ishape
-                )
-                for c in range(num_coil_batches)
-            ],
-            axis=0,
-        )
         
+    
     # construct iMoCo operator
     # A = W F S M (stacked along repiratory dimension)
     # density compensation x Fourier transform x Sense operator x motion registration
-            
-    A = []
-    I = []
-    S = sp.linop.Multiply(ishape, mps)
-    for r in range(resp_frames):
-        I.append(sp.linop.Identity(ishape)) # identity operator for stacking 
-        W = sp.linop.Multiply(kdata[r].shape, weights[r,np.newaxis,...]**0.5) 
-        F = NFTs((num_coils,)+ishape, coord[r,...])
-        WFSM = W*F*S*motion_fields[r]
-        A.append(WFSM)
-    A = Diags(A, oshape=kdata.shape, ishape=(resp_frames,)+ishape) * Vstacks(I, oshape=(resp_frames,)+ishape)
+    if coil_batch_size < num_coils:
+        num_coil_batches = (num_coils + coil_batch_size - 1) // coil_batch_size
+        
+        A = []
+        I = []
+        for r in range(resp_frames):
+            As = []
+            for c in range(num_coil_batches):
+                W = sp.linop.Multiply(kdata[r,  c*coil_batch_size:((c+1)*coil_batch_size)].shape, weights[r]**0.5)
+                F = sp.linop.NUFFT((coil_batch_size,)+ishape, coord[r])
+                S = sp.linop.Multiply(ishape, mps[r,  c*coil_batch_size:((c+1)*coil_batch_size)])
+                M = motion_fields[r]
+                Ab = W * F * S * M
+                As.append(Ab)
+            Ar = sp.linop.Vstack(As, axis=0)
+            A.append(Ar)
+            I.append(sp.linop.Identity(ishape)) # identity operator for stacking 
+
+        A = Diags(A, oshape=kdata.shape, ishape=(resp_frames,)+ishape) * Vstacks(I, oshape=(resp_frames,)+ishape)
+    else:
+
+    # A = []
+    # I = []
+    # S = sp.linop.Multiply(ishape, mps)
+    # for r in range(resp_frames):
+    #     I.append(sp.linop.Identity(ishape)) # identity operator for stacking 
+    #     W = sp.linop.Multiply(kdata[r].shape, weights[r,np.newaxis,...]**0.5) 
+    #     F = NFTs((num_coils,)+ishape, coord[r,...])
+    #     WFSM = W*F*S*motion_fields[r]
+    #     A.append(WFSM)
+    # A = Diags(A, oshape=kdata.shape, ishape=(resp_frames,)+ishape) * Vstacks(I, oshape=(resp_frames,)+ishape)
+    
+        As = []
+        I = []
+        for r in range(resp_frames):
+            I.append(sp.linop.Identity(ishape)) # identity operator for stacking 
+            W = sp.linop.Multiply(kdata[r].shape, weights[r]**0.5)
+            F = sp.linop.NUFFT((num_coils,)+ishape, coord[r])
+            S = sp.linop.Multiply(ishape, mps[r])
+            M = motion_fields[r]
+            A = W * F * S * M
+            As.append(A)
+        A = Diags(As, oshape=kdata.shape, ishape=(resp_frames,)+ishape) * Vstacks(I, oshape=(resp_frames,)+ishape)
+    
+    # print(f"A.ishape = {A.ishape} A.oshape = {A.oshape}")
             
     return A
     
