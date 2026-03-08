@@ -361,8 +361,9 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', img_shape=None, d
     # Set to GPU
     if device is None:
         device = sp.Device(0)
+    else:
+        device = sp.Device(device)
 
-    op_device = sp.Device(device)
     store_device = sp.cpu_device
     xp = sp.Device(args.device).xp
 
@@ -491,10 +492,10 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', img_shape=None, d
 
                     for c in range(mri_rawdata.Num_Coils):
                         logger.info(f'Reconstructing encode, coil {e} , {c} ')
-                        ksp = array_to_gpu(mri_rawdata.kdata[e][c, ...], op_device)
-                        ksp *= sp.to_device(np.conj(sms_blips[:, s]), op_device)
+                        ksp = array_to_gpu(mri_rawdata.kdata[e][c, ...], device)
+                        ksp *= sp.to_device(np.conj(sms_blips[:, s]), device)
                         ksp *= lpf
-                        coords_temp = array_to_gpu(mri_rawdata.coords[e], op_device)
+                        coords_temp = array_to_gpu(mri_rawdata.coords[e], device)
                         image_temp = sp.nufft_adjoint(ksp, coords_temp, img_shape)
                         image[c, ..., s] += sp.to_device(image_temp, store_device)
 
@@ -511,9 +512,9 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', img_shape=None, d
 
                 for c in range(mri_rawdata.Num_Coils):
                     logger.info(f'Reconstructing encode, coil {e} , {c} ')
-                    ksp = array_to_gpu(mri_rawdata.kdata[e][c, ...], op_device)
+                    ksp = array_to_gpu(mri_rawdata.kdata[e][c, ...], device)
                     ksp *= lpf
-                    coords_temp = array_to_gpu(mri_rawdata.coords[e], op_device)
+                    coords_temp = array_to_gpu(mri_rawdata.coords[e], device)
                     image_temp = sp.nufft_adjoint(ksp, coords_temp, img_shape)
                     image[c] += sp.to_device(image_temp, store_device)
 
@@ -660,9 +661,7 @@ def crop_kspace(mri_rawdata=None, crop_factor=2, crop_type='radius'):
     logger = logging.getLogger('Recon images')
 
     # Get initial shape
-    if mri_rawdata.tshape is not None:
-        img_shape = mri_rawdata.tshape
-    elif isinstance(mri_rawdata.coords, list):
+    if isinstance(mri_rawdata.coords, list):
         img_shape = sp.estimate_shape(mri_rawdata.coords[0])
     else:
         img_shape = sp.estimate_shape(mri_rawdata.coords)
@@ -675,12 +674,10 @@ def crop_kspace(mri_rawdata=None, crop_factor=2, crop_type='radius'):
 
         # Find values where kspace is within bounds (square crop)
         if crop_type == 'radius':
-            
-            # radius = np.sum(np.array(mri_rawdata.coords[e]) ** 2, -1)
-            radius = np.sqrt(np.sum(mri_rawdata.coords[e]**2, axis=-1))
 
-            # idx = np.argwhere(np.logical_and.reduce([radius < (img_shape_new[0] / 2) ** 2]))
-            idx = np.argwhere(radius < np.max(radius)/crop_factor)
+            radius = np.sum(np.array(mri_rawdata.coords[e]) ** 2, -1)
+
+            idx = np.argwhere(np.logical_and.reduce([radius < (img_shape_new[0] / 2) ** 2]))
         else:
             idx = np.argwhere(np.logical_and.reduce([np.abs(mri_rawdata.coords[e][..., 0]) < img_shape_new[0] / 2,
                                                      np.abs(mri_rawdata.coords[e][..., 1]) < img_shape_new[1] / 2,
@@ -697,7 +694,7 @@ def crop_kspace(mri_rawdata=None, crop_factor=2, crop_type='radius'):
         mri_rawdata.sms_blips[e] = mri_rawdata.sms_blips[e][idx[:, 0]]
 
         logger.info(f'New shape = {sp.estimate_shape(mri_rawdata.coords[e])}')
-    mri_rawdata.tshape = img_shape_new
+
 
 def get_gate_bins(gate_signal, gate_type, num_frames, discrete_gates=False, prep_disdaqs=0):
     logger = logging.getLogger('Get Gate bins')
@@ -796,7 +793,7 @@ def gate_kspace2d(mri_raw=None, num_frames=[10, 10], gate_type=['time', 'prep'],
     #        gate_signal[e] = np.reshape(ecg_shifted[idx_inverse], time[e].shape)
 
 
-    print(f'Gating off of {gate_type}')
+    logger.info(f'Gating off of {gate_type}')
 
     t_min0, t_max0, delta_time0 = get_gate_bins(gate_signal0, gate_type[0], num_frames[0], discrete_gates[0])
     t_min1, t_max1, delta_time1 = get_gate_bins(gate_signal1, gate_type[1], num_frames[1], discrete_gates[1])
@@ -894,19 +891,19 @@ def gate_kspace(mri_raw=None, num_frames=10, gate_type='time', discrete_gates=Fa
 
            # Estimate the delay
            if e == 0:
-               print(f'Time max {time_encode.max()}')
-               print(f'Time size {time_encode.size}')
-               print(f'Time ecg delay {ecg_delay}')
+               logger.info(f'Time max {time_encode.max()}')
+               logger.info(f'Time size {time_encode.size}')
+               logger.info(f'Time ecg delay {ecg_delay}')
                
                ecg_shift = int(ecg_delay / time_encode.max() * time_encode.size)
-               print(f'Shifting by {ecg_shift}')
+               logger.info(f'Shifting by {ecg_shift}')
 
            #Using circular shift for now. This should be fixed
            ecg_sorted = ecg_encode[idx]
            ecg_shifted = np.roll( ecg_sorted, -ecg_shift)
            gate_signal[e] = np.reshape(ecg_shifted[idx_inverse], time[e].shape)
 
-    print(f'Gating off of {gate_type}')
+    logger.info(f'Gating off of {gate_type}')
 
     t_min, t_max, delta_time = get_gate_bins(gate_signal, gate_type, num_frames, discrete_gates)
 
@@ -1032,7 +1029,6 @@ def bounded_medfilt(signal, window):
 
   return filtered 
 
-
 def sliding_percentile(signal, window, lower, upper):
     
     thresh1 = ndimage.percentile_filter(signal,
@@ -1047,8 +1043,7 @@ def sliding_percentile(signal, window, lower, upper):
 
     return (signal >= thresh1) & (signal < thresh2)
 
-
-def resp_gate(mri_raw=None, resp_lower=0.0, resp_upper=0.5, resp_filter_window=10, time_ranges=None, debug_folder=None):
+def resp_gate(mri_raw=None, resp_lower=0.0, resp_upper=0.5, resp_filter_window=10, time_ranges=None, debug_folder=None, debug_name=''):
     logger = logging.getLogger('Resp Gate k-space')
 
     # Get the MRI Raw structure setup
@@ -1086,39 +1081,39 @@ def resp_gate(mri_raw=None, resp_lower=0.0, resp_upper=0.5, resp_filter_window=1
                 time_mask |= np.logical_and(time_sort > time_range[0], time_sort < time_range[1])
             idx &= time_mask
         
-        if debug_folder is None:
-            np.savetxt('TimeWeight.txt', idx)
-            np.savetxt('TimeResp.txt', resp_sort)
-            np.savetxt('Time.txt', time)
-        else:
-            np.savetxt(os.path.join(debug_folder, 'TimeWeight.txt'), idx)
-            np.savetxt(os.path.join(debug_folder, 'TimeResp.txt'), resp_sort)
-            np.savetxt(os.path.join(debug_folder, 'Time.txt'), time)
-        
         # undo sorting for indexing  
-        idx[inv_tidx] = idx
+        new_idx = idx[inv_tidx]
         
-        current_points = np.sum(idx)
+        if debug_folder is None:
+            np.savetxt(f'TimeWeight{debug_name}.txt', new_idx)
+            np.savetxt(f'TimeResp{debug_name}.txt', resp)
+            np.savetxt(f'Time{debug_name}.txt', time)
+        else:
+            np.savetxt(os.path.join(debug_folder, f'TimeWeight{debug_name}.txt'), new_idx)
+            np.savetxt(os.path.join(debug_folder, f'TimeResp{debug_name}.txt'), resp)
+            np.savetxt(os.path.join(debug_folder, f'Time{debug_name}.txt'), time)
+        
+        current_points = np.sum(new_idx)
         
         # Gate the data
         points_per_bin.append(current_points)
     
         logger.info(f'Encode {e}, Points = {current_points}')
 
-        new_kdata = mri_raw.kdata[e][:, idx]
+        new_kdata = mri_raw.kdata[e][:, new_idx]
         mri_rawG.kdata.append(new_kdata)
 
-        new_coords = mri_raw.coords[e][idx, :]
+        new_coords = mri_raw.coords[e][new_idx, :]
         mri_rawG.coords.append(new_coords)
         
-        new_sms_blips = mri_raw.sms_blips[e][idx, :]
+        new_sms_blips = mri_raw.sms_blips[e][new_idx, :]
         mri_rawG.sms_blips.append(new_sms_blips)
 
-        mri_rawG.dcf.append(mri_raw.dcf[e][idx])
-        mri_rawG.time.append(mri_raw.time[e][idx])
-        mri_rawG.resp.append(mri_raw.resp[e][idx])
-        mri_rawG.prep.append(mri_raw.prep[e][idx])
-        mri_rawG.ecg.append(mri_raw.ecg[e][idx])
+        mri_rawG.dcf.append(mri_raw.dcf[e][new_idx])
+        mri_rawG.time.append(mri_raw.time[e][new_idx])
+        mri_rawG.resp.append(mri_raw.resp[e][new_idx])
+        mri_rawG.prep.append(mri_raw.prep[e][new_idx])
+        mri_rawG.ecg.append(mri_raw.ecg[e][new_idx])
 
         count += 1
 
@@ -1322,25 +1317,25 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_co
             if resp_readout.size != dcf.size:
 
                 # This assigns the same time to each point in the readout
-                time_readout = np.expand_dims(time_readout, -1)
-                ecg_readout = np.expand_dims(ecg_readout, -1)
-                resp_readout = np.expand_dims(resp_readout, -1)
-                prep_readout = np.expand_dims(prep_readout, -1)
+                # time_readout = np.expand_dims(time_readout, -1)
+                # ecg_readout = np.expand_dims(ecg_readout, -1)
+                # resp_readout = np.expand_dims(resp_readout, -1)
+                # prep_readout = np.expand_dims(prep_readout, -1)
 
-                time = np.tile(time_readout, (1, 1, dcf.shape[2]))
-                resp = np.tile(resp_readout, (1, 1, dcf.shape[2]))
-                ecg = np.tile(ecg_readout, (1, 1, dcf.shape[2]))
-                prep = np.tile(prep_readout, (1, 1, dcf.shape[2]))
+                # time = np.tile(time_readout, (1, 1, dcf.shape[2]))
+                # resp = np.tile(resp_readout, (1, 1, dcf.shape[2]))
+                # ecg = np.tile(ecg_readout, (1, 1, dcf.shape[2]))
+                # prep = np.tile(prep_readout, (1, 1, dcf.shape[2]))
                 
-                # time = time_readout[..., None]
-                # ecg  = ecg_readout[..., None]
-                # resp = resp_readout[..., None]
-                # prep = prep_readout[..., None]
+                time = time_readout[..., None]
+                ecg  = ecg_readout[..., None]
+                resp = resp_readout[..., None]
+                prep = prep_readout[..., None]
 
-                # time = np.broadcast_to(time, dcf.shape)
-                # ecg  = np.broadcast_to(ecg,  dcf.shape)
-                # resp = np.broadcast_to(resp, dcf.shape)
-                # prep = np.broadcast_to(prep, dcf.shape)
+                time = np.broadcast_to(time, dcf.shape)
+                ecg  = np.broadcast_to(ecg,  dcf.shape)
+                resp = np.broadcast_to(resp, dcf.shape)
+                prep = np.broadcast_to(prep, dcf.shape)
 
                 logging.info(f'Min/max time (s) = {np.min(time)} {np.max(time)}')
             else:
@@ -1837,6 +1832,7 @@ def autofov(mri_raw=None, device=None,
     new_img_shape = sp.estimate_shape(mri_raw.coords[0])
     print(sp.estimate_shape(mri_raw.coords[0]))
 
+    mri_raw.tshape = new_img_shape
 
     #mri_raw.time[0] = np.arange(len(mri_raw.time[0]))
     # print(sp.estimate_shape(mri_raw.coords[1]))
