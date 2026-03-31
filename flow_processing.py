@@ -197,6 +197,7 @@ class MRI_4DFlow:
         self.signal = mag*np.exp(1j * phase )
 
     def solve_for_velocity(self):
+        # signal shape (Nt, Nz, Ny, Nx, Nenc)
 
         # Multiply by reference
         ref = self.signal[...,0]

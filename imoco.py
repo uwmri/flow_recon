@@ -10,6 +10,7 @@ from cupyx.scipy import ndimage as cndimage
 from cupyx.scipy import interpolate as cinterpolate
 
 from mri_raw import *
+from flow_processing import *
 
 __all__ = ['iMoCoRecon']
 
@@ -17,12 +18,12 @@ class iMoCoRecon:
     '''
     Zhu X, Chan M, Lustig M, Johnson KM, Larson PEZ. Iterative motion-compensation reconstruction 
     ultra-short TE (iMoCo UTE) for high-resolution free-breathing pulmonary MRI. Magn Reson Med. 
-    2020; 83: 1208–1221. https://doi.org/10.1002/mrm.27998
+    2020; 83: 1208-1221. https://doi.org/10.1002/mrm.27998
     
     https://github.com/PulmonaryMRI/imoco_recon
     
     '''
-    def __init__ (self, mri_data, mps, gate_type='ecg', card_frames=1, resp_frames=1, time_ranges=None, lamda=0,
+    def __init__ (self, mri_data, mps, gate_type='ecg', card_frames=1, resp_frames=1, time_ranges=None, lamda=0, venc=1500,
                  device=None, res_scale=2, coil_batch_size=None, max_iter=50, show_pbar=True,
                  comm=None, resp_filter_window=5, out_folder=None, debug=False, **kwargs):
         
@@ -33,6 +34,7 @@ class iMoCoRecon:
         self.card_frames = card_frames
         self.resp_frames = resp_frames
         self.time_ranges = time_ranges
+        self.venc = venc
         self.lamda = lamda
         self.device = device
         self.res_scale = res_scale
@@ -47,14 +49,23 @@ class iMoCoRecon:
                 
         
     def register(self, fixed, moving, r):
-        fixed = ants.from_numpy(fixed)
-        moving = ants.from_numpy(moving)
+        # ants will add transforms to same output files if run repeatedly messing up future recons so delete each run
+        try:
+            os.remove(f"{self.out_folder}/resp{r}_1Warp.nii.gz")
+            os.remove(f"{self.out_folder}/resp{r}_1InverseWarp.nii.gz")
+            os.remove(f"{self.out_folder}/resp{r}_0GenericAffine.mat")
+        except OSError:
+            pass
         
-        reg = ants.registration(fixed, moving, type_of_transform='SyNAggro', initial_transform="identity",\
-                                syn_metric='demons', syn_sampling=4, \
-                                grad_step=0.1, flow_sigma=5, total_sigma=3,\
+        # returns a dictionary containing filepaths to the transforms, not the transforms themselves
+        reg = ants.registration(ants.from_numpy(fixed), ants.from_numpy(moving), 
+                                type_of_transform='SyNAggro', initial_transform="identity", \
+                                syn_metric='demons', syn_sampling=6, \
+                                grad_step=0.3, flow_sigma=3, total_sigma=1, \
                                 reg_iterations=(200,200,150,50,10), \
-                                verbose=False, outprefix=f"{self.out_folder}/{r}", \
+                                aff_iterations=(2100,1200,1200,10,5), \
+                                aff_shrink_factors=(12,8,4,2,1), aff_smoothing_sigmas=(5,4,2,1,0), \
+                                verbose=False, outprefix=f"{self.out_folder}/resp{r}_", \
                                 w='[0.1,1]', write_composite_transform=False)
         
         M = nibabel.load(reg['fwdtransforms'][0])
@@ -168,7 +179,7 @@ class iMoCoRecon:
         
         return resp_kdata
     
-    def cardiac_gate_all(self, resp_data, discrete_gates=False, ecg_delay=0):
+    def cardiac_gate_all(self, resp_data, ecg_delay=0):
         logger = logging.getLogger('Gate k-space')
         
         gated_data = []
@@ -212,7 +223,14 @@ class iMoCoRecon:
 
         logger.info(f'Gating off of {self.gate_type}')
 
-        t_min, t_max, delta_time = get_gate_bins(gate_signal, self.gate_type, self.card_frames, discrete_gates)
+        # t_min, t_max, delta_time = get_gate_bins(gate_signal, self.gate_type, self.card_frames, discrete_gates)
+        t_min = np.min([np.min(gate) for gate in gate_signal])
+        t_max = np.max([np.max(gate) for gate in gate_signal])
+        median_rr = np.mean([np.median(gate) for gate in gate_signal])
+        all_points = np.concatenate([gate.flatten() for gate in gate_signal])
+        median_rr = 2.0 * (median_rr - t_min) + t_min
+        bin_edges = np.quantile(all_points, np.linspace(0, 1, self.card_frames + 1))
+        logger.info(f'Bin edges = {bin_edges}')
 
         points_per_bin = []
         count = 0
@@ -221,13 +239,18 @@ class iMoCoRecon:
             mri_rawG = resp_data[r].copy_data(full=False)
             for t in range(self.card_frames):
                 for e in range(mri_raw.Num_Encodings):
-                    t_start = t_min + delta_time * t
-                    t_stop = t_start + delta_time
+                    # t_start = t_min + delta_time * t
+                    # t_stop = t_start + delta_time
 
-                    # Find index where value is held
-                    idx = np.logical_and.reduce([
-                        np.abs(gate_signal[e]) >= t_start,
-                        np.abs(gate_signal[e]) < t_stop])
+                    # # Find index where value is held
+                    # idx = np.logical_and.reduce([
+                    #     np.abs(gate_signal[e]) >= t_start,
+                    #     np.abs(gate_signal[e]) < t_stop])
+                    
+                    t_start = bin_edges[t]
+                    t_stop = bin_edges[t + 1]
+                    idx = np.logical_and(gate_signal[e] >= t_start, gate_signal[e] < t_stop)
+                    
                     current_points = np.sum(idx)
 
                     # Gate the data
@@ -283,6 +306,15 @@ class iMoCoRecon:
         
         mps = array_to_gpu(self.mps, sp.Device(self.device))
         
+        if self.mri_data.Num_Encodings == 5:
+            encoding = "5pt"
+        elif self.mri_data.Num_Encodings == 4:
+            encoding = "4pt-referenced"
+        elif self.mri_data.Num_Encodings == 3:
+            encoding = "3pt"
+        elif self.mri_data.Num_Encodings == 2:
+            encoding = "2pt"
+        
         resp_imgs = []
         for r in range(self.resp_frames):
             resp_phase = resp_kdata[r]
@@ -318,10 +350,10 @@ class iMoCoRecon:
                 https://github.com/mikgroup/sigpy/issues/49
                 '''
                 
-                recon = sp.mri.app.SenseRecon(kdata, mps, lamda=self.lamda, weights=dcf, coord=coord, max_iter=self.max_iter, 
-                            coil_batch_size=self.coil_batch_size, device=sp.Device(self.device), solver="ConjugateGradient")
-                # recon = sp.mri.app.L1WaveletRecon(kdata, mps, lamda=self.lamda*100, weights=dcf, coord=coord, max_iter=self.max_iter, 
-                #             coil_batch_size=self.coil_batch_size, device=sp.Device(self.device))
+                # recon = sp.mri.app.SenseRecon(kdata, mps, lamda=self.lamda, weights=dcf, coord=coord, max_iter=self.max_iter, 
+                #             coil_batch_size=self.coil_batch_size, device=sp.Device(self.device), solver="ConjugateGradient")
+                recon = sp.mri.app.L1WaveletRecon(kdata, mps, lamda=self.lamda*10, weights=dcf, coord=coord, max_iter=self.max_iter/2, 
+                            coil_batch_size=self.coil_batch_size, device=sp.Device(self.device))
                 # recon = sp.mri.app.TotalVariationRecon(kdata, mps, lamda=self.lamda*10, weights=dcf, coord=coord, max_iter=1,
                 #             coil_batch_size=self.coil_batch_size, device=sp.Device(self.device), solver="ADMM", save_objective_values=True)
                 
@@ -331,48 +363,87 @@ class iMoCoRecon:
                 # del kdata, coords, dcf, recon
                 # cp.get_default_memory_pool().free_all_blocks()
                 
-                
-            img = np.stack(resp_img, axis=-1)
-            mag = np.sqrt(np.sum(np.abs(img)**2, axis=-1))
-            resp_imgs.append(mag)
+            self.logger.info("Solving for velocity")
+            resp_img = np.stack(resp_img, axis=-1)
+            mri_flow = MRI_4DFlow(encoding, signal=resp_img, venc=self.venc)
+            mri_flow.solve_for_velocity()
+            mri_flow.update_angiogram()
+            resp_imgs.append(mri_flow)
             
         return resp_imgs, resp_kdata
         
     def full_recon(self, gated_data, M_fields, iM_fields):
-        def g(x):
-            xp = sp.Device(self.device).xp
-            with sp.Device(self.device):
-                return self.lamda * xp.sum(xp.abs(x)).item()
+        # def g(x):
+        #     xp = sp.Device(self.device).xp
+        #     with sp.Device(self.device):
+        #         return self.lamda * xp.sum(xp.abs(x)).item()
+        def g(input):
+            device = sp.get_device(input)
+            xp = device.xp
+            with device:
+                return self.lamda * xp.sum(xp.abs(W(input))).item()
 
+        tshape = tuple(self.mri_data.tshape)
+        
+        dkernel = np.array([0,1,0])
+        if M_fields[0].shape[-1] == 3:
+            dkernel = dkernel[:,None,None]*dkernel[None,:,None]*dkernel[None,None,:]
+            Nx,Ny,Nz = tshape
+            my,mx,mz = np.meshgrid(np.arange(Ny),np.arange(Nx),np.arange(Nz))
+            m = np.stack((mx,my,mz), axis=-1)
+        else:
+            dkernel = dkernel[:,None]*dkernel[None,:]
+            Nx,Ny = tshape
+            my,mx = np.meshgrid(np.arange(Ny),np.arange(Nx))
+            m = np.stack((mx,my), axis=-1)
+        
         # motion operator
         Ms = []
         for i in range(self.resp_frames):
-            M = interp_op(tuple(self.mri_data.tshape), M_fields[i], iM_fields[i])
-            M = interp_op(tuple(self.mri_data.tshape), M_fields[i])
+            M = interp_op(tshape, m, dkernel, iM_fields[i], M_fields[i])
+            # M = interp_op(tshape, m, dkernel, M_fields[i])
             Ms.append(M)
             
-        mps_list = [self.mps for r in range(self.resp_frames)]
-        mps = np.stack(mps_list, axis=0)
+        # mps_list = [self.mps for r in range(self.resp_frames)]
+        # mps = np.stack(mps_list, axis=0)
+        # mps = np.tile(self.mps, (self.resp_frames, self.card_frames))
+        mps = array_to_gpu(self.mps, sp.Device(self.device))
         
         recon_image = []
         for e in range(self.card_frames*self.mri_data.Num_Encodings):
-            self.logger.info(f'Recon Frame {e}')
+        # for e in range(self.mri_data.Num_Encodings):
+            self.logger.info(f'Recon Frame {e+1}')
             
             kdata_list = [gated_data[r].kdata[e] for r in range(self.resp_frames)]
             dcf_list = [gated_data[r].dcf[e] for r in range(self.resp_frames)]
             coords_list = [gated_data[r].coords[e] for r in range(self.resp_frames)]
-
+            
             kdata = np.stack(kdata_list, axis=0)
             dcf = np.stack(dcf_list, axis=0)
             coords = np.stack(coords_list, axis=0)
             
-            A = iMoCo_operator(kdata, mps, coords, dcf, Ms, tuple(self.mri_data.tshape), self.coil_batch_size)
-            G = sp.linop.FiniteDifference(A.ishape)
-            proxg = sp.prox.L1Reg(G.oshape, self.lamda)
+            # stack data so shape is (resp, card, coils, projs)
+            # kdata = np.array([gated_data[r].kdata[e*self.card_frames:(e+1)*self.card_frames] for r in range(self.resp_frames)])
+            # dcf = np.array([gated_data[r].dcf[e*self.card_frames:(e+1)*self.card_frames] for r in range(self.resp_frames)])
+            # coords = np.array([gated_data[r].coords[e*self.card_frames:(e+1)*self.card_frames] for r in range(self.resp_frames)])
+            
+            A = iMoCo_operator(kdata, mps, coords, dcf, Ms, tshape, self.coil_batch_size)
+            # G = sp.linop.FiniteDifference(A.ishape)
+            # proxg = sp.prox.L1Reg(G.oshape, self.lamda)
+            W = sp.linop.Wavelet(tshape, wave_name="db4")
+            proxg = sp.prox.UnitaryTransform(sp.prox.L1Reg(W.oshape, self.lamda), W)
+            
+            # G_s = sp.linop.FiniteDifference(tshape)                     # spatial
+            # G_t = sp.linop.FiniteDifference((self.card_frames,)+tshape, append_axes=(0,))  # temporal
+            # G = sp.linop.Vstack([G_s, G_t])
+            # proxg = sp.prox.Stack([sp.prox.L1Reg(G_s.oshape, self.lamda),
+            #                     sp.prox.L1Reg(G_t.oshape, self.lamda*100)])
             
             y = array_to_gpu(kdata * dcf[:,np.newaxis,...]**0.5, sp.Device(self.device))
             
-            recon = sp.app.LinearLeastSquares(A, y, max_iter=self.max_iter, lamda=self.lamda, solver="ConjugateGradient")
+            recon = sp.app.LinearLeastSquares(A, y, proxg=proxg, g=g, max_iter=self.max_iter, lamda=self.lamda)
+            
+            # recon = sp.app.LinearLeastSquares(A, y, max_iter=self.max_iter, lamda=self.lamda, solver="ConjugateGradient")
             # recon = sp.app.LinearLeastSquares(A, y, proxg=proxg, G=G, g=g, max_iter=self.max_iter, lamda=self.lamda, solver="ADMM", save_objective_values=True)
             
             X = recon.run()
@@ -384,62 +455,89 @@ class iMoCoRecon:
     def run(self):
         out_name = os.path.join(self.out_folder, 'debug_imoco.h5')
         
-        # XD-GRASP recon
-        if not self.debug:
-            if self.resp_frames > 1:
-                motion_images, resp_kdata = self.motion_recon()
-            else:
-                motion_images = [np.zeros(tuple(self.mri_data.tshape))]
-                resp_kdata = [resp_gate(self.mri_data, resp_lower=0, resp_upper=0.5,
-                                    resp_filter_window=self.resp_filter_window, debug_folder=None)]
+        if self.debug:
+            resp_kdata = self.resp_gate_all()
+            motion_images = []
+            # with h5py.File(out_name, 'r') as hf:
+                # for r in range(self.resp_frames):
+                #     encodes = []
+                #     encodes.append(hf[f"MAG_RESP{r}"][:])
+                #     encodes.append(hf[f"CD_RESP{r}"][:])
+                #     motion_images.append(encodes)
+                # M_fields = hf[f"M_fields"][:]
+                # iM_fields = hf[f"iM_fields"][:]
+            M_fields = []
+            iM_fields = []
+            for r in range(self.resp_frames):
+                if r == self.resp_frames - 1:
+                    mfield = np.zeros(tuple(self.mri_data.tshape)+(3,))
+                    imfield = np.zeros(tuple(self.mri_data.tshape)+(3,))
+                    M_fields.append(mfield)
+                    iM_fields.append(imfield)
+                else:
+                    mfield = nibabel.load(f"{self.out_folder}/resp{r}_1Warp.nii.gz")
+                    imfield = nibabel.load(f"{self.out_folder}/resp{r}_1InverseWarp.nii.gz")
+                    M_fields.append(np.squeeze(mfield.get_fdata()))
+                    iM_fields.append(np.squeeze(imfield.get_fdata()))
+            # M_fields = [M_fields[...,i] for i in range(M_fields.shape[-1])]
+            # iM_fields = [iM_fields[...,i] for i in range(iM_fields.shape[-1])]
             
+            # self.logger.info('Performing image registration')
+            # M_fields = []
+            # iM_fields = []
+            # for r in range(self.resp_frames):
+            #     if r == 0: # frame 0 should be end expiration, register all other frames to it
+            #         M_field = np.zeros(tuple(self.mri_data.tshape)+(3,))
+            #         iM_field = np.zeros(tuple(self.mri_data.tshape)+(3,))
+            #     else:
+            #         self.logger.info(f'Registering phase {r} to phase 0')
+            #         M_field, iM_field = self.register(motion_images[0][0], motion_images[r][0], r)
+            #         # M_field, iM_field = self.register(motion_images[0].angiogram, motion_images[r].angiogram, r)
+            #     M_fields.append(M_field)
+            #     iM_fields.append(iM_field)
+        
+            # # remove to save memory
+            # del motion_images
+        else:
             try:
                 os.remove(out_name)
             except OSError:
                 pass
-            
             if self.resp_frames > 1:
+                motion_images, resp_kdata = self.motion_recon()
+
                 # save motion images
-                self.logger.info(f'Saving Images to {out_name}')
+                self.logger.info(f'Saving respiratory resolved images to {out_name}')
                 with h5py.File(out_name, 'w') as hf:
                     for r in range(self.resp_frames):
-                        hf.create_dataset(f"MAG_RESP{r}", data=motion_images[r])
+                        hf.create_dataset(f"MAG_RESP{r}", data=motion_images[r].magnitude)
+                        hf.create_dataset(f"CD_RESP{r}", data=motion_images[r].angiogram)
                 
                 self.logger.info('Performing image registration')
                 M_fields = []
                 iM_fields = []
                 for r in range(self.resp_frames):
-                    if r == 0: # frame 0 should be end expiration, register all other frames to it
+                    if r == self.resp_frames - 1: # last frame should be end expiration, register all other frames to it
                         M_field = np.zeros(tuple(self.mri_data.tshape)+(3,))
                         iM_field = np.zeros(tuple(self.mri_data.tshape)+(3,))
                     else:
-                        self.logger.info(f'Registering phase {r} to phase 0')
-                        M_field, iM_field = self.register(motion_images[0], motion_images[r], r)
+                        self.logger.info(f'Registering phase {r} to phase {self.resp_frames - 1}')
+                        M_field, iM_field = self.register(motion_images[-1].angiogram, motion_images[r].angiogram, r)
+                        # M_field, iM_field = self.register(motion_images[0].angiogram, motion_images[r].angiogram, r)
                     M_fields.append(M_field)
                     iM_fields.append(iM_field)
             
                 # save motion transforms
-                self.logger.info(f'Saving motion fields to {out_name}')
-                with h5py.File(os.path.join(self.out_folder, 'debug_imoco.h5'), 'a') as hf:
-                    hf.create_dataset(f"M_fields", data=np.stack(M_fields, axis=-1))
-                    hf.create_dataset(f"iM_fields", data=np.stack(iM_fields, axis=-1))
+                self.logger.info(f'Saved motion fields to {self.out_folder}')
+            
+                # remove to save memory
+                del motion_images
             else:
-                M_fields = [np.zeros(tuple(self.mri_data.tshape)+(3,))]
-                iM_fields = [np.zeros(tuple(self.mri_data.tshape)+(3,))]
+                resp_kdata = [resp_gate(self.mri_data, resp_lower=0, resp_upper=0.5, time_ranges=self.time_ranges, resp_filter_window=self.resp_filter_window, debug_folder=None)]
                 
-            # remove to save memory
-            del motion_images
-        else:
-            resp_kdata = self.resp_gate_all()
-            # motion_images = []
-            with h5py.File(out_name, 'r') as hf:
-                # for r in range(self.resp_frames):
-                #     motion_images.append(hf[f"MAG_RESP{r}"][:])
-                M_fields = hf[f"M_fields"][:]
-                iM_fields = hf[f"iM_fields"][:]
-            M_fields = [M_fields[...,i] for i in range(M_fields.shape[-1])]
-            iM_fields = [iM_fields[...,i] for i in range(iM_fields.shape[-1])]
-        
+                M_fields = [np.zeros(tuple(self.mri_data.tshape)+(3,))]
+                iM_fields = [np.zeros(tuple(self.mri_data.tshape)+(3,))]  
+                      
         if self.res_scale > 1:
             self.logger.info('Scaling motion fields to match original dimensions')
             M_fields = [self.M_scale(M, tuple(self.mri_data.tshape)) for M in M_fields]
@@ -467,11 +565,12 @@ def iMoCo_operator(
 ):
     
     if ishape is None:
-        ishape = mps.shape[2:]
+        ishape = mps.shape[1:]
     resp_frames = kdata.shape[0]
+    # card_frames = kdata.shape[1]
 
     # batch coils
-    num_coils = mps.shape[1]
+    num_coils = mps.shape[0]
     if coil_batch_size is None:
         coil_batch_size = num_coils
         
@@ -487,29 +586,25 @@ def iMoCo_operator(
         for r in range(resp_frames):
             As = []
             for c in range(num_coil_batches):
-                W = sp.linop.Multiply(kdata[r,  c*coil_batch_size:((c+1)*coil_batch_size)].shape, weights[r]**0.5)
+                W = sp.linop.Multiply(kdata[r, c*coil_batch_size:((c+1)*coil_batch_size)].shape, weights[r]**0.5)
+                # print(f"W.ishape = {W.ishape} W.oshape = {W.oshape}")
                 F = sp.linop.NUFFT((coil_batch_size,)+ishape, coord[r])
-                S = sp.linop.Multiply(ishape, mps[r,  c*coil_batch_size:((c+1)*coil_batch_size)])
+                # print(f"F.ishape = {F.ishape} F.oshape = {F.oshape}")
+                S = sp.linop.Multiply(ishape, mps[c*coil_batch_size:((c+1)*coil_batch_size)])
+                # print(f"S.ishape = {S.ishape} S.oshape = {S.oshape}")
                 M = motion_fields[r]
+                # print(f"M.ishape = {M.ishape} M.oshape = {M.oshape}")
                 Ab = W * F * S * M
+                # print(f"Ab.ishape = {Ab.ishape} Ab.oshape = {Ab.oshape}")
                 As.append(Ab)
             Ar = sp.linop.Vstack(As, axis=0)
+            # print(f"Ar.ishape = {Ar.ishape} Ar.oshape = {Ar.oshape}")
             A.append(Ar)
             I.append(sp.linop.Identity(ishape)) # identity operator for stacking 
-
+        # A = sp.linop.Diag(A)
         A = Diags(A, oshape=kdata.shape, ishape=(resp_frames,)+ishape) * Vstacks(I, oshape=(resp_frames,)+ishape)
+        # print(f"A.ishape = {A.ishape} A.oshape = {A.oshape}")
     else:
-
-    # A = []
-    # I = []
-    # S = sp.linop.Multiply(ishape, mps)
-    # for r in range(resp_frames):
-    #     I.append(sp.linop.Identity(ishape)) # identity operator for stacking 
-    #     W = sp.linop.Multiply(kdata[r].shape, weights[r,np.newaxis,...]**0.5) 
-    #     F = NFTs((num_coils,)+ishape, coord[r,...])
-    #     WFSM = W*F*S*motion_fields[r]
-    #     A.append(WFSM)
-    # A = Diags(A, oshape=kdata.shape, ishape=(resp_frames,)+ishape) * Vstacks(I, oshape=(resp_frames,)+ishape)
     
         As = []
         I = []
@@ -517,42 +612,29 @@ def iMoCo_operator(
             I.append(sp.linop.Identity(ishape)) # identity operator for stacking 
             W = sp.linop.Multiply(kdata[r].shape, weights[r]**0.5)
             F = sp.linop.NUFFT((num_coils,)+ishape, coord[r])
-            S = sp.linop.Multiply(ishape, mps[r])
+            S = sp.linop.Multiply(ishape, mps)
             M = motion_fields[r]
-            A = W * F * S * M
-            As.append(A)
+            As.append(W * F * S * M)
         A = Diags(As, oshape=kdata.shape, ishape=(resp_frames,)+ishape) * Vstacks(I, oshape=(resp_frames,)+ishape)
+        # A = sp.linop.Diag(As)
     
     # print(f"A.ishape = {A.ishape} A.oshape = {A.oshape}")
             
     return A
     
 class interp_op(sp.linop.Linop):
-    def __init__(self, ishape, M_field, iM_field=None):
+    def __init__(self, ishape, m, dkernel, M_field, iM_field=None):
         assert list(ishape) == list(M_field.shape[:-1]),"Dimension mismatch!"
         oshape = ishape
-        dkernel = np.array([0,1,0])
-        
-        # 2d/3d
-        if M_field.shape[-1] == 3:
-            self.dkernel = dkernel[:,None,None]*dkernel[None,:,None]*dkernel[None,None,:]
-            Nx,Ny,Nz = ishape
-            my,mx,mz = np.meshgrid(np.arange(Ny),np.arange(Nx),np.arange(Nz))
-            self.m = np.stack((mx,my,mz),axis=-1)
-        else:
-            self.dkernel = dkernel[:,None]*dkernel[None,:]
-            Nx,Ny = ishape
-            my,mx = np.meshgrid(np.arange(Ny),np.arange(Nx))
-            self.m = np.stack((mx,my),axis=-1)
-            
+        self.m=m  
+        self.dkernel = dkernel
         self.M_field = M_field
         self.iM_field = iM_field
         super().__init__(oshape, ishape)
 
     def _apply(self, input):
-        device = sp.backend.get_device(input)
-        with device:
-            return interp(input, self.M_field, self.m, self.dkernel, device) # major change
+        with sp.backend.get_device(input):
+            return interp(input, self.M_field, self.m, self.dkernel) # major change
 
     def _adjoint_linop(self):
         if self.iM_field is None:
@@ -561,17 +643,15 @@ class interp_op(sp.linop.Linop):
         else:
             iM_field = self.iM_field
             M_field = self.M_field
-        return interp_op(self.ishape, iM_field, M_field)
+        return interp_op(self.ishape, self.m, self.dkernel, iM_field, M_field)
     
-def interp(I, M_field, m, dkernel, device=sp.Device(0), deblur=False):  
+def interp(I, M_field, m, dkernel, deblur=False):  
     M_field = M_field + m
-    I = sp.to_device(I, device)
-    M= sp.to_device(M_field.astype(np.float64), device) # v0.1.17
+    M = sp.to_device(M_field, sp.get_device(I))
     I = sp.interp.interpolate(I, coord=M) # v0.1.17 (input, coord, kernel='spline', width=2, param=1)
     # deconv
     if deblur is True:
         I = sp.conv.convolve(I, dkernel)
-    I = sp.to_device(I, device)
     return I
 
 def Vstacks(L_Linop, oshape):
@@ -589,11 +669,4 @@ def Diags(L_Linop, oshape, ishape):
     R2 = sp.linop.Reshape(oshape=(math.prod(ishape),),ishape=ishape)
     Linops = R1.H*Linops*R2
     return Linops
-    
-def NFTs(ishape, coord):
-    n_Channel = ishape[0]
-    oshape = list((n_Channel,)) + list(coord.shape[:-1])
-    NFT = sp.linop.NUFFT(ishape[1:], coord=coord)
-    NFTs = Diags([NFT for i in range(n_Channel)],oshape,ishape)
-    return NFTs     
         

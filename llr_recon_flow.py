@@ -76,7 +76,7 @@ if __name__ == "__main__":
     parser.add_argument('--lp_frac', type=float, default=1.0, help='Low pass filter')
     parser.add_argument('--krad_cutoff', type=float, default=999990)
     parser.add_argument('--max_encodes', type=int, default=None)
-    parser.add_argument('--coil_batch_size', type=int, default=1)
+    parser.add_argument('--coil_batch_size', type=int, default=None)
     parser.add_argument('--compress_coils', type=int, dest='compress_coils', default=-1, help='Number of coils to compress to')
     
     parser.add_argument('--gate_type', type=str, default='time')  # recon type
@@ -133,6 +133,7 @@ if __name__ == "__main__":
     start_time = time.time()
     
     # For tracking memory
+    cupy.cuda.runtime.setDevice(args.device)
     mempool = cupy.get_default_memory_pool()
 
     # Put up a file selector if the file is not specified
@@ -147,8 +148,13 @@ if __name__ == "__main__":
         args.out_folder = os.path.dirname(args.filename)
     else:
         os.makedirs(args.out_folder, exist_ok=True)
-
-    logfile = logging.FileHandler(os.path.join(args.out_folder, 'pyrecon.log'), mode='a')
+        
+    try:
+        os.remove(os.path.join(args.out_folder, 'pyrecon.log'))
+    except OSError:
+        pass
+    
+    logfile = logging.FileHandler(os.path.join(args.out_folder, 'pyrecon.log'), mode='a') 
     logfile.setLevel(logging.INFO)
     logfile.setFormatter(formatter)
     logger.addHandler(logfile)
@@ -452,7 +458,6 @@ if __name__ == "__main__":
             else:
                 sense = sp.mri.app.SenseRecon(kdata, smaps, lamda=args.lamda, weights=dcf, coord=coord, max_iter=args.max_iter, 
                                 coil_batch_size=args.coil_batch_size, device=sp.Device(args.device), solver="ConjugateGradient")
-                # sense = sp.mri.app.L1WaveletRecon(kdata, smaps, lamda=1e-1, weights=dcf, coord=coord, max_iter=50, coil_batch_size=1, device=args.device)
                 
             # print('Run Sense')
             frame = sp.to_device(sense.run(), sp.cpu_device)
@@ -479,7 +484,6 @@ if __name__ == "__main__":
                                   max_iter=args.max_iter, coil_batch_size=args.coil_batch_size, device=args.device)
             else:
                 sense = sp.mri.app.L1WaveletRecon(kdata, smaps, args.lamda, weights=dcf, coord=coord, max_iter=args.max_iter, coil_batch_size=args.coil_batch_size, device=args.device)
-                # sense = sp.mri.app.L1WaveletRecon(kdata, smaps, lamda=1e-1, weights=dcf, coord=coord, max_iter=50, coil_batch_size=1, device=args.device)
                 
             # print('Run Sense')
             frame = sp.to_device(sense.run(), sp.cpu_device)
@@ -530,7 +534,7 @@ if __name__ == "__main__":
     elif args.recon_type == 'imoco':
         logger.info('Iterative Motion Compensation Recon')
         img = iMoCoRecon(mri_raw, mps=smaps, device=sp.Device(args.device), lamda=args.lamda, coil_batch_size=args.coil_batch_size, 
-                         gate_type=args.gate_type, card_frames=args.frames, resp_frames=args.frames2, time_ranges=time_ranges,
+                         gate_type=args.gate_type, card_frames=args.frames, resp_frames=args.frames2, venc=args.venc, time_ranges=time_ranges,
                          resp_filter_window=args.resp_filter_window, res_scale=args.res_scale, max_iter=args.max_iter, 
                          out_folder=args.out_folder, debug=args.debug
                         ).run()
