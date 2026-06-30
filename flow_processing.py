@@ -9,6 +9,7 @@ import argparse
 import matplotlib.pyplot as plt
 import cupy
 import math
+import re
 
 
 # Laplacian based phase unwrapping
@@ -190,9 +191,11 @@ class MRI_4DFlow:
 
     def background_phase_correct(self,mag_thresh=0.08, angiogram_thresh=0.3,fit_order=2):
 
+        ############## NEED TO FIND A WAY TO MAKE IT TIME RESOLVED, FOR SOME REASON IT JUST KEEPS FLOW.H5 AS A (f,X,Y,Z)
+        ############## such as (20, 320, 320, 320), rather than splitting it into 21 groups (20 TR and 1 TA)
         # Average time frames
-        magnitude_avg = np.mean(self.magnitude, 0)
-        angiogram_avg = np.mean(self.angiogram, 0)
+        magnitude_avg = np.mean(self.magnitude, axis=0)
+        angiogram_avg = np.mean(self.angiogram, axis=0)
 
         # Threshold
         max_mag = np.max( magnitude_avg)
@@ -266,7 +269,7 @@ class MRI_4DFlow:
             background_phase[:,:,:,1] += polyfit_y[ii]*phi
             background_phase[:,:,:,2] += polyfit_z[ii]*phi
 
-        #Expand and subtract)
+        #Expand and subtract
         background_phase = np.expand_dims( background_phase,0)
         self.velocity_estimate -= background_phase
 
@@ -323,29 +326,58 @@ if __name__ == "__main__":
 
     print(f'Loading {args.filename}')
     with h5py.File(args.filename, 'r') as hf:
-        temp = np.array(hf['IMAGE'])
-        print(temp.shape)
+        #temp = np.array(hf['Images'])
         #temp = temp['real'] + 1j*temp['imag']
         #temp = np.moveaxis(temp, -1, 0)
         #frames = int(temp.shape[0]/4)
         #temp = np.reshape(temp, newshape=(frames,4, temp.shape[1], temp.shape[2], temp.shape[3]))
-        # temp = np.reshape(temp, newshape=(10,4, temp.shape[-3], temp.shape[-2], temp.shape[-1]))
-
-        temp = np.squeeze(temp)
+        #temp = np.reshape(temp, newshape=(10,4, temp.shape[-3], temp.shape[-2], temp.shape[-1]))
+        #temp = np.squeeze(temp)
+        
+        images = hf['Images']
+        
+        items = []
+        
+        for key in images.keys():
+            match = re.search(r"Encode_(\d+)_Frame_(\d+)", key)
+            
+            if match is None:
+                continue
+            
+            encode = int(match.group(1))
+            frame = int(match.group(2))
+            
+            items.append((frame, encode, key))
+            
+        frames = len(set(frame for frame, encode, key in items))
+        num_encodes = len(set(encode for frame, encode, key in items))
+        
+        print(f"num of frames = {frames}")
+        print(f"num of encodes = {num_encodes}")
+        
+        items = sorted(items)
+        
+        data = []
+        
+        for frame, encode, key in items:
+            arr = np.array(images[key])
+            arr = arr["real"] + 1j * arr["imag"]
+            data.append(arr)
+        
+        temp = np.stack(data)
+        temp = temp.reshape(frames, num_encodes, *temp.shape[1:])
+        print(f"The shape is : {temp.shape}")
 
         if len(temp.shape) == 4:
             temp = np.expand_dims(temp,axis=0)
 
-        frames = int(temp.shape[0])
-        num_encodes = int(temp.shape[1])
-
-        print(f' num of frames =  {frames}')
-        print(f' num of encodes = {num_encodes}')
+        print(f' num frames =  {frames}')
+        print(f' num encodes = {num_encodes}')
         #temp = np.reshape(temp,newshape=(5, frames,temp.shape[1],temp.shape[2],temp.shape[3]))
         #temp = np.reshape(temp,newshape=(temp.shape[1], frames,temp.shape[2],temp.shape[3],temp.shape[4]))
 
         temp = np.moveaxis(temp,1,-1)
-        print(temp.shape)
+        print(f"Rearranged shape is {temp.shape}")
 
     if num_encodes == 5:
         encoding = "5pt"
@@ -366,14 +398,61 @@ if __name__ == "__main__":
 
     # Export to file
     out_name = os.path.join(out_folder, args.out_filename)
-    try:
+    
+    if os.path.exists(out_name):
         os.remove(out_name)
-    except OSError:
-        pass
-    with h5py.File(out_name, 'w') as hf:
-        hf.create_dataset("VX", data=mri_flow.velocity_estimate[..., 0])
-        hf.create_dataset("VY", data=mri_flow.velocity_estimate[..., 1])
-        hf.create_dataset("VZ", data=mri_flow.velocity_estimate[..., 2])
-
-        hf.create_dataset("ANGIO", data=mri_flow.angiogram)
-        hf.create_dataset("MAG", data=mri_flow.magnitude)
+        
+    outputs = {
+        "CD": mri_flow.angiogram,
+        "MAG": mri_flow.magnitude,
+        "comp_vd_1": mri_flow.velocity_estimate[..., 0],
+        "comp_vd_1": mri_flow.velocity_estimate[..., 1],
+        "comp_vd_1": mri_flow.velocity_estimate[..., 2]
+    }
+    
+    with h5py.File(out_name, "w") as hf:
+        data_group = hf.create_group("Data")
+        
+        # Time average
+        for name, arr in outputs.items():
+            data_group.create_dataset(name, data=np.mean(arr, axis=0))
+            
+        # Time resolved
+        for frame in range(frames):
+            
+            data_group.create_dataset(
+                f"ph_{frame:03d}_cd",
+                data=mri_flow.angiogram[frame]
+            )
+            
+            data_group.create_dataset(
+                f"ph_{frame:03d}_mag",
+                data=mri_flow.magnitude[frame]
+            )
+            
+            data_group.create_dataset(
+                f"ph_{frame:03d}_comp_vd_1",
+                data=mri_flow.velocity_estimate[frame, ..., 0]
+            )
+            
+            data_group.create_dataset(
+                f"ph_{frame:03d}_comp_vd_2",
+                data=mri_flow.velocity_estimate[frame, ..., 1]
+            )
+            
+            data_group.create_dataset(
+                f"ph_{frame:03d}_comp_vd_3",
+                data=mri_flow.velocity_estimate[frame, ..., 2]
+            )
+    print("Created Flow.h5 file from Images.h5")
+        
+    # try:
+    #     os.remove(out_name)
+    # except OSError:
+    #     pass
+    # with h5py.File(out_name, 'w') as hf:
+    #     hf.create_dataset("VX", data=mri_flow.velocity_estimate[..., 0])
+    #     hf.create_dataset("VY", data=mri_flow.velocity_estimate[..., 1])
+    #     hf.create_dataset("VZ", data=mri_flow.velocity_estimate[..., 2])
+    #     hf.create_dataset("CD", data=mri_flow.angiogram)
+    #     hf.create_dataset("MAG", data=mri_flow.magnitude)
