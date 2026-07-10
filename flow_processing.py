@@ -1,5 +1,6 @@
-#! /usr/bin/env python
+#! /usr/bin/env python ALMA + BEN CHANGES
 import numpy as np
+from numpy import sum, sqrt, mean, abs
 import h5py
 import sigpy.mri as mr
 import logging
@@ -9,6 +10,7 @@ import argparse
 import matplotlib.pyplot as plt
 import cupy
 import math
+import time
 import re
 
 
@@ -102,11 +104,11 @@ class MRI_4DFlow:
             '3pt': np.pi / 2.0 * np.array([[-1.0, -1.0, -1.0],
                                                       [1.0, -1.0, -1.0],
                                                       [-1.0, 1.0, -1.0]], dtype=np.float32),
-            '4pt-balanced': np.pi / 2.0/ np.sqrt(2.0) * np.array([[-1.0, -1.0, -1.0],
+            '4pt-balanced': np.pi / 2.0/ sqrt(2.0) * np.array([[-1.0, -1.0, -1.0],
                                                       [ 1.0,  1.0, -1.0],
                                                       [ 1.0, -1.0,  1.0],
                                                       [-1.0,  1.0, 1.0]], dtype=np.float32),
-            '5pt': np.pi / np.sqrt(3.0) * np.array([ [0.0, 0.0, 0.0],
+            '5pt': np.pi / sqrt(3.0) * np.array([ [0.0, 0.0, 0.0],
                                                       [-1.0, -1.0, -1.0],
                                                       [ 1.0,  1.0, -1.0],
                                                       [ 1.0, -1.0,  1.0],
@@ -140,6 +142,8 @@ class MRI_4DFlow:
         self.signal = mag*np.exp(1j * phase )
 
     def solve_for_velocity(self):
+        t0 = time.perf_counter()
+        print(f"[solve_for_velocity] start: signal shape={self.signal.shape}, dtype={self.signal.dtype}")
 
         # Multiply by reference
         ref = self.signal[...,0]
@@ -188,14 +192,13 @@ class MRI_4DFlow:
         # Data comes back as Nt x Nz X Ny x Nz x 3 x 1, reduce to
         #   Nt x Nz x Ny x Nx x 3
         self.velocity_estimate = np.squeeze( self.velocity_estimate, axis=-1)
+        print(f"[solve_for_velocity] done in {time.perf_counter() - t0:.2f}s, velocity shape={self.velocity_estimate.shape}, dtype={self.velocity_estimate.dtype}")
 
-    def background_phase_correct(self,mag_thresh=0.08, angiogram_thresh=0.3,fit_order=2):
+    def background_phase_correct(self, mag_thresh=0.08, angiogram_thresh=0.3, fit_order=3):
 
-        ############## NEED TO FIND A WAY TO MAKE IT TIME RESOLVED, FOR SOME REASON IT JUST KEEPS FLOW.H5 AS A (f,X,Y,Z)
-        ############## such as (20, 320, 320, 320), rather than splitting it into 21 groups (20 TR and 1 TA)
         # Average time frames
-        magnitude_avg = np.mean(self.magnitude, axis=0)
-        angiogram_avg = np.mean(self.angiogram, axis=0)
+        magnitude_avg = mean(self.magnitude, axis=0)
+        angiogram_avg = mean(self.angiogram, axis=0)
 
         # Threshold
         max_mag = np.max( magnitude_avg)
@@ -222,7 +225,7 @@ class MRI_4DFlow:
                               indexing='ij')
 
         # Grab array
-        vavg = np.squeeze( np.mean( self.velocity_estimate, axis=0))
+        vavg = np.squeeze( mean( self.velocity_estimate, axis=0))
         vx = vavg[:, :, :, 0]
         vy = vavg[:, :, :, 1]
         vz = vavg[:, :, :, 2]
@@ -244,14 +247,14 @@ class MRI_4DFlow:
 
         for ii in range(N):
             for jj in range(N):
-                AhA[ii, jj] = np.sum( (x_slice ** px[ii] * y_slice ** py[ii] * z_slice ** pz[ii]) *
+                AhA[ii, jj] = sum( (x_slice ** px[ii] * y_slice ** py[ii] * z_slice ** pz[ii]) *
                                      (x_slice ** px[jj] * y_slice ** py[jj] * z_slice ** pz[jj]) )
 
         for ii in range(N):
             phi = np.power(x_slice, px[ii]) * np.power(y_slice, py[ii]) * np.power( z_slice, pz[ii])
-            AhBx[ii] = np.sum(vx_slice * phi)
-            AhBy[ii] = np.sum(vy_slice * phi)
-            AhBz[ii] = np.sum(vz_slice * phi)
+            AhBx[ii] = sum(vx_slice * phi)
+            AhBy[ii] = sum(vy_slice * phi)
+            AhBz[ii] = sum(vz_slice * phi)
 
         polyfit_x = np.linalg.solve(AhA, AhBx)
         polyfit_y = np.linalg.solve(AhA, AhBy)
@@ -277,7 +280,7 @@ class MRI_4DFlow:
     :return: Nt x Nz x Ny x Nx x Nencode x 1
     """
     def update_magnitude(self):
-        self.magnitude = np.sqrt( np.mean( np.abs(self.signal)**2 , -1))
+        self.magnitude = sqrt( sum( abs(self.signal)**2 , -1))
 
     """
     :return: Nt x Nz x Ny x Nx x Nencode x 1
@@ -287,14 +290,238 @@ class MRI_4DFlow:
         # Recalc Magnitude
         self.update_magnitude()
 
+        # Ensure velocity is available
         if self.velocity_estimate is None:
             self.solve_for_velocity()
 
-        vmag = np.sqrt( np.mean( np.abs(self.velocity_estimate)**2 , -1))
-        self.angiogram = self.magnitude*np.sin(math.pi/2.0*vmag/self.Venc)
+        # New velocity calculation
+        vmag = sqrt( sum( self.velocity_estimate ** 2, axis=-1))
+        vmag_scaled = np.minimum((vmag / float(self.Venc)) * 2.0, 1.0)
+        
+        self.angiogram = (self.magnitude * np.sin((math.pi / 2.0) * vmag_scaled)).astype(np.float32)
 
-        idx = np.where(vmag > self.Venc )
-        self.angiogram[idx] = self.magnitude[idx]
+        
+    def thresh_angiogram(self, mag_thresh=0.08, cd_thresh=0.3):
+        if self.magnitude is None or self.angiogram is None:
+            raise ValueError("Call solve_for_velocity() and update_angiogram() first")
+        
+         # Time Averaged Magnitude and Angiogram: (Nz, Ny, Nx)
+        mag_avg = mean(self.magnitude, axis=0)
+        angio_avg = mean(self.angiogram, axis=0)
+
+        mag_max = np.max(mag_avg)
+        angio_max = np.max(angio_avg)
+
+        abs_mag_thresh = mag_thresh * mag_max
+        abs_cd_thresh = cd_thresh * angio_max
+        
+        mask = (angio_avg < abs_cd_thresh) & (mag_avg > abs_mag_thresh)
+
+        self.angiogram_mask = mask.astype(np.float32)
+        
+    def _fit_background_poly_from_mask(self, fit_order=3):
+        
+        if self.velocity_estimate is None:
+            raise ValueError("velocity_estimate is None - run solve_for_velocity() first")
+        if getattr(self, "angiogram_mask", None) is None:
+            raise ValueError("angiogram_mask is None - run thresh_angiogram() first")
+        
+        # Time Averaged Velocity: (Nz, Ny, Nx, 3)
+        vavg = mean(self.velocity_estimate, axis=0)
+        vx = vavg[..., 0]
+        vy = vavg[..., 1]
+        vz = vavg[..., 2]
+        
+        Nz, Ny, Nx = vx.shape
+        
+        # Normalized coordinates in [-1, 1]
+        z, y, x = np.meshgrid(
+            np.linspace(-1, 1, Nz),
+            np.linspace(-1, 1, Ny),
+            np.linspace(-1, 1, Nx),
+            indexing="ij"
+        )
+        
+        mask = self.angiogram_mask.astype(bool)
+        idx = np.argwhere(mask)
+        if idx.size == 0:
+            raise RuntimeError("Background mask is empty - check thresholds")
+        
+        x_slice = x[mask]
+        y_slice = y[mask]
+        z_slice = z[mask]
+        vx_slice = vx[mask]
+        vy_slice = vy[mask]
+        vz_slice = vz[mask]
+        
+        # Polynomial basis indices
+        pz, py, px = np.meshgrid(
+            range(fit_order + 1),
+            range(fit_order + 1),
+            range(fit_order + 1),
+        )
+        idx_poly = np.where((px+py+pz) <= fit_order)
+        px = px[idx_poly]
+        py = py[idx_poly]
+        pz = pz[idx_poly]
+        N = len(px)
+        
+        AhA = np.zeros((N, N), dtype=np.float64)
+        AhBx = np.zeros((N, 1), dtype=np.float64)
+        AhBy = np.zeros((N, 1), dtype=np.float64)
+        AhBz = np.zeros((N, 1), dtype=np.float64)
+        
+        # Build normal eqns
+        for ii in range(N):
+            phi_i = (x_slice ** px[ii]) * (y_slice ** py[ii]) * (z_slice ** pz[ii])
+            for jj in range(N):
+                phi_j = (x_slice ** px[jj]) * (y_slice ** py[jj]) * (z_slice ** pz[jj])
+                AhA[ii, jj] = sum(phi_i * phi_j)
+                
+            AhBx[ii] = sum(vx_slice * phi_i)
+            AhBy[ii] = sum(vy_slice * phi_i)
+            AhBz[ii] = sum(vz_slice * phi_i)
+            
+        # Solve for polynomial coefficients
+        coef_x = np.linalg.solve(AhA, AhBx)
+        coef_y = np.linalg.solve(AhA, AhBy)
+        coef_z = np.linalg.solve(AhA, AhBz)
+        
+        # Evaluate polynomial on full grid to get background velocity (Nz, Ny, Nx, 3)
+        background_vel = np.zeros(vavg.shape, dtype=np.float32)
+        
+        for ii in range(N):
+            phi = (x ** px[ii]) * (y ** py[ii]) * (z ** pz[ii])
+            background_vel[..., 0] += (coef_x[ii] * phi).astype(np.float32)
+            background_vel[..., 1] += (coef_x[ii] * phi).astype(np.float32)
+            background_vel[..., 2] += (coef_x[ii] * phi).astype(np.float32)
+            
+        return background_vel
+    
+    def background_phase_fit_iterative(self,
+                                fit_number=2,
+                                fit_order=3,
+                                mag_thresh=0.08,
+                                cd_thresh_first=1.0,
+                                cd_thresh_other=0.3):
+        
+        if self.signal is None:
+            raise ValueError("self.signal is None - set self.signal before background_phase_fit_iteratvive()")
+        
+        background_vel = None
+        
+        for iter in range(fit_number):
+            print(f"[background_phase_fit_iterative] Iteration {iter+1}/{fit_number}")
+            
+            # i) Velocity from current signal
+            self.solve_for_velocity()
+            
+            # ii) Angiogram from current velocity + magnitude
+            self.update_angiogram()
+            
+            # iii) Threshold angiogram to get background mask
+            if iter == 0:
+                self.thresh_angiogram(mag_thresh=mag_thresh, cd_thresh=cd_thresh_first)
+            else:
+                self.thresh_angiogram(mag_thresh=mag_thresh, cd_thresh=cd_thresh_other)
+                
+            # iv) Fit background polynomial velocity field
+            background_vel = self._fit_background_poly_from_mask(fit_order=fit_order)
+            
+        # --- After iterations: apply background correction in phase space ---
+        
+        if background_vel is None:
+            raise RuntimeError("background_vel is None - fitting loop did not run")
+        
+        # Background velocity (Nz, Ny, Nx, 3)
+        Nz, Ny, Nx, _ = background_vel.shape
+        
+        # Encoding matrix scald by 1/Venc, similar to CPP pcvipr_recon
+        ES = self.EncodingMatrix.astype(np.float32) / np.float32(self.Venc)
+        # (Nz, Ny, Nx, Nenc)
+        poff = np.tensordot(background_vel.astype(np.float32, copy=False), ES.T, axes=([3], [0]))
+        poff = poff.astype(np.float32, copy=False)
+        
+        # Broadcast over time dimension (Nt)
+        Nt = self.signal.shape[0]
+        phase_full = poff[np.newaxis, ...] # (1, Nz, Ny, Nx, Nenc)
+        if Nt > 1:
+            phase_full = np.broadcast_to(phase_full, (Nt, Nz, Ny, Nx, ES.shape[0]))
+        
+        # Apply complex background phase correction
+        back_phase = np.exp((-1j * phase_full).astype(np.complex64))
+        self.signal = self.signal.astype(np.complex64, copy=False)
+        self.signal *= back_phase
+        
+        print("[background_phase_fit_iterative] Applied background phase correction in signal domain.")
+            
+            
+        # Recompute final velocity and angiogram from corrected signal
+        print("[background_phase_fit_iterative] Recomputing final velocity...")
+        self.solve_for_velocity()
+        print("[background_phase_fit_iterative] Recomputing final angiogram...")
+        self.update_angiogram()
+        
+def export_flow_data(mri_flow, out_name, header_info=None, c_format=False):
+    
+    # Export to file
+    try:
+        os.remove(out_name)
+    except OSError:
+        pass
+    
+    # Convert to int and scale
+    mg = mri_flow.magnitude * 32767/np.max(mri_flow.magnitude)
+    mg = mg.astype(np.int16)
+    cd = mri_flow.angiogram * 32767/np.max(mri_flow.angiogram)
+    cd = cd.astype(np.int16)
+    vx = (mri_flow.velocity_estimate[..., 0] * 10).astype(np.int16)
+    vy = (mri_flow.velocity_estimate[..., 1] * 10).astype(np.int16)
+    vz = (mri_flow.velocity_estimate[..., 2] * 10).astype(np.int16)
+    
+    # if TA add time dimension
+    if len(mri_flow.magnitude.shape) < 4:
+        mg = np.expand_dims(mg, axis=0)
+        cd = np.expand_dims(cd, axis=0)
+        vx = np.expand_dims(vx, axis=0)
+        vy = np.expand_dims(vy, axis=0)
+        vz = np.expand_dims(vz, axis=0)
+        
+    print(f"Exporting flow data to {out_name}")
+    with h5py.File(out_name, 'w') as hf:
+        header_group = hf.create_group("Header")
+        data_group = hf.create_group("Data")
+        if header_info is not None:
+            for attr in header_info.keys():
+                header_group.attrs[attr] = header_info[attr]
+        else:
+            header_group.attrs["venc"] = mri_flow.Venc
+            header_group.attrs["frames"] = mg.shape[0]
+            header_group.attrs["matrixx"] = mg.shape[1]
+            header_group.attrs["matrixy"] = mg.shape[2]
+            header_group.attrs["matrixz"] = mg.shape[3]
+            
+        if c_format:
+            frames = mg.shape[0]
+            data_group.create_dataset("MAG", data=np.rint(np.squeeze(np.mean(mg, axis=0))).astype(np.int16))
+            data_group.create_dataset("CD", data=np.rint(np.squeeze(np.mean(cd, axis=0))).astype(np.int16))
+            data_group.create_dataset("comp_vd_1", data=np.rint(np.squeeze(np.mean(vx, axis=0))).astype(np.int16))
+            data_group.create_dataset("comp_vd_2", data=np.rint(np.squeeze(np.mean(vy, axis=0))).astype(np.int16))
+            data_group.create_dataset("comp_vd_3", data=np.rint(np.squeeze(np.mean(vz, axis=0))).astype(np.int16))
+
+            if frames > 1:
+                for i in range(frames):
+                    data_group.create_dataset(f"ph_{i:03}_mag", data=np.squeeze(mg[i, ...]))
+                    data_group.create_dataset(f"ph_{i:03}_cd", data=np.squeeze(cd[i, ...]))
+                    data_group.create_dataset(f"ph_{i:03}_vd_1", data=np.squeeze(vx[i, ...]))
+                    data_group.create_dataset(f"ph_{i:03}_vd_2", data=np.squeeze(vy[i, ...]))
+                    data_group.create_dataset(f"ph_{i:03}_vd_3", data=np.squeeze(vz[i, ...]))
+        else:
+            hf.create_dataset("MAG", data=mg)
+            hf.create_dataset("CD", data=cd)
+            hf.create_dataset("VX", data=vx)
+            hf.create_dataset("VY", data=vy)
+            hf.create_dataset("VZ", data=vz)
 
 
 if __name__ == "__main__":
@@ -308,6 +535,8 @@ if __name__ == "__main__":
     parser.add_argument('--logdir', type=str, help='folder to log files to, default is current directory')
     parser.add_argument('--out_folder', type=str, default=None)
     parser.add_argument('--out_filename', type=str, default='Flow.h5')
+    parser.add_argument('--c_format', dest='c_format', action='store_true', default=True, help='export Flow.h5 file in CPP recon format')
+    
 
     args = parser.parse_args()
 
@@ -325,6 +554,8 @@ if __name__ == "__main__":
         out_folder = args.out_folder
 
     print(f'Loading {args.filename}')
+    t_load = time.perf_counter()
+
     with h5py.File(args.filename, 'r') as hf:
         #temp = np.array(hf['Images'])
         #temp = temp['real'] + 1j*temp['imag']
@@ -391,60 +622,75 @@ if __name__ == "__main__":
     # Solve for Velocity
     mri_flow = MRI_4DFlow(encode_type= encoding, venc=args.venc)
     mri_flow.signal = temp
-    mri_flow.solve_for_velocity()
-    mri_flow.update_angiogram()
-    #mri_flow.background_phase_correct()
-    #mri_flow.update_angiogram()
+    # mri_flow.solve_for_velocity()             # Now in background_phase_fit_iterative
+    # mri_flow.update_angiogram()               # Now in background_phase_fit_iterative
+    #mri_flow.background_phase_correct()        # Now in background_phase_fit_iterative
+    #mri_flow.update_angiogram()                # Now in background_phase_fit_iterative
+    
+    mri_flow.background_phase_fit_iterative(
+        fit_number=2,
+        fit_order=3,
+        mag_thresh=0.08,
+        cd_thresh_first=1.0,
+        cd_thresh_other=0.3
+    )
 
     # Export to file
+    print(f"Exporting flow data to {args.out_filename}")
     out_name = os.path.join(out_folder, args.out_filename)
     
-    if os.path.exists(out_name):
-        os.remove(out_name)
-        
-    outputs = {
-        "CD": mri_flow.angiogram,
-        "MAG": mri_flow.magnitude,
-        "comp_vd_1": mri_flow.velocity_estimate[..., 0],
-        "comp_vd_1": mri_flow.velocity_estimate[..., 1],
-        "comp_vd_1": mri_flow.velocity_estimate[..., 2]
-    }
+    print(f"Exporting flow data to out name = {out_name}")
     
-    with h5py.File(out_name, "w") as hf:
-        data_group = hf.create_group("Data")
+    export_flow_data(mri_flow, out_name, c_format=args.c_format)
+    
+    # Old exporting, useful, but export_flow_data is better as its CPP format
+    # if os.path.exists(out_name):
+    #     os.remove(out_name)
+    
+    # # Outputs for TA datasets    
+    # outputs = {
+    #     "CD": mri_flow.angiogram,
+    #     "MAG": mri_flow.magnitude,
+    #     "comp_vd_1": mri_flow.velocity_estimate[..., 0],
+    #     "comp_vd_2": mri_flow.velocity_estimate[..., 1],
+    #     "comp_vd_3": mri_flow.velocity_estimate[..., 2]
+    # }
+    
+    # with h5py.File(out_name, "w") as hf:
+    #     data_group = hf.create_group("Data")
         
-        # Time average
-        for name, arr in outputs.items():
-            data_group.create_dataset(name, data=np.mean(arr, axis=0))
+    #     # Time averaged dataset creation
+    #     for name, arr in outputs.items():
+    #         data_group.create_dataset(name, data=mean(arr, axis=0))
             
-        # Time resolved
-        for frame in range(frames):
+    #     # Time resolved dataset creation
+    #     for frame in range(frames):
             
-            data_group.create_dataset(
-                f"ph_{frame:03d}_cd",
-                data=mri_flow.angiogram[frame]
-            )
+    #         data_group.create_dataset(
+    #             f"ph_{frame:03d}_cd",
+    #             data=mri_flow.angiogram[frame]
+    #         )
             
-            data_group.create_dataset(
-                f"ph_{frame:03d}_mag",
-                data=mri_flow.magnitude[frame]
-            )
+    #         data_group.create_dataset(
+    #             f"ph_{frame:03d}_mag",
+    #             data=mri_flow.magnitude[frame]
+    #         )
             
-            data_group.create_dataset(
-                f"ph_{frame:03d}_comp_vd_1",
-                data=mri_flow.velocity_estimate[frame, ..., 0]
-            )
+    #         data_group.create_dataset(
+    #             f"ph_{frame:03d}_comp_vd_1",
+    #             data=mri_flow.velocity_estimate[frame, ..., 0]
+    #         )
             
-            data_group.create_dataset(
-                f"ph_{frame:03d}_comp_vd_2",
-                data=mri_flow.velocity_estimate[frame, ..., 1]
-            )
+    #         data_group.create_dataset(
+    #             f"ph_{frame:03d}_comp_vd_2",
+    #             data=mri_flow.velocity_estimate[frame, ..., 1]
+    #         )
             
-            data_group.create_dataset(
-                f"ph_{frame:03d}_comp_vd_3",
-                data=mri_flow.velocity_estimate[frame, ..., 2]
-            )
-    print("Created Flow.h5 file from Images.h5")
+    #         data_group.create_dataset(
+    #             f"ph_{frame:03d}_comp_vd_3",
+    #             data=mri_flow.velocity_estimate[frame, ..., 2]
+    #         )
+    # print("Created Flow.h5 file from Images.h5")
         
     # try:
     #     os.remove(out_name)
