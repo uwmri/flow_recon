@@ -103,8 +103,7 @@ class MRI_4DFlow:
                                            [-1.0, 1.0, -1.0]], dtype=np.float32),
             '4pt-balanced': np.pi / 2.0 / np.sqrt(2.0) * np.array([[-1.0, -1.0, -1.0],
                                                                    [1.0,  1.0, -1.0],
-                                                                   [1.0, -1.0,
-                                                                       1.0],
+                                                                   [1.0, -1.0, 1.0],
                                                                    [-1.0,  1.0, 1.0]], dtype=np.float32),
             '5pt': np.pi / np.sqrt(3.0) * np.array([[0.0, 0.0, 0.0],
                                                     [-1.0, -1.0, -1.0],
@@ -392,7 +391,6 @@ if __name__ == "__main__":
 
     # def convert_h5(input_file, output_file):
     input_file = out_name
-    output_file = f"{out_name}_3D.h5"
     """
     Convert 4D (t, z, y, x) datasets into:
         /Data/CD
@@ -404,9 +402,9 @@ if __name__ == "__main__":
         ...
         
     """
-
-    input_file = Path(input_file)
-    output_file = Path(output_file)
+    
+    output_file = os.path.join(out_folder, "Flow3D.h5")
+    rename_input_file  = os.path.join(out_folder, "Flow4D.h5")
 
     # Mapping for each from the python to cpp format
     # Mapping[0] is for ta
@@ -451,7 +449,8 @@ if __name__ == "__main__":
             data_group.create_dataset(
                 f"{avg_name}",
                 data=avg * scaling,
-                compression="gzip"
+                compression="gzip",
+                dtype = np.int16
             )
 
             # Individual time frames
@@ -459,9 +458,12 @@ if __name__ == "__main__":
                 data_group.create_dataset(
                     f"ph_{t:03d}_{frame_name}",
                     data=dataset[t] * scaling,
-                    compression="gzip"
+                    compression="gzip",
+                    dtype = np.int16
                 )
 
             print(f"  Created average + {nt} time frames")
 
     print(f"Saved to: {output_file}")
+    
+    os.rename(input_file, rename_input_file)
