@@ -413,9 +413,9 @@ if __name__ == "__main__":
     dataset_mapping = {
         "ANGIO":      ("CD", "cd", 32000),
         "MAG":        ("MAG", "mag", 32000),
-        "VX":         ("comp_vd_1", "v1", 10),
-        "VY":         ("comp_vd_2", "v2", 10),
-        "VZ":         ("comp_vd_3", "v3", 10),
+        "VX":         ("comp_vd_1", "vd_1", 10),
+        "VY":         ("comp_vd_2", "vd_2", 10),
+        "VZ":         ("comp_vd_3", "vd_3", 10),
     }
 
     with h5py.File(input_file, "r") as fin, \
