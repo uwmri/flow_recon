@@ -7,7 +7,7 @@ import os
 
 # Update GE path
 import sys
-orc_folder = os.getenv('ORC_PYTHON_SDKTOP', '/home/kxj135/Data/CVMRIGroup/Software/Orchestra/orchestra-sdk-2.1-1.python')
+orc_folder = os.getenv('ORC_PYTHON_SDKTOP', '/data_share/Containers/OrchestraSDK/Orc4_Python_Bindings/')
 sys.path.append(orc_folder)
 import GERecon
 

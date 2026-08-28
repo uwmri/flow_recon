@@ -1,7 +1,7 @@
 import numpy as np
 import h5py
 import cupy
-import cupy.cudnn
+#import cupy.cudnn # now using pytorch
 import sigpy as sp
 import sigpy.mri as mr
 import logging
