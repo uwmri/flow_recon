@@ -1181,10 +1181,10 @@ def load_MRI_raw(h5_filename=None, max_coils=None, max_encodes=None, compress_co
                 resp_readout = np.expand_dims(resp_readout, -1)
                 prep_readout = np.expand_dims(prep_readout, -1)
 
-                time = np.tile(time_readout, (1, 1, dcf.shape[2]))
-                resp = np.tile(resp_readout, (1, 1, dcf.shape[2]))
-                ecg = np.tile(ecg_readout, (1, 1, dcf.shape[2]))
-                prep = np.tile(prep_readout, (1, 1, dcf.shape[2]))
+                time = np.tile(time_readout, (1, 1, dcf.shape[-1]))
+                resp = np.tile(resp_readout, (1, 1, dcf.shape[-1]))
+                ecg = np.tile(ecg_readout, (1, 1, dcf.shape[-1]))
+                prep = np.tile(prep_readout, (1, 1, dcf.shape[-1]))
 
                 #prep = prep.flatten()
                 #resp = resp.flatten()
