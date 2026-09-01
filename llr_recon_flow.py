@@ -330,9 +330,29 @@ if __name__ == "__main__":
 
             img.append(sp.to_device(Eh * kdata))
             logger.info(f'Frame {i} took {time.time()-t}')
+    elif args.recon_type == 'cs':
+    
+            img = []
+            for i in range(len(mri_raw.kdata)):
+                logger.info(f'Compressed Sensing Recon : Frame {i}')
+    
+                kdata = array_to_gpu(mri_raw.kdata[i], args.device)
+                dcf = array_to_gpu(mri_raw.dcf[i], args.device)
+                coord = array_to_gpu(mri_raw.coords[i], args.device)
+    
+                print(f'Smaps device = {sp.get_device(smaps)}')
+                print(f'Kdata = device = {sp.get_device(kdata)}')
+                print(f'DCF device = {sp.get_device(dcf)}')
+                print(f'Coord device = {sp.get_device(coord)}')
+    
+                #sense = sp.mri.app.SenseRecon(kdata, smaps, lamda=0, weights=dcf, coord=coord, max_iter=args.max_iter, coil_batch_size=args.coil_batch_size, device=args.device)
+                sense = sp.mri.app.L1WaveletRecon(kdata, smaps, lamda=args.lamda, weights=dcf, coord=coord, max_iter=args.max_iter, coil_batch_size=args.coil_batch_size, device=args.device)
+    
+                print('Run Sense')
+                img.append(sp.to_device(sense.run(), sp.cpu_device))
 
     else:
-        print('Please input recon_type (llr, sense, pils, mslr')
+        print('Please input recon_type (llr, sense, pils, mslr, cs')
 
     # Copy to CPU and reshape
     img = np.stack(img,axis=0)
