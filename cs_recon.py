@@ -12,7 +12,6 @@ import llr_recon_flow
 from flow_processing import MRI_4DFlow
 import sys
 import subprocess
-import add_header_to_flow
 
 sys.path.append('/home/bxa033/Home/CODE/python_recon/flow_recon')  # UPDATE!
 
@@ -109,8 +108,8 @@ if __name__ == '__main__':
                         '--filename',           filename,
                         '--gate_type',          'ecg',
                         '--frames',             '20',
-                        '--recon_type',         'cg',
-                        '--lamda',              '0.1',
+                        '--recon_type',         'cs',
+                        '--lamda',              '0.3',
                         '--max_iter',           '100',
                         '--compress_coils', 
                         '--thresh',             '0.15',

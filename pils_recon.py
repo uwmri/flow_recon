@@ -11,6 +11,8 @@ import logging
 import llr_recon_flow
 from flow_processing import MRI_4DFlow
 import sys
+import subprocess
+
 sys.path.append('/home/bxa033/Home/CODE/python_recon/flow_recon')  # UPDATE!
 
 # gets dir tuple that have scan archives or pfiles
@@ -99,14 +101,26 @@ if __name__ == '__main__':
 
         file_nav = os.path.join(base_folder, 'Dynamic.h5')
 
-        # Just LLR
-        os.system(f'python {recon_script} --filename {filename} '
-                  f' --frames 20'
-                  f' --gate_type ecg'
-                  f' --recon_type pils'
-                  f' --compress_coils --thresh 0.15'
-                  f' --out_filename Images.h5')
+        # Just PILS
+        subprocess.run([sys.executable,
+                        recon_script,
+                        '--filename',           filename,
+                        '--gate_type',          'ecg',
+                        '--frames',             '20',
+                        '--recon_type',         'pils',
+                        '--compress_coils', 
+                        '--thresh',             '0.15',
+                        '--smap_thresh',        '0',
+                        '--out_filename',       'Images.h5'
+                        ], 
+                        check=True
+        )
 
         # Flow processing
-        os.system(f'python {flow_script} --filename {os.path.join(base_folder, "Images.h5")} '
-                  f'--out_filename Flow.h5')
+        subprocess.run([sys.executable,
+                        flow_script,
+                        '--filename', os.path.join(base_folder, "Images.h5"),
+                        '--out_filename', 'Flow.h5'
+                        ], 
+                        check=True
+        )

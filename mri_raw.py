@@ -301,7 +301,7 @@ def pca_coil_compression(kdata=None, axis=0, target_channels=None):
     return kdata
 
 
-def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thresh_maps=True, log_dir=''):
+def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thresh_maps=True, thresh_maps_val=0.015, log_dir=''):
     logger = logging.getLogger('Get sensitivity maps')
 
     # Set to GPU
@@ -482,9 +482,9 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
             # Threshold
             image = xp.abs(image)
             image /= xp.max(image)
-            thresh = 0.015
+            # thresh = 0.015
             # print(thresh)
-            mask = image > thresh
+            mask = image > thresh_maps_val
 
             mask = sp.to_device(mask, sp.cpu_device)
             if len(mask.shape) == 3:

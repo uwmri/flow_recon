@@ -28,6 +28,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--device', type=int, default=0)
     parser.add_argument('--thresh', type=float, default=0.1)
+    parser.add_argument('--smap_thresh', type=float, default=0.08, help='Thresholding for the smaps')
     parser.add_argument('--scale', type=float, default=1.0)
     parser.add_argument('--frames',type=int, default=100, help='Number of time frames')
     parser.add_argument('--frames2', type=int, default=1, help='Number of time frames')
@@ -136,7 +137,11 @@ if __name__ == "__main__":
         xp = sp.Device(args.device).xp
         smaps = xp.ones([mri_raw.Num_Coils] + img_shape, dtype=xp.complex64)
     else:
-        smaps = get_smaps(mri_rawdata=mri_raw, args=args, thresh_maps=False, smap_type=args.smap_type, log_dir=args.out_folder)
+        if args.smap_thresh == 0:
+            smaps = get_smaps(mri_rawdata=mri_raw, args=args, thresh_maps=False, thresh_maps_val=args.smap_thresh, smap_type=args.smap_type, log_dir=args.out_folder)
+        else:
+            smaps = get_smaps(mri_rawdata=mri_raw, args=args, thresh_maps=True, thresh_maps_val=args.smap_thresh, smap_type=args.smap_type, log_dir=args.out_folder)
+    
 
 
     # Put the maps on the GPU

@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import cupy
 import math
 from pathlib import Path
+from add_header_to_flow import add_header_to_flow
 
 
 # Laplacian based phase unwrapping
@@ -449,7 +450,6 @@ if __name__ == "__main__":
             data_group.create_dataset(
                 f"{avg_name}",
                 data=avg * scaling,
-                compression="gzip",
                 dtype = np.int16
             )
 
@@ -458,7 +458,6 @@ if __name__ == "__main__":
                 data_group.create_dataset(
                     f"ph_{t:03d}_{frame_name}",
                     data=dataset[t] * scaling,
-                    compression="gzip",
                     dtype = np.int16
                 )
 
@@ -467,3 +466,5 @@ if __name__ == "__main__":
     print(f"Saved to: {output_file}")
     
     os.rename(input_file, rename_input_file)
+    
+    add_header_to_flow(new_flow_h5=output_file)

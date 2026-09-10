@@ -90,17 +90,18 @@ if __name__ == '__main__':
         code_folder = '/home/bxa033/Home/CODE/python_recon/flow_recon'
         print(f'Code folder {code_folder}')
 
-        recon_script = os.path.join(code_folder, 'llr_recon_flow.py')
-        motion_script = os.path.join(code_folder, 'rigid_correction.py')
-        flow_script = os.path.join(code_folder, 'flow_processing.py')
+        recon_script = os.path.join(code_folder, "llr_recon_flow.py")
+        motion_script = os.path.join(code_folder, "rigid_correction.py")
+        flow_script = os.path.join(code_folder, "flow_processing.py")
+        add_header_script = os.path.join(code_folder, "add_header_to_flow.py")
 
         filename = os.path.realpath(args.filename)  # 'Q:/BBF/MRI_Raw.h5'
         base_folder = os.path.dirname(filename)
         print(
             f'Base folder {base_folder} and filename {os.path.join(base_folder, "MRI_Raw.h5")}')
 
-        file_nav = os.path.join(base_folder, 'Dynamic.h5')
-
+        file_nav = os.path.join(base_folder, "Dynamic.h5")
+    
         # Just LLR
         subprocess.run([sys.executable,
                         recon_script,
@@ -109,16 +110,21 @@ if __name__ == '__main__':
                         '--frames',             '20',
                         '--recon_type',         'llr',
                         '--llr_block_width',    '4', 
-                        '--lamda',              '0.0000001',
-                        '--max_iter',           '50',
+                        '--lamda',              '0.000001',
+                        '--smap_thresh',         '0',
+                        '--max_iter',           '100',
                         '--compress_coils', 
                         '--thresh',             '0.15',
                         '--out_filename',       'Images.h5'
-                        ], check=True)
+                        ], 
+                        check=True
+        )
 
         # Flow processing
         subprocess.run([sys.executable,
                         flow_script,
                         '--filename', os.path.join(base_folder, "Images.h5"),
                         '--out_filename', 'Flow.h5'
-                        ], check=True)
+                        ], 
+                        check=True
+        )
