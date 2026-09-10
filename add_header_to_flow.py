@@ -1,18 +1,15 @@
-#%% This script is used to add in a /Header group and automatically fill it in to copy that of the cpp output so it works with QVT and other scripts
+# This script is used to add in a /Header group and automatically fill it in to copy that of the cpp output so it works with QVT and other scripts
 import h5py
 import numpy as np
 from pathlib import Path
 import re
 
 def add_header_to_flow(new_flow_h5):
-    new_flow_h5 = Path(new_flow_h5)
-    header_txt = new_flow_h5.parent / "pcvipr_header.txt"
-    
-    if not new_flow_h5.exists():
-        raise FileNotFoundError(f"Flow file not found: {new_flow_h5}")
+    flow_path = Path(new_flow_h5)
+    header_txt = flow_path.parent / "pcvipr_header.txt"
     
     if not header_txt.exists():
-        raise FileNotFoundError(f"pcvipr header file not found: {header_txt}")
+        header_txt = "/home/bxa033/Data/CVMRIGroup/Users/bxa033/trtstudyvol2/espirit/pils/pythonRecon/gate_delay_300/pcvipr_header.txt"
     
     values = {}
     
@@ -30,7 +27,7 @@ def add_header_to_flow(new_flow_h5):
             else:
                 values[key] = float(value)
     
-    recon_log = new_flow_h5.parent / "recon.log"
+    recon_log = flow_path.parent / "recon.log"
     median_rr_ms = None
 
     # Parsing through recon.log to fill out /Header
@@ -186,23 +183,5 @@ def add_header_to_flow(new_flow_h5):
         )
         
     print(f"Added /Header to : {new_flow_h5}\n\n")
-            
-new_flow = "/home/bxa033/Data/CVMRIGroup/Users/bxa033/trtstudyvol2/espirit/pils/pythonRecon/gate_delay_300/Flow3D.h5"
-add_header_to_flow(new_flow)
-
-# Comparisons
-ref_flow = "/home/bxa033/Data/CVMRIGroup/Users/bxa033/trtstudyvol2/espirit/pils/cppRecon/standard/Flow.h5"
-with h5py.File(ref_flow, "r") as f:
-    print("Reference encoding matrix is:\n")
-    print(f['/Header/encoding_matrix'][()])
-    print("\n Shape of matrix is:")
-    print(f['/Header/encoding_matrix'].shape)
-
-print("\n\n")
-
-with h5py.File(new_flow, "r") as f:
-    print("New encoding matrix is:\n")
-    print(f['/Header/encoding_matrix'][()])
-    print("\n Shape of matrix is:")
-    print(f['/Header/encoding_matrix'].shape)
-#%%
+    
+add_header_to_flow("Flow3D.h5")
