@@ -87,8 +87,11 @@ def add_header_to_flow(new_flow_h5):
                 match = re.search(r"num of frames =\s*(\d+)", line)
                 if match:
                     values['frames'] = int(match.group(1))
-                    
                     print(f"Found frames with a value of: {values['frames']}")
+                else:
+                    values['frames'] = int(20)
+                        
+                
 
                 # matrixz, matrixy, matrixx from INFO:autofov:Image shape: [{z}, {y}, {x}]
                 # used because pcvipr_header.txt will write in as 320, 320, 320, but python will crop as needed
@@ -119,7 +122,7 @@ def add_header_to_flow(new_flow_h5):
             
     # Write in timeres and median_rr_interval_ms    
     if median_rr_ms is not None:
-        nframes = 20
+        nframes = values['frames']
         values['timeres'] = median_rr_ms / nframes
         values['median_rr_interval_ms'] = median_rr_ms
 
