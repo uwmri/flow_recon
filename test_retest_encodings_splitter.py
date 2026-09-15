@@ -9,48 +9,43 @@ def encSplitter(inputFile, outputImg1, outputImg2, encodeOrder = "interleaf"):
     # Split from MRI_Raw.h5
     def mri_raw_enc_splitter(inputFile, outputImg1, outputImg2, encodeOrder = "interleaf"):
 
+        # Which encoding type to use?
         if encodeOrder == "interleaf":
-
             output_sets = {
                 outputImg1: [0, 5, 2, 7],
                 outputImg2: [4, 1, 6, 3]
             }
 
         elif encodeOrder == "regular":
-
             output_sets = {
                 outputImg1: [0, 1, 2, 3],
                 outputImg2: [4, 5, 6, 7]
             }
 
+        # Fallback issue just in case
         else:
             raise ValueError(
                 f"Unknown encodeOrder: {encodeOrder}. "
                 "Use 'interleaf' or 'regular'."
             )
 
-
         groups_to_split = ["Gating", "Kdata"]
-
-
         with h5py.File(inputFile, "r") as hf:
-
             for output_name, encodes in output_sets.items():
 
+                # Create a map of encodings
                 encode_map = {
                     old_encode: new_encode
                     for new_encode, old_encode in enumerate(encodes)
                 }
-                
-                print(f"Encoding map: {encode_map}")
 
+                # List out what was found
+                print(f"Encoding map: {encode_map}")
                 print(f"\nCreating: {output_name}")
                 print(f"Encodings: {encodes}")
 
                 with h5py.File(output_name, "w") as out_hf:
-
                     for group_name in groups_to_split:
-
                         if group_name not in hf:
                             print(f"/{group_name} not found")
                             continue
@@ -59,8 +54,7 @@ def encSplitter(inputFile, outputImg1, outputImg2, encodeOrder = "interleaf"):
                         output_group = out_hf.create_group(group_name)
 
                         for key in input_group.keys():
-
-                            # Find _E# anywhere in the name
+                            # Find _E# anywhere in the name to split as encoding
                             match = re.search(r"_E(\d+)(?:_|$)", key)
 
                             if match is None:
@@ -68,16 +62,15 @@ def encSplitter(inputFile, outputImg1, outputImg2, encodeOrder = "interleaf"):
                                 continue
 
                             encode_num = int(match.group(1))
-                            
                             if encode_num in encode_map:
                                 new_encode = encode_map[encode_num]
-                                
+
                                 new_key = re.sub(r"_E\d+",
                                                 f"_E{new_encode}",
                                                 key,
                                                 count=1
                                                 )
-                                
+
                                 print(
                                     f"/{group_name}/{key} -> /{group_name}/{new_key}"
                                 )
@@ -86,15 +79,16 @@ def encSplitter(inputFile, outputImg1, outputImg2, encodeOrder = "interleaf"):
                                     key,
                                     output_group,
                                     name=new_key
-                                )    
-                                
+                                ) 
+
+                                # Writing in headers for the Kdata dataset from the original MRI_Raw file
                                 with h5py.File(inputFile, "r") as src, h5py.File(output_name, "r+") as dst:
                                     src_kdata = src['Kdata']
                                     dst_kdata = dst['Kdata']
-                                
+
                                     for key, value in src_kdata.attrs.items():
                                         dst_kdata.attrs[key] = value
-                                        
+
                                     dst_kdata['Kdata'].attrs['Num_Encodings'] = 4
 
     # Split from Images.h5

@@ -404,8 +404,14 @@ if __name__ == "__main__":
         
     """
     
-    output_file = os.path.join(out_folder, "Flow3D.h5")
-    rename_input_file  = os.path.join(out_folder, "Flow4D.h5")
+    # Make filenames more "splitting encoding" friendly by making them specific to the filename (hence .stem)
+    flow_stem = Path(args.out_filename).stem
+    output_file = os.path.join(out_folder, f"{flow_stem}_3D.h5")
+    rename_input_file = os.path.join(out_folder, f"{flow_stem}_4D.h5")
+    
+    # Old format of filenaming
+    # output_file = os.path.join(out_folder, "Flow3D.h5")
+    # rename_input_file  = os.path.join(out_folder, "Flow4D.h5")
 
     # Mapping for each from the python to cpp format
     # Mapping[0] is for ta
