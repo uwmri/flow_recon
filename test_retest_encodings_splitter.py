@@ -2,8 +2,9 @@ from pathlib import Path
 import argparse
 import h5py
 import numpy as np
+import re
 
-def encSplitter(split_type, inputFile, outputImg1, outputImg2, encodeOrder = "interleaf"):
+def encSplitter(inputFile, outputImg1, outputImg2, encodeOrder = "interleaf"):
 
     # Split from MRI_Raw.h5
     def mri_raw_enc_splitter(inputFile, outputImg1, outputImg2, encodeOrder = "interleaf"):
@@ -86,6 +87,15 @@ def encSplitter(split_type, inputFile, outputImg1, outputImg2, encodeOrder = "in
                                     output_group,
                                     name=new_key
                                 )    
+                                
+                                with h5py.File(inputFile, "r") as src, h5py.File(output_name, "r+") as dst:
+                                    src_kdata = src['Kdata']
+                                    dst_kdata = dst['Kdata']
+                                
+                                    for key, value in src_kdata.attrs.items():
+                                        dst_kdata.attrs[key] = value
+                                        
+                                    dst_kdata['Kdata'].attrs['Num_Encodings'] = 4
 
     # Split from Images.h5
     def images_encoding_splitter(inputFile, outputImg1, outputImg2, encodeOrder="interleaf"):
@@ -151,9 +161,9 @@ def encSplitter(split_type, inputFile, outputImg1, outputImg2, encodeOrder = "in
     input_lower = str(inputFile).lower()
 
     if "mri_raw" in input_lower:
-        mri_raw_enc_splitter(inputFile, outputImg1, outputImg2, encodeOrder = "interleaf")
+        mri_raw_enc_splitter(inputFile, outputImg1, outputImg2, encodeOrder)
     elif "images" in input_lower:
-        images_encoding_splitter(inputFile, outputImg1, outputImg2, encodeOrder = "interleaf")
+        images_encoding_splitter(inputFile, outputImg1, outputImg2, encodeOrder)
     else:
         raise ValueError(f"Could not determine input file type from: {inputFile}. Expected filename to contain either 'mri_raw' or 'images' ")
 

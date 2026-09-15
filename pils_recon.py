@@ -12,6 +12,7 @@ import llr_recon_flow
 from flow_processing import MRI_4DFlow
 import sys
 import subprocess
+from test_retest_encodings_splitter import encSplitter
 
 sys.path.append('/home/bxa033/Home/CODE/python_recon/flow_recon')  # UPDATE!
 
@@ -85,6 +86,7 @@ if __name__ == '__main__':
         parser.add_argument('--get_motion_navigators',
                             dest='get_motion_navigators', action='store_true')
         parser.set_defaults(get_motion_navigators=True)
+        parser.add_argument('--split_encodings', default=False)
         args = parser.parse_args()
 
         code_folder = '/home/bxa033/Home/CODE/python_recon/flow_recon'
@@ -101,26 +103,32 @@ if __name__ == '__main__':
 
         file_nav = os.path.join(base_folder, 'Dynamic.h5')
 
-        # Just PILS
-        subprocess.run([sys.executable,
-                        recon_script,
-                        '--filename',           filename,
-                        '--gate_type',          'ecg',
-                        '--frames',             '20',
-                        '--recon_type',         'pils',
-                        '--compress_coils', 
-                        '--thresh',             '0.15',
-                        '--smap_thresh',        '0',
-                        '--out_filename',       'Images.h5'
-                        ], 
-                        check=True
-        )
+        # Need to find a way to split encodings before reconstruction, aka from MRI_Raw.h5
+
+        # # Just PILS
+        # subprocess.run([sys.executable,
+        #                 recon_script,
+        #                 '--filename',           filename,
+        #                 '--gate_type',          'ecg',
+        #                 '--frames',             '20',
+        #                 '--recon_type',         'pils',
+        #                 '--compress_coils', 
+        #                 '--thresh',             '0.15',
+        #                 '--smap_thresh',        '0.08',
+        #                 '--out_filename',       'Images.h5'
+        #                 ], 
+        #                 check=True
+        # )
+
+        # Split encodings before Flow processing
+        if args.split_encodings:
+            encSplitter(inputFile='Images.h5', outputImg1='Images1.h5', outputImg2='Images2.h5', encodeOrder='interleaf')
 
         # Flow processing
         subprocess.run([sys.executable,
                         flow_script,
-                        '--filename', os.path.join(base_folder, "Images.h5"),
-                        '--out_filename', 'Flow.h5'
+                        '--filename', os.path.join(base_folder, "Images1.h5"),
+                        '--out_filename', 'Flow1.h5'
                         ], 
                         check=True
         )
