@@ -87,11 +87,19 @@ if __name__ == '__main__':
                             dest='get_motion_navigators', action='store_true')
         parser.set_defaults(get_motion_navigators=True)
         parser.add_argument('--split_encodings', default=False)
+        parser.add_argument('--when_split_enc', default=None, help='Split encodings before or after processing Images.h5?', choices=['before', 'after'])
         args = parser.parse_args()
+        
+        # If splitting encodings, must list when to split them
+        if args.split_encodings and args.when_split_enc is None:
+            parser.error(
+                '--when_split_enc must be specified when --split_encodings is used'
+            )
 
         code_folder = '/home/bxa033/Home/CODE/python_recon/flow_recon'
         print(f'Code folder {code_folder}')
 
+        # Which scripts to use
         recon_script = os.path.join(code_folder, 'llr_recon_flow.py')
         motion_script = os.path.join(code_folder, 'rigid_correction.py')
         flow_script = os.path.join(code_folder, 'flow_processing.py')
@@ -103,32 +111,108 @@ if __name__ == '__main__':
 
         file_nav = os.path.join(base_folder, 'Dynamic.h5')
 
-        # Need to find a way to split encodings before reconstruction, aka from MRI_Raw.h5
-
-        # # Just PILS
-        # subprocess.run([sys.executable,
-        #                 recon_script,
-        #                 '--filename',           filename,
-        #                 '--gate_type',          'ecg',
-        #                 '--frames',             '20',
-        #                 '--recon_type',         'pils',
-        #                 '--compress_coils', 
-        #                 '--thresh',             '0.15',
-        #                 '--smap_thresh',        '0.08',
-        #                 '--out_filename',       'Images.h5'
-        #                 ], 
-        #                 check=True
-        # )
-
-        # Split encodings before Flow processing
+        # If we want to split encodings, run enc splitter before or after
         if args.split_encodings:
-            encSplitter(inputFile='Images.h5', outputImg1='Images1.h5', outputImg2='Images2.h5', encodeOrder='interleaf')
+    
+            # Split encodings during MRI_Raw.h5 and then produce 2 Images.h5 and 2 Flow.h5
+            if args.when_split_enc == 'before':
+                
+                raw1 = os.path.join(base_folder, 'MRI_Raw1.h5')
+                raw2 = os.path.join(base_folder, 'MRI_Raw2.h5')
+                
+                # Split MRI_Raw.h5 before Images.h5 creation
+                encSplitter(inputFile='MRI_Raw.h5', outputImg1=raw1, outputImg2=raw2, encodeOrder='interleaf')
+                
+                for raw_file, image_file, flow_file in [
+                    (raw1, 'Images1.h5', 'Flow1.h5'),
+                    (raw2, 'Images2.h5', 'Flow2.h5')
+                ]:
 
-        # Flow processing
-        subprocess.run([sys.executable,
-                        flow_script,
-                        '--filename', os.path.join(base_folder, "Images1.h5"),
-                        '--out_filename', 'Flow1.h5'
-                        ], 
-                        check=True
-        )
+                    # Just PILS
+                    subprocess.run([sys.executable,
+                                    recon_script,
+                                    '--filename',           raw_file,
+                                    '--gate_type',          'ecg',
+                                    '--frames',             '20',
+                                    '--recon_type',         'pils',
+                                    '--compress_coils', 
+                                    '--thresh',             '0.15',
+                                    '--smap_thresh',        '0.08',
+                                    '--out_filename',       image_file
+                                    ], 
+                                    check=True
+                    )
+
+                    # Flow processing
+                    subprocess.run([sys.executable,
+                                    flow_script,
+                                    '--filename', os.path.join(base_folder, image_file),
+                                    '--out_filename', flow_file
+                                    ], 
+                                    check=True
+                    )
+
+            # Split encodings after Images.h5 into 2 then create 2 Flow.h5 files
+            elif args.when_split_enc == 'after':
+                
+                # Just PILS
+                subprocess.run([sys.executable,
+                                recon_script,
+                                '--filename',           filename,
+                                '--gate_type',          'ecg',
+                                '--frames',             '20',
+                                '--recon_type',         'pils',
+                                '--compress_coils', 
+                                '--thresh',             '0.15',
+                                '--smap_thresh',        '0.08',
+                                '--out_filename',       'Images.h5'
+                                ], 
+                                check=True
+                )
+                
+                image1 = os.path.join(base_folder, 'Images1.h5')
+                image2 = os.path.join(base_folder, 'Images2.h5')
+
+                # Split Images.h5 before Flow processing
+                encSplitter(inputFile=os.path.join(base_folder, 'Images.h5'), outputImg1=image1, outputImg2=image2, encodeOrder='interleaf')
+                
+                for image_file, flow_file in [
+                    (image1, 'Flow1.h5'),
+                    (image2, 'Flow2.h5')
+                ]:
+
+                    # Flow processing
+                    subprocess.run([sys.executable,
+                                    flow_script,
+                                    '--filename', os.path.join(base_folder, image_file),
+                                    '--out_filename', flow_file
+                                    ], 
+                                    check=True
+                    )
+        
+        # Don't split encodings
+        else:
+            
+            # Just PILS
+            subprocess.run([sys.executable,
+                            recon_script,
+                            '--filename',           filename,
+                            '--gate_type',          'ecg',
+                            '--frames',             '20',
+                            '--recon_type',         'pils',
+                            '--compress_coils', 
+                            '--thresh',             '0.15',
+                            '--smap_thresh',        '0.08',
+                            '--out_filename',       'Images.h5'
+                            ], 
+                            check=True
+            )
+
+            # Flow processing
+            subprocess.run([sys.executable,
+                            flow_script,
+                            '--filename', os.path.join(base_folder, "Images.h5"),
+                            '--out_filename', 'Flow.h5'
+                            ], 
+                            check=True
+            )
