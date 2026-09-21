@@ -280,7 +280,8 @@ class MRI_4DFlow:
     :return: Nt x Nz x Ny x Nx x Nencode x 1
     """
     def update_magnitude(self):
-        self.magnitude = sqrt( sum( abs(self.signal)**2 , -1))
+        # self.magnitude = sqrt( sum( abs(self.signal)**2 , -1))
+        self.magnitude = np.linalg.norm(self.signal, ord=2, axis=-1)
 
     """
     :return: Nt x Nz x Ny x Nx x Nencode x 1
@@ -298,7 +299,7 @@ class MRI_4DFlow:
         vmag = sqrt( sum( self.velocity_estimate ** 2, axis=-1))
         vmag_scaled = np.minimum((vmag / float(self.Venc)) * 2.0, 1.0)
         
-        self.angiogram = (self.magnitude * np.sin((math.pi / 2.0) * vmag_scaled)).astype(np.float32)
+        self.angiogram = (self.magnitude**2 * np.sin((math.pi / 2.0) * vmag_scaled)).astype(np.float32)
 
         
     def thresh_angiogram(self, mag_thresh=0.08, cd_thresh=0.3):
