@@ -81,15 +81,17 @@ def encSplitter(inputFile, outputImg1, outputImg2, encodeOrder = "interleaf"):
                                     name=new_key
                                 ) 
 
-                                # Writing in headers for the Kdata dataset from the original MRI_Raw file
-                                with h5py.File(inputFile, "r") as src, h5py.File(output_name, "r+") as dst:
-                                    src_kdata = src['Kdata']
-                                    dst_kdata = dst['Kdata']
 
-                                    for key, value in src_kdata.attrs.items():
-                                        dst_kdata.attrs[key] = value
+                    # Writing in headers for the Kdata dataset from the original MRI_Raw file
+                    if 'Kdata' in hf and 'Kdata' in out_hf:
+                        src_kdata = hf['Kdata']
+                        dst_kdata = out_hf['Kdata']
 
-                                    dst_kdata['Kdata'].attrs['Num_Encodings'] = 4
+                        for key, value in src_kdata.attrs.items():
+                            dst_kdata.attrs[key] = value
+
+                    if 'Kdata' in dst_kdata:
+                        dst_kdata['Kdata'].attrs['Num_Encodings'] = 4
 
     # Split from Images.h5
     def images_encoding_splitter(inputFile, outputImg1, outputImg2, encodeOrder="interleaf"):
@@ -181,3 +183,46 @@ if __name__ == "__main__":
         args.output2,
         args.encode_order
     )
+    
+#%%
+import h5py
+import numpy as np
+import shutil
+
+input_file = "/home/bxa033/Data/CVMRIGroup/Users/bxa033/trtstudyvol2/espirit/pils/pythonRecon/8enc/cpp_split/im1_retest_skip_1463/MRI_Raw.h5"
+output_file = "/home/bxa033/Data/CVMRIGroup/Users/bxa033/trtstudyvol2/espirit/pils/pythonRecon/8enc/cpp_split/im1_retest_skip_1463/MRI_Raw_proper_arrange.h5"
+
+proper_order = [0, 2, 1, 3]
+
+# Make a full copy first
+shutil.copy2(input_file, output_file)
+
+with h5py.File(output_file, "r+") as hf:
+
+    for group_name in ["Kdata", "Gating"]:
+
+        group = hf[group_name]
+
+        # Find everything belonging to E1
+        e1_names = [name for name in group.keys() if "_E1" in name]
+
+        for e1_name in e1_names:
+
+            # Corresponding E2 dataset
+            e2_name = e1_name.replace("_E1", "_E2")
+
+            if e2_name not in group:
+                print(f"Skipping: {e1_name}, no matching {e2_name}")
+                continue
+
+            # Temporary name so we don't overwrite anything
+            temp_name = e1_name.replace("_E1", "_ETEMP")
+
+            group.move(e1_name, temp_name)
+            group.move(e2_name, e1_name)
+            group.move(temp_name, e2_name)
+
+            print(f"Swapped {e1_name} <-> {e2_name}")
+
+print("Done.")
+#%%
