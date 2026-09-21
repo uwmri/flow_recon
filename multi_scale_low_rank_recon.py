@@ -53,7 +53,7 @@ class MultiScaleLowRankRecon(object):
     """
     def __init__(self, ksp, coord, dcf, mps, lamda,
                  blk_widths=[32, 64, 128], alpha=1, beta=0.5, sgw=None,
-                 device=sp.cpu_device, comm=None, seed=0,
+                 device=sp.Device(0), comm=None, seed=0,
                  max_epoch=120, decay_epoch=30, max_power_iter=5,
                  show_pbar=True, num_encodings=1, log_dir=None, out_iter_mon=True, hanning_window=False):
         self.ksp = ksp
@@ -370,8 +370,8 @@ class MultiScaleLowRankRecon(object):
             if self.comm is None or self.comm.rank == 0:
                 return MultiScaleLowRankImage(
                     (self.T, self.num_encodings) + self.img_shape,
-                    [sp.to_device(L_j, sp.cpu_device) for L_j in self.L],
-                    [sp.to_device(R_j, sp.cpu_device) for R_j in self.R])
+                    [sp.to_device(L_j, sp.Device(0)) for L_j in self.L],
+                    [sp.to_device(R_j, sp.Device(0)) for R_j in self.R])
 
     def _sgd(self):
         for self.epoch in range(self.max_epoch):
@@ -392,7 +392,7 @@ class MultiScaleLowRankRecon(object):
                 img_t = 0
                 for j in range(self.num_scales):
                     img_t += self.B[j](self.L[j][e] * self.R[j][t])
-                im = sp.to_device(img_t, sp.cpu_device)
+                im = sp.to_device(img_t, sp.Device(0))
 
                 # Form Dynamic images
                 im_y = []
@@ -405,7 +405,7 @@ class MultiScaleLowRankRecon(object):
                         im_slice = img_t[:, img_t.shape[1]//2, :]
                     elif len(img_t.shape) == 2:
                         im_slice = img_t
-                    im_y.append(sp.to_device(im_slice, sp.cpu_device))
+                    im_y.append(sp.to_device(im_slice, sp.Device(0)))
                 im_y = np.stack(im_y)
 
                 if self.out_iter_mon:

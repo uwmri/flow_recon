@@ -21,7 +21,7 @@ def get_qrotation(params):
     r = R.from_quat([0, 0, np.sin(np.pi / 4), np.cos(np.pi / 4)])
 
 
-def get_rotation(shifts=[0, 0, 0], rotation=[0, 0, 0], device=sp.cpu_device):
+def get_rotation(shifts=[0, 0, 0], rotation=[0, 0, 0], device=sp.Device(0)):
     xp = device.xp
     #print(shifts)
     #print(rotation)
@@ -195,8 +195,8 @@ def rigid_registration( moving=None, fixed=None):
 
         do_plot = True
         if do_plot:
-            moving_cpu = sp.to_device(moved, sp.cpu_device)
-            fixed_cpu = sp.to_device(fixed, sp.cpu_device)
+            moving_cpu = sp.to_device(moved, sp.Device(0))
+            fixed_cpu = sp.to_device(fixed, sp.Device(0))
             plt.figure()
             plt.imshow(moving_cpu[64,:,:]-fixed_cpu[64,:,:],cmap='gray')
             plt.show()
@@ -305,9 +305,9 @@ def main():
     print(f'BackI = {xp.sum((moved_backI - fixed) ** 2)}')
 
     '''
-    moved = sp.to_device(moved,sp.cpu_device)
-    moved_back = sp.to_device(moved_back, sp.cpu_device)
-    fixed = sp.to_device(fixed,sp.cpu_device)
+    moved = sp.to_device(moved,sp.Device(0))
+    moved_back = sp.to_device(moved_back, sp.Device(0))
+    fixed = sp.to_device(fixed,sp.Device(0))
     plt.figure()
     plt.subplot(121)
     plt.imshow(np.abs(moved[64, :, :]-fixed[64, :, :]))

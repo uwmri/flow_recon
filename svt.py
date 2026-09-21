@@ -219,7 +219,7 @@ class SingularValueThresholdingNumba(sp.prox.Prox):
         input = initial_device.xp.reshape(input, self.new_shape)
 
         # Put on CPU
-        input = sp.to_device(input, sp.cpu_device)
+        # input = sp.to_device(input, sp.Device(0))
 
         #print(f'Pre {np.linalg.norm(input)}')
         # SVT thresholding
@@ -404,7 +404,7 @@ class SingularValueThresholding(sp.prox.Prox):
 
         # t = time.time()
         # Put on CPU
-        # input = sp.to_device(input, sp.cpu_device)
+        # input = sp.to_device(input, sp.Device(0))
 
         # SVT thresholding
         # input_avg = np.zeros(input.shape,dtype=np.complex64)
@@ -443,7 +443,7 @@ class SingularValueThresholding(sp.prox.Prox):
 
             # input = initial_device.xp.roll(input, block_shift, axis=(-3, -2, -1))
             # Put on CPU
-            # input = sp.to_device(input, sp.cpu_device)
+            # input = sp.to_device(input, sp.Device(0))
             input = svt_torch_batch(input, bthresh, tuple(self.block_size), tuple(self.block_stride),
                                     self.num_encodes, self.frames, tuple(self.block_shape))
             # Return on same device
@@ -478,7 +478,7 @@ class SingularValueThresholding(sp.prox.Prox):
 
                 # input = initial_device.xp.roll(input, block_shift, axis=(-3, -2, -1))
                 # Put on CPU
-                # input = sp.to_device(input, sp.cpu_device)
+                # input = sp.to_device(input, sp.Device(0))
 
                 # input = svt_torch_batch_test(x=input, lamda=bthresh, blk_size=self.block_size,
                 #                             blk_stride=tuple(self.block_stride),

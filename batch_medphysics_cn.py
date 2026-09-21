@@ -216,13 +216,13 @@ if __name__ == '__main__':
             img = llr_recon_flow.BatchedSenseRecon(mri_raw.kdata, mps=smaps, weights=mri_raw.dcf, coord=mri_raw.coords,
                                     device=sp.Device(args.device), lamda=args.lamda, num_enc=num_enc, batched_iter=args.max_iter,
                                     coil_batch_size=1, max_iter=args.max_iter, gate_type=args.gate_type,fast_maxeig=args.fast_maxeig).run()
-            img = sp.to_device(img, sp.cpu_device)
+            img = sp.to_device(img, sp.Device(0))
 
             # Copy back to make easy
-            smaps = sp.to_device(smaps, sp.cpu_device)
+            smaps = sp.to_device(smaps, sp.Device(0))
             smaps_mag = np.abs(smaps)
 
-            img = sp.to_device(img, sp.cpu_device)
+            img = sp.to_device(img, sp.Device(0))
             img_mag = np.abs(img)
             img_phase = np.angle(img)
 
@@ -361,13 +361,13 @@ if __name__ == '__main__':
             img = llr_recon_flow.BatchedSenseRecon(mri_raw.kdata, mps=smaps, weights=mri_raw.dcf, coord=mri_raw.coords,
                                     device=sp.Device(args.device), lamda=args.lamda, num_enc=num_enc, batched_iter=args.max_iter,
                                     coil_batch_size=1, max_iter=args.max_iter, gate_type=args.gate_type,fast_maxeig=args.fast_maxeig).run()
-            img = sp.to_device(img, sp.cpu_device)
+            img = sp.to_device(img, sp.Device(0))
 
             # Copy back to make easy
-            smaps = sp.to_device(smaps, sp.cpu_device)
+            smaps = sp.to_device(smaps, sp.Device(0))
             smaps_mag = np.abs(smaps)
 
-            img = sp.to_device(img, sp.cpu_device)
+            img = sp.to_device(img, sp.Device(0))
             img_mag = np.abs(img)
             img_phase = np.angle(img)
 

@@ -164,13 +164,13 @@ if __name__ == "__main__":
                                 device=sp.Device(args.device), lamda=args.lamda, num_enc=num_enc,
                                 coil_batch_size=None, max_iter=args.max_iter).run()
 
-        img = sp.to_device(img, sp.cpu_device)
+        img = sp.to_device(img, sp.Device(0))
 
         # Copy back to make easy
-        smaps = sp.to_device(smaps, sp.cpu_device)
+        smaps = sp.to_device(smaps, sp.Device(0))
         smaps_mag = np.abs(smaps)
 
-        img = sp.to_device(img, sp.cpu_device)
+        img = sp.to_device(img, sp.Device(0))
         img_mag = np.abs(img)
         img_phase = np.angle(img)
 

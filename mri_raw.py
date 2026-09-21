@@ -309,7 +309,7 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
         device = sp.Device(0)
 
     op_device = device
-    store_device = sp.cpu_device
+    store_device = sp.Device(0)
 
     # Reference for shortcut
     coord = mri_rawdata.coords[0]
@@ -338,11 +338,11 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
             ksp[c] = sp.nufft_adjoint(ksp_t, coord_t, img_shape)
 
         # Put onto CPU due to memory issues in ESPiRIT
-        ksp = sp.to_device(ksp, sp.cpu_device)
+        ksp = sp.to_device(ksp, sp.Device(0))
 
         # Espirit Cal
         smaps = sp.mri.app.EspiritCalib(ksp, calib_width=24, thresh=0.02, kernel_width=6, crop=0.0, max_iter=100,
-                                        device=sp.cpu_device, show_pbar=True).run()
+                                        device=sp.Device(0), show_pbar=True).run()
 
     elif smap_type == 'walsh':
 
@@ -507,7 +507,7 @@ def get_smaps(mri_rawdata=None, args=None, smap_type='jsense', device=None, thre
 
     smaps_cpu = sp.to_device(smaps, store_device)
     # if thresh_maps:
-    #     mask_cpu = sp.to_device(mask, sp.cpu_device)
+    #     mask_cpu = sp.to_device(mask, sp.Device(0))
 
     # Export to file
     out_name = os.path.join(log_dir,'SenseMaps.h5')
@@ -545,7 +545,7 @@ def sos_recon(mri_rawdata=None, device=None):
 
     img = xp.sqrt(img)
 
-    img = sp.to_device(img, sp.cpu_device)
+    img = sp.to_device(img, sp.Device(0))
 
     return img
 
@@ -565,7 +565,7 @@ def pils_recon(mri_rawdata=None, smaps=None, device=None):
                                      coil_batch_size=1)
         img = pils.run()
 
-    img = sp.to_device(img, sp.cpu_device)
+    img = sp.to_device(img, sp.Device(0))
 
     return (img)
 

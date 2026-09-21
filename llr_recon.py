@@ -61,7 +61,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
     """
 
     def __init__(self, y, mps, lamda=0, weights=None, num_enc=0, gate_type='time',
-                 coord=None, device=None, store_device=sp.cpu_device, coil_batch_size=None,
+                 coord=None, device=None, store_device=sp.Device(0), coil_batch_size=None,
                  comm=None, show_pbar=True, max_power_iter=40, batched_iter=50, fast_maxeig=False,
                  composite_init=True, block_width=16, log_folder=None, **kwargs):
 
@@ -189,7 +189,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
 
             y *= y_scale
 
-            composite = sp.to_device(composite, sp.cpu_device)
+            composite = sp.to_device(composite, sp.Device(0))
             x = np.vstack([composite for i in range(self.num_images)])
         else:
              # Multiply by sqrt(weights)
@@ -255,7 +255,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
             out_slice = int((self.x.shape[0] / self.frames / self.num_encodes ) // 2)
             Xiter = xp.copy( self.x[out_slice])
 
-        Xiter = sp.to_device(Xiter, sp.cpu_device)
+        Xiter = sp.to_device(Xiter, sp.Device(0))
         Xiter = np.squeeze(Xiter)
         Xiter = np.expand_dims(Xiter, axis=0)
 
@@ -314,6 +314,7 @@ class BatchedSenseRecon(sp.app.LinearLeastSquares):
 
 
     def _output(self):
-        self.x = sp.to_device(self.x, sp.cpu_device)
+        # self.x = sp.to_device(self.x, sp.Device(0))
+        self.x = sp.to_device(self.x, sp.Device(0))
         self.x = np.reshape(self.x, (self.frames, self.num_encodes,-1) + self.x.shape[1:] )
         return self.x

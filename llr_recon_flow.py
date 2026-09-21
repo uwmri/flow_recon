@@ -308,7 +308,7 @@ if __name__ == "__main__":
             #sense = sp.mri.app.L1WaveletRecon(kdata, smaps, lamda=1e-1, weights=dcf, coord=coord, max_iter=50, coil_batch_size=1, device=args.device)
 
             print('Run Sense')
-            img.append(sp.to_device(sense.run(), sp.cpu_device))
+            img.append(sp.to_device(sense.run(), sp.Device(0)))
     elif args.recon_type == 'pils':
         logger.info('PILS Recon')
         img = []
@@ -355,7 +355,7 @@ if __name__ == "__main__":
             # sense = sp.mri.app.TotalVariationRecon(kdata, smaps, lamda=args.lamda, weights=dcf, coord=coord, max_iter=args.max_iter, coil_batch_size=args.coil_batch_size, device=args.device)
             
             print('Run Compressed Sensing')
-            img.append(sp.to_device(sense.run(), sp.cpu_device))
+            img.append(sp.to_device(sense.run(), sp.Device(0)))
     elif args.recon_type == 'tv':
 
         img = []
@@ -376,14 +376,14 @@ if __name__ == "__main__":
             sense = sp.mri.app.TotalVariationRecon(kdata, smaps, lamda=args.lamda, weights=dcf, coord=coord, max_iter=args.max_iter, coil_batch_size=args.coil_batch_size, device=args.device)
             
             print('Run Total Variation')
-            img.append(sp.to_device(sense.run(), sp.cpu_device))
+            img.append(sp.to_device(sense.run(), sp.Device(0)))
 
     else:
         print('Please input recon_type (llr, sense, pils, mslr, cs, tv')
 
     # Copy to CPU and reshape
     img = np.stack(img,axis=0)
-    img = sp.to_device(img, sp.cpu_device)
+    img = sp.to_device(img, sp.Device(0))
     img = np.reshape(img, (args.frames*args.frames2, -1) + img.shape[1:])
     logger.info(f'Image shape {img.shape}')
 

@@ -35,7 +35,7 @@ class MultiScaleLowRankImage(object):
         self.blk_widths = [L[j][0].shape[-self.D:] for j in range(self.J)]
         self.L = L
         self.R = R
-        self.device = sp.cpu_device
+        self.device = sp.Device(0)
         self.hanning_window = hanning_window
         self.t_map = [t // self.num_encodings for t in range(self.total_images)]
         self.e_map = [t % self.num_encodings for t in range(self.total_images)]
@@ -91,7 +91,7 @@ class MultiScaleLowRankImage(object):
                 B_j = self._get_B(j)
                 img_t += B_j(self.L[j][e] * self.R[j][t])[idx]
 
-        img_t = sp.to_device(img_t, sp.cpu_device)
+        img_t = sp.to_device(img_t, sp.Device(0))
         return img_t
 
     def __getitem__(self, index):
