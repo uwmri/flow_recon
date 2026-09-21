@@ -109,8 +109,8 @@ if __name__ == '__main__':
                         '--gate_type',          'ecg',
                         '--frames',             '20',
                         '--recon_type',         'tv',
-                        '--lamda',              '0.3',
-                        '--max_iter',           '100',
+                        '--lamda',              '0.1',
+                        '--max_iter',           '50',
                         '--compress_coils', 
                         '--thresh',             '0.15',
                         '--out_filename',       'Images.h5'

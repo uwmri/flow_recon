@@ -112,7 +112,7 @@ if __name__ == '__main__':
                         '--llr_block_width',    '4', 
                         '--lamda',              '0.000001',
                         '--smap_thresh',        '0.08',
-                        '--max_iter',           '50',
+                        '--max_iter',           '100',
                         '--compress_coils', 
                         '--thresh',             '0.15',
                         '--out_filename',       'Images.h5'

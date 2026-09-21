@@ -12,7 +12,7 @@ import llr_recon_flow
 from flow_processing import MRI_4DFlow
 import sys
 import subprocess
-from test_retest_encodings_splitter import encSplitter
+# from test_retest_encodings_splitter import encSplitter
 
 sys.path.append('/home/bxa033/Home/CODE/python_recon/flow_recon')  # UPDATE!
 
@@ -86,8 +86,9 @@ if __name__ == '__main__':
         parser.add_argument('--get_motion_navigators',
                             dest='get_motion_navigators', action='store_true')
         parser.set_defaults(get_motion_navigators=True)
-        parser.add_argument('--split_encodings', default=False)
+        parser.add_argument('--split_encodings', action='store_true')
         parser.add_argument('--when_split_enc', default=None, help='Split encodings before or after processing Images.h5?', choices=['before', 'after'])
+        parser.add_argument('--no_flow_recon', help='Skip flow processing', action='store_true')
         args = parser.parse_args()
         
         # If splitting encodings, must list when to split them
@@ -121,7 +122,7 @@ if __name__ == '__main__':
                 raw2 = os.path.join(base_folder, 'MRI_Raw2.h5')
                 
                 # Split MRI_Raw.h5 before Images.h5 creation
-                encSplitter(inputFile='MRI_Raw.h5', outputImg1=raw1, outputImg2=raw2, encodeOrder='interleaf')
+                # encSplitter(inputFile='MRI_Raw.h5', outputImg1=raw1, outputImg2=raw2, encodeOrder='interleaf')
                 
                 for raw_file, image_file, flow_file in [
                     (raw1, 'Images1.h5', 'Flow1.h5'),
@@ -143,14 +144,15 @@ if __name__ == '__main__':
                                     check=True
                     )
 
-                    # Flow processing
-                    subprocess.run([sys.executable,
-                                    flow_script,
-                                    '--filename', os.path.join(base_folder, image_file),
-                                    '--out_filename', flow_file
-                                    ], 
-                                    check=True
-                    )
+                    if args.no_flow_recon is None:
+                        # Flow processing
+                        subprocess.run([sys.executable,
+                                        flow_script,
+                                        '--filename', os.path.join(base_folder, image_file),
+                                        '--out_filename', flow_file
+                                        ], 
+                                        check=True
+                        )
 
             # Split encodings after Images.h5 into 2 then create 2 Flow.h5 files
             elif args.when_split_enc == 'after':
@@ -174,21 +176,22 @@ if __name__ == '__main__':
                 image2 = os.path.join(base_folder, 'Images2.h5')
 
                 # Split Images.h5 before Flow processing
-                encSplitter(inputFile=os.path.join(base_folder, 'Images.h5'), outputImg1=image1, outputImg2=image2, encodeOrder='interleaf')
+                # encSplitter(inputFile=os.path.join(base_folder, 'Images.h5'), outputImg1=image1, outputImg2=image2, encodeOrder='interleaf')
                 
                 for image_file, flow_file in [
                     (image1, 'Flow1.h5'),
                     (image2, 'Flow2.h5')
                 ]:
 
-                    # Flow processing
-                    subprocess.run([sys.executable,
-                                    flow_script,
-                                    '--filename', os.path.join(base_folder, image_file),
-                                    '--out_filename', flow_file
-                                    ], 
-                                    check=True
-                    )
+                    if args.no_flow_recon is None:
+                        # Flow processing
+                        subprocess.run([sys.executable,
+                                        flow_script,
+                                        '--filename', os.path.join(base_folder, image_file),
+                                        '--out_filename', flow_file
+                                        ], 
+                                        check=True
+                        )
         
         # Don't split encodings
         else:
@@ -207,12 +210,13 @@ if __name__ == '__main__':
                             ], 
                             check=True
             )
-
-            # Flow processing
-            subprocess.run([sys.executable,
-                            flow_script,
-                            '--filename', os.path.join(base_folder, "Images.h5"),
-                            '--out_filename', 'Flow.h5'
-                            ], 
-                            check=True
-            )
+            
+            if args.no_flow_recon is None:
+                # Flow processing
+                subprocess.run([sys.executable,
+                                flow_script,
+                                '--filename', os.path.join(base_folder, "Images.h5"),
+                                '--out_filename', 'Flow.h5'
+                                ], 
+                                check=True
+                )
