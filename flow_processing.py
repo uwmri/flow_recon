@@ -297,11 +297,17 @@ class MRI_4DFlow:
         if self.velocity_estimate is None:
             self.solve_for_velocity()
 
-        vmag = np.sqrt(np.mean(np.abs(self.velocity_estimate)**2, -1))
-        self.angiogram = self.magnitude*np.sin(math.pi/2.0*vmag/self.Venc)
+        # vmag = np.sqrt(np.mean(np.abs(self.velocity_estimate)**2, -1))
+        # self.angiogram = self.magnitude*np.sin(math.pi/2.0*vmag/self.Venc)
+        
+        vmag = np.clip(np.sqrt(np.mean(self.velocity_estimate**2, -1)) * 2 / self.Venc, 0, 1)
+        self.angiogram = self.magnitude*(np.sin(math.pi/2.0*vmag))
+        
+        
+ 
 
-        idx = np.where(vmag > self.Venc)
-        self.angiogram[idx] = self.magnitude[idx]
+        # idx = np.where(vmag > self.Venc)
+        # self.angiogram[idx] = self.magnitude[idx]
 
 
 if __name__ == "__main__":
@@ -314,6 +320,7 @@ if __name__ == "__main__":
                         help='filename for data (e.g. FullRecon.h5)', default=None)
     parser.add_argument(
         '--logdir', type=str, help='folder to log files to, default is current directory')
+    parser.add_argument('--no_cpp_format', help='Make Flow_3D.h5 in cpp format', action='store_true')
     parser.add_argument('--out_folder', type=str, default=None)
     parser.add_argument('--out_filename', type=str, default='Flow.h5')
 
@@ -406,6 +413,9 @@ if __name__ == "__main__":
     
     # Make filenames more "splitting encoding" friendly by making them specific to the filename (hence .stem)
     flow_stem = Path(args.out_filename).stem
+    
+    ta_flow = os.path.join(out_folder, "Flow_average.h5")
+    tr_flow = input_file
     output_file = os.path.join(out_folder, f"{flow_stem}_3D.h5")
     rename_input_file = os.path.join(out_folder, f"{flow_stem}_4D.h5")
     
@@ -417,60 +427,200 @@ if __name__ == "__main__":
     # Mapping[0] is for ta
     # Mapping[1] is for tr
     # Mapping[2] is scaling factor
-    dataset_mapping = {
-        "ANGIO":      ("CD", "cd", 32000),
-        "MAG":        ("MAG", "mag", 32000),
-        "VX":         ("comp_vd_1", "vd_1", 10),
-        "VY":         ("comp_vd_2", "vd_2", 10),
-        "VZ":         ("comp_vd_3", "vd_3", 10),
-    }
-
-    with h5py.File(input_file, "r") as fin, \
-            h5py.File(output_file, "w") as fout:
-
-        data_group = fout.create_group("Data")
-
-        for input_name, (avg_name, frame_name, scaling) in dataset_mapping.items():
-
-            dataset_path = f"/{input_name}"
-
-            if dataset_path not in fin:
-                print(f"Skipping {dataset_path}: not found")
-                continue
-
-            dataset = fin[dataset_path]
-
-            if dataset.ndim != 4:
-                print(
-                    f"Skipping {dataset_path}: expected (t,z,y,x), "
-                    f"got {dataset.shape}"
-                )
-                continue
-
-            nt = dataset.shape[0]
-
-            print(f"Processing {dataset_path}: {dataset.shape}")
-
-            # Average over time
-            avg = np.mean(dataset, axis=0)
-            data_group.create_dataset(
-                f"{avg_name}",
-                data=avg * scaling,
-                dtype = np.int16
-            )
-
-            # Individual time frames
-            for t in range(nt):
-                data_group.create_dataset(
-                    f"ph_{t:03d}_{frame_name}",
-                    data=dataset[t] * scaling,
-                    dtype = np.int16
-                )
-
-            print(f"  Created average + {nt} time frames")
-
-    print(f"Saved to: {output_file}")
     
-    os.rename(input_file, rename_input_file)
+    # Put --no_cpp_format to skip this step
+    if not args.no_cpp_format:
+        if tr_flow == "Flow.h5":
+            # TA data = 1 frame recon
+            if os.path.isfile(ta_flow):
+                dataset_mapping = {
+                    "ANGIO":      ("CD", "cd", 32000),
+                    "MAG":        ("MAG", "mag", 32000),
+                    "VX":         ("comp_vd_1", "vd_1", 10),
+                    "VY":         ("comp_vd_2", "vd_2", 10),
+                    "VZ":         ("comp_vd_3", "vd_3", 10),
+                }
+
+                with h5py.File(tr_flow, "r") as fin_tr, \
+                    h5py.File(output_file, "w") as fout, \
+                    h5py.File(ta_flow, "r") as fin_ta:
+
+                    data_group = fout.create_group("Data")
+
+                    for input_name, (avg_name, frame_name, scaling) in dataset_mapping.items():
+
+                        dataset_path = f"/{input_name}"
+
+                        if dataset_path not in fin_tr:
+                            print(f"Skipping {dataset_path}: not found")
+                            continue
+
+                        dataset_tr = fin_tr[dataset_path]
+                        dataset_ta = fin_ta[dataset_path]
+
+                        if dataset_tr.ndim != 4:
+                            print(
+                                f"Skipping {dataset_path}: expected (t,z,y,x), "
+                                f"got {dataset_tr.shape}"
+                            )
+                            continue
+
+                        nt = dataset_tr.shape[0]
+
+                        print(f"Processing {dataset_path}: {dataset_tr.shape}")
+
+                        if (input_name == "MAG" or input_name == "ANGIO"):
+                            # Take TA data, scale it by 32000 and then normalize it (max is 32000)
+                            data_group.create_dataset(
+                                f"{avg_name}",
+                                data=dataset_ta * scaling / np.max(dataset_ta),
+                                dtype = np.int16
+                            )
+                            
+                        else:
+                            # Take TA data, scale it by 32000 and then normalize it (max is 32000)
+                            data_group.create_dataset(
+                                f"{avg_name}",
+                                data=dataset_ta * scaling,
+                                dtype = np.int16
+                            )
+
+                        # Individual time frames
+                        for t in range(nt):
+                            data_group.create_dataset(
+                                f"ph_{t:03d}_{frame_name}",
+                                data=dataset_tr[t] * scaling,
+                                dtype = np.int16
+                            )
+
+                        print(f"  Created average + {nt} time frames")
+
+                print(f"Saved to: {output_file}")
+                
+                os.rename(input_file, rename_input_file)
     
-    add_header_to_flow(new_flow_h5=output_file)
+            # TA data = averaging of TR data
+            else:
+                dataset_mapping = {
+                    "ANGIO":      ("CD", "cd", 32000),
+                    "MAG":        ("MAG", "mag", 32000),
+                    "VX":         ("comp_vd_1", "vd_1", 10),
+                    "VY":         ("comp_vd_2", "vd_2", 10),
+                    "VZ":         ("comp_vd_3", "vd_3", 10),
+                }
+
+                with h5py.File(tr_flow, "r") as fin_tr, \
+                    h5py.File(output_file, "w") as fout:
+
+                    data_group = fout.create_group("Data")
+
+                    for input_name, (avg_name, frame_name, scaling) in dataset_mapping.items():
+
+                        dataset_path = f"/{input_name}"
+
+                        if dataset_path not in fin_tr:
+                            print(f"Skipping {dataset_path}: not found")
+                            continue
+
+                        dataset = fin_tr[dataset_path]
+
+                        if dataset.ndim != 4:
+                            print(
+                                f"Skipping {dataset_path}: expected (t,z,y,x), "
+                                f"got {dataset.shape}"
+                            )
+                            continue
+
+                        nt = dataset.shape[0]
+
+                        print(f"Processing {dataset_path}: {dataset.shape}")
+
+                        if (input_name == "MAG" or input_name == "ANGIO"):
+                            # Average over time
+                            avg = np.mean(dataset, axis=0)
+                            data_group.create_dataset(
+                                f"{avg_name}",
+                                data=avg * scaling / np.max(dataset),
+                                dtype = np.int16
+                            )
+                            
+                        else:
+                            # Average over time
+                            avg = np.mean(dataset, axis=0)
+                            data_group.create_dataset(
+                                f"{avg_name}",
+                                data=avg * scaling,
+                                dtype = np.int16
+                            )
+
+                        # Individual time frames
+                        for t in range(nt):
+                            data_group.create_dataset(
+                                f"ph_{t:03d}_{frame_name}",
+                                data=dataset[t] * scaling,
+                                dtype = np.int16
+                            )
+
+                        print(f"  Created average + {nt} time frames")
+
+                print(f"Saved to: {output_file}")
+                
+                os.rename(input_file, rename_input_file)
+                
+            add_header_to_flow(new_flow_h5=output_file)
+
+        elif tr_flow == "Flow_average.h5":
+            with h5py.File(tr_flow, "r") as fin_ta, \
+                h5py.File(output_file, "w") as fout:
+
+                data_group = fout.create_group("Data")
+
+                dataset_mapping = {
+                "ANGIO":      ("CD", "cd", 32000),
+                "MAG":        ("MAG", "mag", 32000),
+                "VX":         ("comp_vd_1", "vd_1", 10),
+                "VY":         ("comp_vd_2", "vd_2", 10),
+                "VZ":         ("comp_vd_3", "vd_3", 10),
+                                }
+
+                for input_name, (avg_name, frame_name, scaling) in dataset_mapping.items():
+
+                    dataset_path = f"/{input_name}"
+
+                    if dataset_path not in fin_ta:
+                        print(f"Skipping {dataset_path}: not found")
+                        continue
+
+                    dataset_ta = fin_ta[dataset_path]
+
+                    if dataset_ta.ndim != 4:
+                        print(
+                            f"Skipping {dataset_path}: expected (t,z,y,x), "
+                            f"got {dataset_ta.shape}"
+                        )
+                        continue
+                    
+
+                    print(f"Processing {dataset_path}: {dataset_ta.shape}")
+
+                    if (input_name == "MAG" or input_name == "ANGIO"):
+                        # Take TA data, scale it by 32000 and then normalize it (max is 32000)
+                        data_group.create_dataset(
+                            f"{avg_name}",
+                            data=np.squeeze(dataset_ta, axis=0) * scaling / np.max(dataset_ta),
+                            dtype = np.int16
+                        )
+
+                    else:
+                        # Take TA data, scale it by 32000 and then normalize it (max is 32000)
+                        data_group.create_dataset(
+                            f"{avg_name}",
+                            data=np.squeeze(dataset_ta, axis=0) * scaling,
+                            dtype = np.int16
+                        )
+
+
+            print(f"Saved to: {output_file}")
+            os.rename(input_file, rename_input_file)
+
+        add_header_to_flow(new_flow_h5=output_file)
