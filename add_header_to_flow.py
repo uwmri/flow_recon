@@ -84,14 +84,11 @@ def add_header_to_flow(new_flow_h5):
                     print(f"Found nproj with a value of: {values['nproj']}")
                     
                 # frames
-                match = re.search(r"num of frames =\s*(\d+)", line)
+                match = re.search(r"num of frames\s*=\s*(\d+)", line)
                 if match:
                     values['frames'] = int(match.group(1))
                     print(f"Found frames with a value of: {values['frames']}")
-                else:
-                    values['frames'] = int(20)
-                        
-                
+
 
                 # matrixz, matrixy, matrixx from INFO:autofov:Image shape: [{z}, {y}, {x}]
                 # used because pcvipr_header.txt will write in as 320, 320, 320, but python will crop as needed
@@ -187,4 +184,4 @@ def add_header_to_flow(new_flow_h5):
         
     print(f"Added /Header to : {new_flow_h5}\n\n")
     
-add_header_to_flow("Flow3D.h5")
+add_header_to_flow("Flow_3D.h5")
