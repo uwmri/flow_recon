@@ -125,7 +125,7 @@ if __name__ == "__main__":
     if args.recon_type == 'llr':
         autofov_block_size = args.llr_block_width
     else:
-        autofov_block_size = 8
+        autofov_block_size = 4
 
     autofov(mri_raw=mri_raw, thresh=args.thresh, scale=args.scale, oversample=args.data_oversampling,
             square=False, block_size=autofov_block_size, logdir=args.out_folder)
