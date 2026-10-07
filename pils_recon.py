@@ -134,9 +134,9 @@ if __name__ == '__main__':
                                     recon_script,
                                     '--filename',           raw_file,
                                     '--gate_type',          'ecg',
-                                    '--frames',             '20',
+                                    '--frames',             '1',
                                     '--recon_type',         'pils',
-                                    '--compress_coils', 
+                                    '--compress_coils',
                                     '--thresh',             '0.15',
                                     '--smap_thresh',        '0.08',
                                     '--out_filename',       image_file
@@ -144,7 +144,7 @@ if __name__ == '__main__':
                                     check=True
                     )
 
-                    if args.no_flow_recon is None:
+                    if args.flow_recon is None:
                         # Flow processing
                         subprocess.run([sys.executable,
                                         flow_script,
@@ -183,7 +183,7 @@ if __name__ == '__main__':
                     (image2, 'Flow2.h5')
                 ]:
 
-                    if args.no_flow_recon is None:
+                    if not args.no_flow_recon:
                         # Flow processing
                         subprocess.run([sys.executable,
                                         flow_script,
@@ -201,7 +201,7 @@ if __name__ == '__main__':
                             recon_script,
                             '--filename',           filename,
                             '--gate_type',          'ecg',
-                            '--frames',             '20',
+                            '--frames',             '1',
                             '--recon_type',         'pils',
                             '--compress_coils', 
                             '--thresh',             '0.15',
@@ -211,7 +211,7 @@ if __name__ == '__main__':
                             check=True
             )
             
-            if args.no_flow_recon is None:
+            if not args.no_flow_recon:
                 # Flow processing
                 subprocess.run([sys.executable,
                                 flow_script,

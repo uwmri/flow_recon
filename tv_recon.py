@@ -110,7 +110,8 @@ if __name__ == '__main__':
                         '--frames',             '20',
                         '--recon_type',         'tv',
                         '--lamda',              '0.1',
-                        '--max_iter',           '50',
+                        '--max_iter',           '100',
+                        '--smap_thresh',        '0.08',
                         '--compress_coils', 
                         '--thresh',             '0.15',
                         '--out_filename',       'Images.h5'

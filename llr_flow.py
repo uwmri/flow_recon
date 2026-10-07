@@ -102,18 +102,50 @@ if __name__ == '__main__':
 
         file_nav = os.path.join(base_folder, "Dynamic.h5")
     
+        # # Just LLR
+        # subprocess.run([sys.executable,
+        #                 recon_script,
+        #                 '--filename',           filename,
+        #                 '--gate_type',          'ecg',
+        #                 '--frames',             '1',
+        #                 '--recon_type',         'llr',
+        #                 '--llr_block_width',    '4', 
+        #                 '--lamda',              '1e-4',
+        #                 '--smap_thresh',        '0.08',
+        #                 '--max_iter',           '25',
+        #                 '--compress_coils', 
+        #                 # '--fast_maxeig',
+        #                 # '--crop_factor',        '2',
+        #                 '--thresh',             '0.15',
+        #                 '--out_filename',       'Images_average.h5'
+        #                 ], 
+        #                 check=True
+        # )
+
+        # # Flow processing
+        # subprocess.run([sys.executable,
+        #                 flow_script,
+        #                 '--filename', os.path.join(base_folder, "Images_average.h5"),
+        #                 '--out_filename', 'Flow_average.h5',
+        #                 # '--no_cpp_format',
+        #                 ], 
+        #                 check=True
+        # )
+
         # Just LLR
         subprocess.run([sys.executable,
                         recon_script,
                         '--filename',           filename,
                         '--gate_type',          'ecg',
-                        '--frames',             '20',
+                        '--frames',             '40',
                         '--recon_type',         'llr',
                         '--llr_block_width',    '4', 
-                        '--lamda',              '0.000001',
+                        '--lamda',              '5e-6',
                         '--smap_thresh',        '0.08',
-                        '--max_iter',           '100',
+                        '--max_iter',           '150',
                         '--compress_coils', 
+                        # '--fast_maxeig',
+                        # '--crop_factor',        '2',
                         '--thresh',             '0.15',
                         '--out_filename',       'Images.h5'
                         ], 
@@ -124,7 +156,11 @@ if __name__ == '__main__':
         subprocess.run([sys.executable,
                         flow_script,
                         '--filename', os.path.join(base_folder, "Images.h5"),
-                        '--out_filename', 'Flow.h5'
+                        '--out_filename', 'Flow.h5',
+                        # '--no_cpp_format',
                         ], 
                         check=True
         )
+        
+# Make a printer for the flags to make it less ambiguous if a recon error was made. Thinking of maybe adjusting 
+# the subprocess.run input maybe?
