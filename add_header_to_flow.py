@@ -3,6 +3,7 @@ import h5py
 import numpy as np
 from pathlib import Path
 import re
+import argparse
 
 def add_header_to_flow(new_flow_h5):
     flow_path = Path(new_flow_h5)
@@ -184,4 +185,11 @@ def add_header_to_flow(new_flow_h5):
         
     print(f"Added /Header to : {new_flow_h5}\n\n")
     
-add_header_to_flow("Flow_3D.h5")
+if __name__ == '__main__':
+    
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--filename', required=True)
+
+    args = parser.parse_args()
+
+    add_header_to_flow(new_flow_h5=args.filename)
