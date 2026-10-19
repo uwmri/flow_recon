@@ -1,3 +1,4 @@
+#%%
 from pathlib import Path
 import argparse
 import h5py
@@ -90,8 +91,55 @@ def encSplitter(inputFile, outputImg1, outputImg2, encodeOrder = "interleaf"):
                         for key, value in src_kdata.attrs.items():
                             dst_kdata.attrs[key] = value
 
-                    if 'Kdata' in dst_kdata:
-                        dst_kdata['Kdata'].attrs['Num_Encodings'] = 4
+                        dst_kdata.attrs['Num_Encodings'] = 4
+
+    # def reorder_encodings(filename, proper_order):
+
+    #     with h5py.File(filename, "r+") as hf:
+
+    #         for group_name in ["Kdata", "Gating"]:
+
+    #             if group_name not in hf:
+    #                 continue
+
+    #             group = hf[group_name]
+
+    #             # First move ALL encoding datasets to temporary names
+    #             for old_enc in range(4):
+
+    #                 names = [
+    #                     name for name in list(group.keys())
+    #                     if f"_E{old_enc}" in name
+    #                 ]
+
+    #                 for name in names:
+    #                     temp_name = name.replace(
+    #                         f"_E{old_enc}",
+    #                         f"_ETEMP{old_enc}"
+    #                     )
+
+    #                     group.move(name, temp_name)
+
+    #             # Now rename temporary datasets into desired encoding positions
+    #             for new_enc, old_enc in enumerate(proper_order):
+
+    #                 names = [
+    #                     name for name in list(group.keys())
+    #                     if f"_ETEMP{old_enc}" in name
+    #                 ]
+
+    #                 for name in names:
+    #                     new_name = name.replace(
+    #                         f"_ETEMP{old_enc}",
+    #                         f"_E{new_enc}"
+    #                     )
+
+    #                     group.move(name, new_name)
+
+    #                     print(
+    #                         f"/{group_name}/{name} -> "
+    #                         f"/{group_name}/{new_name}"
+    #                     )
 
     # Split from Images.h5
     def images_encoding_splitter(inputFile, outputImg1, outputImg2, encodeOrder="interleaf"):
@@ -158,6 +206,8 @@ def encSplitter(inputFile, outputImg1, outputImg2, encodeOrder = "interleaf"):
 
     if "mri_raw" in input_lower:
         mri_raw_enc_splitter(inputFile, outputImg1, outputImg2, encodeOrder)
+        # reorder_encodings(outputImg1, [0, 2, 1, 3])
+        # reorder_encodings(outputImg2, [2, 0, 3, 1])
     elif "images" in input_lower:
         images_encoding_splitter(inputFile, outputImg1, outputImg2, encodeOrder)
     else:
@@ -168,61 +218,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Split an 8-encoding HDF5 image into two 4-encoding images.")
     parser.add_argument("-f", "--input", required=True, 
                         type=str, help="Input Images.h5 file")
-    parser.add_argument("--image1_name", required=True, 
+    parser.add_argument("--image1", required=True, 
                         type=str, help="Output name for Image 1")
-    parser.add_argument("--image2_name", required=True, 
+    parser.add_argument("--image2", required=True, 
                         type=str, help="Output name for Image 2")
     parser.add_argument("--encode-order", choices=["interleaf", "regular"], 
                         default="interleaf", help="Encoding order (default: interleaf)")
 
     args = parser.parse_args()
 
-    encSplitter(
-        args.input,
-        args.output1,
-        args.output2,
-        args.encode_order
-    )
-    
-#%%
-import h5py
-import numpy as np
-import shutil
-
-input_file = "/home/bxa033/Data/CVMRIGroup/Users/bxa033/trtstudyvol2/espirit/pils/pythonRecon/8enc/cpp_split/im1_retest_skip_1463/MRI_Raw.h5"
-output_file = "/home/bxa033/Data/CVMRIGroup/Users/bxa033/trtstudyvol2/espirit/pils/pythonRecon/8enc/cpp_split/im1_retest_skip_1463/MRI_Raw_proper_arrange.h5"
-
-proper_order = [0, 2, 1, 3]
-
-# Make a full copy first
-shutil.copy2(input_file, output_file)
-
-with h5py.File(output_file, "r+") as hf:
-
-    for group_name in ["Kdata", "Gating"]:
-
-        group = hf[group_name]
-
-        # Find everything belonging to E1
-        e1_names = [name for name in group.keys() if "_E1" in name]
-
-        for e1_name in e1_names:
-
-            # Corresponding E2 dataset
-            e2_name = e1_name.replace("_E1", "_E2")
-
-            if e2_name not in group:
-                print(f"Skipping: {e1_name}, no matching {e2_name}")
-                continue
-
-            # Temporary name so we don't overwrite anything
-            temp_name = e1_name.replace("_E1", "_ETEMP")
-
-            group.move(e1_name, temp_name)
-            group.move(e2_name, e1_name)
-            group.move(temp_name, e2_name)
-
-            print(f"Swapped {e1_name} <-> {e2_name}")
-
-print("Done.")
+    encSplitter(inputFile = args.input, outputImg1=args.image1, outputImg2=args.image2, encodeOrder='interleaf')
 #%%
