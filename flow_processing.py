@@ -430,7 +430,61 @@ if __name__ == "__main__":
     
     # Put --no_cpp_format to skip this step
     if not args.no_cpp_format:
-        if tr_flow == "Flow.h5":
+        if "average" in tr_flow:
+            with h5py.File(tr_flow, "r") as fin_ta, \
+                h5py.File(output_file, "w") as fout:
+
+                data_group = fout.create_group("Data")
+
+                dataset_mapping = {
+                "ANGIO":      ("CD", "cd", 32000),
+                "MAG":        ("MAG", "mag", 32000),
+                "VX":         ("comp_vd_1", "vd_1", 10),
+                "VY":         ("comp_vd_2", "vd_2", 10),
+                "VZ":         ("comp_vd_3", "vd_3", 10),
+                                }
+
+                for input_name, (avg_name, frame_name, scaling) in dataset_mapping.items():
+
+                    dataset_path = f"/{input_name}"
+
+                    if dataset_path not in fin_ta:
+                        print(f"Skipping {dataset_path}: not found")
+                        continue
+
+                    dataset_ta = fin_ta[dataset_path]
+
+                    if dataset_ta.ndim != 4:
+                        print(
+                            f"Skipping {dataset_path}: expected (t,z,y,x), "
+                            f"got {dataset_ta.shape}"
+                        )
+                        continue
+                    
+
+                    print(f"Processing {dataset_path}: {dataset_ta.shape}")
+
+                    if (input_name == "MAG" or input_name == "ANGIO"):
+                        # Take TA data, scale it by 32000 and then normalize it (max is 32000)
+                        data_group.create_dataset(
+                            f"{avg_name}",
+                            data=np.squeeze(dataset_ta, axis=0) * scaling / np.max(dataset_ta),
+                            dtype = np.int16
+                        )
+
+                    else:
+                        # Take TA data, scale it by 32000 and then normalize it (max is 32000)
+                        data_group.create_dataset(
+                            f"{avg_name}",
+                            data=np.squeeze(dataset_ta, axis=0) * scaling,
+                            dtype = np.int16
+                        )
+
+
+            print(f"Saved to: {output_file}")
+            os.rename(input_file, rename_input_file)
+
+        else:
             # TA data = 1 frame recon
             if os.path.isfile(ta_flow):
                 dataset_mapping = {
@@ -568,59 +622,3 @@ if __name__ == "__main__":
                 os.rename(input_file, rename_input_file)
                 
             add_header_to_flow(new_flow_h5=output_file)
-
-        elif tr_flow == "Flow_average.h5":
-            with h5py.File(tr_flow, "r") as fin_ta, \
-                h5py.File(output_file, "w") as fout:
-
-                data_group = fout.create_group("Data")
-
-                dataset_mapping = {
-                "ANGIO":      ("CD", "cd", 32000),
-                "MAG":        ("MAG", "mag", 32000),
-                "VX":         ("comp_vd_1", "vd_1", 10),
-                "VY":         ("comp_vd_2", "vd_2", 10),
-                "VZ":         ("comp_vd_3", "vd_3", 10),
-                                }
-
-                for input_name, (avg_name, frame_name, scaling) in dataset_mapping.items():
-
-                    dataset_path = f"/{input_name}"
-
-                    if dataset_path not in fin_ta:
-                        print(f"Skipping {dataset_path}: not found")
-                        continue
-
-                    dataset_ta = fin_ta[dataset_path]
-
-                    if dataset_ta.ndim != 4:
-                        print(
-                            f"Skipping {dataset_path}: expected (t,z,y,x), "
-                            f"got {dataset_ta.shape}"
-                        )
-                        continue
-                    
-
-                    print(f"Processing {dataset_path}: {dataset_ta.shape}")
-
-                    if (input_name == "MAG" or input_name == "ANGIO"):
-                        # Take TA data, scale it by 32000 and then normalize it (max is 32000)
-                        data_group.create_dataset(
-                            f"{avg_name}",
-                            data=np.squeeze(dataset_ta, axis=0) * scaling / np.max(dataset_ta),
-                            dtype = np.int16
-                        )
-
-                    else:
-                        # Take TA data, scale it by 32000 and then normalize it (max is 32000)
-                        data_group.create_dataset(
-                            f"{avg_name}",
-                            data=np.squeeze(dataset_ta, axis=0) * scaling,
-                            dtype = np.int16
-                        )
-
-
-            print(f"Saved to: {output_file}")
-            os.rename(input_file, rename_input_file)
-
-        add_header_to_flow(new_flow_h5=output_file)
