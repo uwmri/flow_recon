@@ -12,6 +12,11 @@ import llr_recon_flow
 from flow_processing import MRI_4DFlow
 import sys
 import subprocess
+from pathlib import Path
+from test_retest_encodings_splitter import encSplitter
+from adding_average_recon_to_flow import adding_average_to_flow
+import logging
+from add_header_to_flow import add_header_to_flow
 
 sys.path.append('/home/bxa033/Home/CODE/python_recon/flow_recon')  # UPDATE!
 
@@ -48,7 +53,7 @@ def find_scandata(pattern, path):
 
 
 if __name__ == '__main__':
-
+    logger = logging.getLogger('main')
     y = os.getcwd()  # get current path
     # y = '/home/larivera/projects/mc_flow/impaired/adrc00302' # get data path
     print(y)
@@ -85,82 +90,155 @@ if __name__ == '__main__':
         parser.add_argument('--get_motion_navigators',
                             dest='get_motion_navigators', action='store_true')
         parser.set_defaults(get_motion_navigators=True)
+        parser.add_argument('--split_encodings', action='store_true')
+        parser.add_argument('--when_split_enc', default=None, help='Split encodings before or after processing Images.h5?', choices=['before', 'after'])
+        parser.add_argument('--no_flow_recon', help='Skip flow processing', action='store_true')
         args = parser.parse_args()
+        
+        # If splitting encodings, must list when to split them
+        if args.split_encodings and args.when_split_enc is None:
+            parser.error(
+                '--when_split_enc must be specified when --split_encodings is used'
+            )
 
         code_folder = '/home/bxa033/Home/CODE/python_recon/flow_recon'
         print(f'Code folder {code_folder}')
-
-        recon_script = os.path.join(code_folder, "llr_recon_flow.py")
-        motion_script = os.path.join(code_folder, "rigid_correction.py")
-        flow_script = os.path.join(code_folder, "flow_processing.py")
-        add_header_script = os.path.join(code_folder, "add_header_to_flow.py")
+        # Which scripts to use
+        recon_script = os.path.join(code_folder, 'llr_recon_flow.py')
+        motion_script = os.path.join(code_folder, 'rigid_correction.py')
+        flow_script = os.path.join(code_folder, 'flow_processing.py')
+        add_header_script = os.path.join(code_folder, 'add_header_to_flow.py.py')
+        average_script = os.path.join(code_folder, 'adding_average_recon_to_flow.py')
 
         filename = os.path.realpath(args.filename)  # 'Q:/BBF/MRI_Raw.h5'
         base_folder = os.path.dirname(filename)
         print(
             f'Base folder {base_folder} and filename {os.path.join(base_folder, "MRI_Raw.h5")}')
 
-        file_nav = os.path.join(base_folder, "Dynamic.h5")
-    
-        # # Just LLR
-        # subprocess.run([sys.executable,
-        #                 recon_script,
-        #                 '--filename',           filename,
-        #                 '--gate_type',          'ecg',
-        #                 '--frames',             '1',
-        #                 '--recon_type',         'llr',
-        #                 '--llr_block_width',    '4', 
-        #                 '--lamda',              '1e-4',
-        #                 '--smap_thresh',        '0.08',
-        #                 '--max_iter',           '25',
-        #                 '--compress_coils', 
-        #                 # '--fast_maxeig',
-        #                 # '--crop_factor',        '2',
-        #                 '--thresh',             '0.15',
-        #                 '--out_filename',       'Images_average.h5'
-        #                 ], 
-        #                 check=True
-        # )
+        file_nav = os.path.join(base_folder, 'Dynamic.h5')
 
-        # # Flow processing
-        # subprocess.run([sys.executable,
-        #                 flow_script,
-        #                 '--filename', os.path.join(base_folder, "Images_average.h5"),
-        #                 '--out_filename', 'Flow_average.h5',
-        #                 # '--no_cpp_format',
-        #                 ], 
-        #                 check=True
-        # )
+        # If we want to split encodings, run enc splitter before or after
+        if args.split_encodings:
 
-        # Just LLR
-        subprocess.run([sys.executable,
-                        recon_script,
-                        '--filename',           filename,
-                        '--gate_type',          'ecg',
-                        '--frames',             '40',
-                        '--recon_type',         'llr',
-                        '--llr_block_width',    '4', 
-                        '--lamda',              '5e-6',
-                        '--smap_thresh',        '0.08',
-                        '--max_iter',           '150',
-                        '--compress_coils', 
-                        # '--fast_maxeig',
-                        # '--crop_factor',        '2',
-                        '--thresh',             '0.15',
-                        '--out_filename',       'Images.h5'
-                        ], 
-                        check=True
-        )
+            # Split encodings during MRI_Raw.h5 and then produce 2 Images.h5 and 2 Flow.h5
+            if args.when_split_enc == 'before':
+                
+                raw1 = os.path.join(base_folder, 'MRI_Raw1.h5')
+                raw2 = os.path.join(base_folder, 'MRI_Raw2.h5')
+                
+                for raw_file, image_file, flow_file, avg_image, avg_flow in [
+                    (raw1, 'Images1.h5', 'Flow1.h5', 'Images1_average.h5', "Flow1_average.h5"),
+                    (raw2, 'Images2.h5', 'Flow2.h5', 'Images2_average.h5', "Flow2_average.h5")
+                ]:
 
-        # Flow processing
-        subprocess.run([sys.executable,
-                        flow_script,
-                        '--filename', os.path.join(base_folder, "Images.h5"),
-                        '--out_filename', 'Flow.h5',
-                        # '--no_cpp_format',
-                        ], 
-                        check=True
-        )
-        
-# Make a printer for the flags to make it less ambiguous if a recon error was made. Thinking of maybe adjusting 
-# the subprocess.run input maybe?
+                    # TA LLR
+                    subprocess.run([sys.executable,
+                                        recon_script,
+                                        '--filename',           raw_file,
+                                        '--gate_type',          'ecg',
+                                        '--frames',             '1',
+                                        '--recon_type',         'llr',
+                                        '--compress_coils',
+                                        '--llr_block_width',    '4', 
+                                        '--lamda',              '5e-5',
+                                        '--thresh',             '0.15',
+                                        '--smap_thresh',        '0.08',
+                                        '--max_iter',           '25',
+                                        
+                                        '--out_filename',       avg_image,
+                                        ], 
+                                        check=True
+                                )
+
+                    # TR LLR
+                    subprocess.run([sys.executable,
+                                        recon_script,
+                                        '--filename',           raw_file,
+                                        '--gate_type',          'ecg',
+                                        '--frames',             '40',
+                                        '--recon_type',         'llr',
+                                        '--compress_coils',
+                                        '--llr_block_width',    '4', 
+                                        '--lamda',              '5e-5',
+                                        '--thresh',             '0.15',
+                                        '--smap_thresh',        '0.08',
+                                        '--max_iter',           '100',
+                                        
+                                        '--out_filename',       image_file,
+                                        ], 
+                                        check=True
+                                )
+                    
+                    if not args.no_flow_recon:
+                        # Flow processing for TA
+                        subprocess.run([sys.executable,
+                                        flow_script,
+                                        '--filename', os.path.join(base_folder, avg_image),
+                                        '--out_filename', avg_flow,
+                                        # '--no_cpp_format',
+                                        ], 
+                                        check=True
+                        )
+
+                        # Flow processing for TR
+                        subprocess.run([sys.executable,
+                                        flow_script,
+                                        '--filename', os.path.join(base_folder, image_file),
+                                        '--out_filename', flow_file,
+                                        # '--no_cpp_format',                
+                                        ], 
+                                        check=True
+                        )
+                        
+                        # Replace TR "average" info (/MAG, /CD, /comp_vd_1, etc) with TA recon info
+                        subprocess.run([sys.executable,
+                                        average_script,
+                                        '--flow_file', flow_file,
+                                        '--avg_file', avg_flow,
+                                        '--path', base_folder,
+                                        ],
+                                       check=True
+                        )
+                        
+                        # Adding headers to flow files
+                        subprocess.run([sys.executable,
+                                        add_header_script,
+                                        '--filename', os.path.join(base_folder, flow_file),
+                                        ],
+                                       check=True
+                        )
+            # Split encodings after Images.h5 into 2 then create 2 Flow.h5 files
+            elif args.when_split_enc == 'after':
+                print("Low rank can't take 8 encoding images, so much split encodings before running through here. Run --when_split_enc before instead!")
+                
+            
+        else:
+            
+            # Just LLR
+            subprocess.run([sys.executable,
+                                recon_script,
+                                '--filename',           args.filename,
+                                '--gate_type',          'ecg',
+                                '--frames',             '20',
+                                '--recon_type',         'llr',
+                                '--compress_coils',
+                                '--llr_block_width',    '4', 
+                                '--lamda',              '1e-5',
+                                '--thresh',             '0.15',
+                                '--smap_thresh',        '0.08',
+                                '--max_iter',           '100',
+                                
+                                '--out_filename',       'Images.h5',
+                                ], 
+                )
+              # Flow processing for TR
+            subprocess.run([sys.executable,
+                                flow_script,
+                                '--filename', os.path.join(base_folder, 'Images.h5'),
+                                '--out_filename', 'Flow.h5',
+                                # '--no_cpp_format',                
+                                ], 
+                                check=True
+                                    )
+            # Make a printer for the flags to make it less ambiguous if a recon error was made. Thinking of maybe adjusting 
+            # the subprocess.run input maybe?

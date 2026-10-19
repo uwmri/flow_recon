@@ -12,7 +12,9 @@ import llr_recon_flow
 from flow_processing import MRI_4DFlow
 import sys
 import subprocess
-# from test_retest_encodings_splitter import encSplitter
+from pathlib import Path
+from test_retest_encodings_splitter import encSplitter
+import logging
 
 sys.path.append('/home/bxa033/Home/CODE/python_recon/flow_recon')  # UPDATE!
 
@@ -49,7 +51,7 @@ def find_scandata(pattern, path):
 
 
 if __name__ == '__main__':
-
+    logger = logging.getLogger('main')
     y = os.getcwd()  # get current path
     # y = '/home/larivera/projects/mc_flow/impaired/adrc00302' # get data path
     print(y)
@@ -114,22 +116,26 @@ if __name__ == '__main__':
 
         # If we want to split encodings, run enc splitter before or after
         if args.split_encodings:
-    
+
             # Split encodings during MRI_Raw.h5 and then produce 2 Images.h5 and 2 Flow.h5
             if args.when_split_enc == 'before':
                 
                 raw1 = os.path.join(base_folder, 'MRI_Raw1.h5')
                 raw2 = os.path.join(base_folder, 'MRI_Raw2.h5')
                 
-                # Split MRI_Raw.h5 before Images.h5 creation
-                # encSplitter(inputFile='MRI_Raw.h5', outputImg1=raw1, outputImg2=raw2, encodeOrder='interleaf')
+                # logger.info("Before encoding splitter")
+                # # Split MRI_Raw.h5 before Images.h5 creation
+                # encSplitter(inputFile=filename, outputImg1=raw1, outputImg2=raw2, encodeOrder='interleaf')
+                # print("ENCODING SPLITTER FINISHED", flush=True)
+                # logger.info("After encoding splitter")
                 
-                for raw_file, image_file, flow_file in [
-                    (raw1, 'Images1.h5', 'Flow1.h5'),
-                    (raw2, 'Images2.h5', 'Flow2.h5')
+                
+                for raw_file, image_file, flow_file, avg_image, avg_flow in [
+                    (raw1, 'Images1.h5', 'Flow1.h5', 'Images1_average.h5', "Flow1_average.h5"),
+                    (raw2, 'Images2.h5', 'Flow2.h5', 'Images2_average.h5', "Flow2_average.h5")
                 ]:
 
-                    # Just PILS
+                    # TA PILS
                     subprocess.run([sys.executable,
                                     recon_script,
                                     '--filename',           raw_file,
@@ -139,13 +145,37 @@ if __name__ == '__main__':
                                     '--compress_coils',
                                     '--thresh',             '0.15',
                                     '--smap_thresh',        '0.08',
+                                    '--out_filename',       avg_image
+                                    ], 
+                                    check=True
+                    )
+
+                    # TR PILS
+                    subprocess.run([sys.executable,
+                                    recon_script,
+                                    '--filename',           raw_file,
+                                    '--gate_type',          'ecg',
+                                    '--frames',             '40',
+                                    '--recon_type',         'pils',
+                                    '--compress_coils',
+                                    '--thresh',             '0.15',
+                                    '--smap_thresh',        '0.08',
                                     '--out_filename',       image_file
                                     ], 
                                     check=True
                     )
 
-                    if args.flow_recon is None:
-                        # Flow processing
+                    if not args.no_flow_recon:
+                        # Flow processing for TA
+                        subprocess.run([sys.executable,
+                                        flow_script,
+                                        '--filename', os.path.join(base_folder, avg_image),
+                                        '--out_filename', avg_flow
+                                        ], 
+                                        check=True
+                        )
+
+                        # Flow processing for TR
                         subprocess.run([sys.executable,
                                         flow_script,
                                         '--filename', os.path.join(base_folder, image_file),
@@ -153,7 +183,7 @@ if __name__ == '__main__':
                                         ], 
                                         check=True
                         )
-
+                        
             # Split encodings after Images.h5 into 2 then create 2 Flow.h5 files
             elif args.when_split_enc == 'after':
                 
@@ -176,7 +206,7 @@ if __name__ == '__main__':
                 image2 = os.path.join(base_folder, 'Images2.h5')
 
                 # Split Images.h5 before Flow processing
-                # encSplitter(inputFile=os.path.join(base_folder, 'Images.h5'), outputImg1=image1, outputImg2=image2, encodeOrder='interleaf')
+                encSplitter(inputFile=os.path.join(base_folder, 'Images.h5'), outputImg1=image1, outputImg2=image2, encodeOrder='interleaf')
                 
                 for image_file, flow_file in [
                     (image1, 'Flow1.h5'),
@@ -201,7 +231,7 @@ if __name__ == '__main__':
                             recon_script,
                             '--filename',           filename,
                             '--gate_type',          'ecg',
-                            '--frames',             '1',
+                            '--frames',             '20',
                             '--recon_type',         'pils',
                             '--compress_coils', 
                             '--thresh',             '0.15',
