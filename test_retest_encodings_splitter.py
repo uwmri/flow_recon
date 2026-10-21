@@ -218,9 +218,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Split an 8-encoding HDF5 image into two 4-encoding images.")
     parser.add_argument("-f", "--input", required=True, 
                         type=str, help="Input Images.h5 file")
-    parser.add_argument("--image1", required=True, 
+    parser.add_argument("--image1", default="MRI_Raw1.h5",
                         type=str, help="Output name for Image 1")
-    parser.add_argument("--image2", required=True, 
+    parser.add_argument("--image2", default="MRI_Raw2.h5",
                         type=str, help="Output name for Image 2")
     parser.add_argument("--encode-order", choices=["interleaf", "regular"], 
                         default="interleaf", help="Encoding order (default: interleaf)")
